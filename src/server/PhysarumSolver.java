@@ -1,0 +1,819 @@
+package server;
+
+import client.Client;
+import client.ClientController;
+import item.Beacon;
+import item.BeaconCluster;
+import item.Link;
+import item.Uav;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Queue;
+
+
+public class PhysarumSolver {
+
+    private static final double INF = 10000.0;
+    private static final double NEG = -1.0;
+    private static final double GAMMA = 1.01;
+    private static final double DELTA_TIME = 0.01;
+    private static final int PLOT = 1;
+    private static final int PLOT_2 = 20;
+    private static final double INIT_THICKNESS = 0.5;
+    private static final double INIT_LENGTH = 1.0;
+    private static final double INIT_RATE = 100.0;
+    private static final double THRESHOLD_1 = 0.5;
+    private static final double THRESHOLD_2 = 1.0;
+    private static int node;
+    private int runCounter = 0;
+    private boolean fig_SOURCE = false;
+    private boolean fig_DIST = false;
+    private static final double coefficient_tanh = 1;
+    // 基本パラメータ
+    private static Link[][] link;
+
+    private double[] Q_Kirchhoff;
+    private double[] P_tubePressure;
+
+    // 計算パラメータ
+
+    private double[][] D_tubeThickness_deltaT;
+    private double[][] pressureCoefficient;
+
+    // シグモイド関数用
+    private double[][] Q_tubeFlow_sigmoidOutput;
+
+    private static BeaconCluster beaconCluster;
+    private double[][] Flow_Capacity;
+    private int[][] tubeFlow;
+    private int[][] adjMatrix;
+
+    private int min_Flow = 100;
+    int UAV_count;
+    int maxPathIndex = 0;
+    private static int clientNum = 1;
+    private static int counter = 0;
+
+
+    public PhysarumSolver(int node) {
+        initialize(node);
+    }
+
+    public void initialize(int node) {
+
+        // 1xN matrix
+        this.Q_Kirchhoff = new double[node];
+        this.P_tubePressure = new double[node];
+        // 初期値を追加してサイズを確保
+
+        // 2xN matrix
+        this.pressureCoefficient = new double[node][node];
+        this.D_tubeThickness_deltaT = new double[node][node];
+        this.Q_tubeFlow_sigmoidOutput = new double[node][node];
+        this.Flow_Capacity = new double[node][node];
+        this.tubeFlow = new int[node][node];
+        this.adjMatrix = new int[node][node];
+
+
+        // node数に応じてArrayList<Link>を初期化
+        link = new Link[node][node]; // `node x node` の2次元配列を作成
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                link[i][j] = new Link(); // 各要素に Link オブジェクトを追加
+            }
+        }
+    }
+
+    //フィールドをすべてリセットする
+    public void reset() {
+        Arrays.fill(Q_Kirchhoff, 0.0);
+        Arrays.fill(P_tubePressure, 0.0);
+        // 2次元配列の初期化
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                pressureCoefficient[i][j] = 0.0;  // すべての要素に0.0を設定
+                D_tubeThickness_deltaT[i][j] = 0.0;
+                Q_tubeFlow_sigmoidOutput[i][j] = 0.0;
+                Flow_Capacity[i][j] = 0.0;
+                tubeFlow[i][j] = 0;
+                adjMatrix[i][j] = 0;
+                link[i][j].setD_tubeThickness(0.0);
+                link[i][j].setL_tubeLength(INF);
+                link[i][j].setQ_tubeFlow(0.0);
+            }
+        }
+        link[0][1].setD_tubeThickness(INIT_THICKNESS);
+        link[0][1].setL_tubeLength(1);
+        adjMatrix[0][1] = 1;
+
+        link[1][0].setD_tubeThickness(INIT_THICKNESS);
+        link[1][0].setL_tubeLength(1);
+        adjMatrix[1][0] = 1;
+
+        link[0][2].setD_tubeThickness(INIT_THICKNESS);
+        link[0][2].setL_tubeLength(2);
+        adjMatrix[0][2] = 1;
+
+        link[2][0].setD_tubeThickness(INIT_THICKNESS);
+        link[2][0].setL_tubeLength(2);
+        adjMatrix[2][0] = 1;
+
+        link[0][3].setD_tubeThickness(INIT_THICKNESS);
+        link[0][3].setL_tubeLength(2);
+        adjMatrix[0][3] = 1;
+
+        link[3][0].setD_tubeThickness(INIT_THICKNESS);
+        link[3][0].setL_tubeLength(2);
+        adjMatrix[3][0] = 1;
+
+        link[1][4].setD_tubeThickness(INIT_THICKNESS);
+        link[1][4].setL_tubeLength(2);
+        adjMatrix[1][4] = 1;
+
+        link[4][1].setD_tubeThickness(INIT_THICKNESS);
+        link[4][1].setL_tubeLength(2);
+        adjMatrix[4][1] = 1;
+
+        link[2][3].setD_tubeThickness(INIT_THICKNESS);
+        link[2][3].setL_tubeLength(1);
+        adjMatrix[2][3] = 1;
+
+        link[3][2].setD_tubeThickness(INIT_THICKNESS);
+        link[3][2].setL_tubeLength(1);
+        adjMatrix[3][2] = 1;
+
+        link[2][5].setD_tubeThickness(INIT_THICKNESS);
+        link[2][5].setL_tubeLength(3);
+        adjMatrix[2][5] = 1;
+
+        link[5][2].setD_tubeThickness(INIT_THICKNESS);
+        link[5][2].setL_tubeLength(3);
+        adjMatrix[5][2] = 1;
+
+        link[3][5].setD_tubeThickness(INIT_THICKNESS);
+        link[3][5].setL_tubeLength(2);
+        adjMatrix[3][5] = 1;
+
+        link[5][3].setD_tubeThickness(INIT_THICKNESS);
+        link[5][3].setL_tubeLength(2);
+        adjMatrix[5][3] = 1;
+
+        link[4][5].setD_tubeThickness(INIT_THICKNESS);
+        link[4][5].setL_tubeLength(4);
+        adjMatrix[4][5] = 1;
+
+        link[5][4].setD_tubeThickness(INIT_THICKNESS);
+        link[5][4].setL_tubeLength(4);
+        adjMatrix[5][4] = 1;
+    }
+
+
+    // nodeConfigureメソッドの追加
+    public void setLink(int node, BeaconCluster beaconList) {
+        this.node = node;
+        this.beaconCluster = beaconList;
+
+        //手動でリンクを決定
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                link[i][j].setD_tubeThickness(0.0);
+                link[i][j].setL_tubeLength(INF);
+                //link.get(i).get(j).setDistance(Math.sqrt(Math.pow(beaconList.getBeacon(i).getX() - beaconList.getBeacon(j).getX(), 2) + Math.pow(beaconList.getBeacon(i).getY() - beaconList.getBeacon(j).getY(), 2)));
+            }
+        }
+
+        link[0][1].setLink(beaconList.getBeacon(0), beaconList.getBeacon(1), 5);
+        link[0][1].setD_tubeThickness(INIT_THICKNESS);
+        link[0][1].setL_tubeLength(1);
+        link[0][1].setDistance(250);
+        link[0][1].setCongestionRate(INIT_RATE);
+        adjMatrix[0][1] = 1;
+
+        link[1][0].setLink(beaconList.getBeacon(1), beaconList.getBeacon(0), 5);
+        link[1][0].setD_tubeThickness(INIT_THICKNESS);
+        link[1][0].setL_tubeLength(1);
+        link[1][0].setDistance(250);
+        link[1][0].setCongestionRate(INIT_RATE);
+        adjMatrix[1][0] = 1;
+
+        link[0][2].setLink(beaconList.getBeacon(0), beaconList.getBeacon(2), 15);
+        link[0][2].setD_tubeThickness(INIT_THICKNESS);
+        link[0][2].setL_tubeLength(3);
+        link[0][2].setDistance(750);
+        link[0][2].setCongestionRate(INIT_RATE);
+        adjMatrix[0][2] = 1;
+
+        link[2][0].setLink(beaconList.getBeacon(2), beaconList.getBeacon(0), 15);
+        link[2][0].setD_tubeThickness(INIT_THICKNESS);
+        link[2][0].setL_tubeLength(3);
+        link[2][0].setDistance(750);
+        link[2][0].setCongestionRate(INIT_RATE);
+        adjMatrix[2][0] = 1;
+
+        link[0][3].setLink(beaconList.getBeacon(0), beaconList.getBeacon(3), 10);
+        link[0][3].setD_tubeThickness(INIT_THICKNESS);
+        link[0][3].setL_tubeLength(2);
+        link[0][3].setDistance(500);
+        link[0][3].setCongestionRate(INIT_RATE);
+        adjMatrix[0][3] = 1;
+
+        link[3][0].setLink(beaconList.getBeacon(3), beaconList.getBeacon(0), 10);
+        link[3][0].setD_tubeThickness(INIT_THICKNESS);
+        link[3][0].setL_tubeLength(2);
+        link[3][0].setDistance(500);
+        link[3][0].setCongestionRate(INIT_RATE);
+        adjMatrix[3][0] = 1;
+
+        link[1][4].setLink(beaconList.getBeacon(1), beaconList.getBeacon(4), 10);
+        link[1][4].setD_tubeThickness(INIT_THICKNESS);
+        link[1][4].setL_tubeLength(2);
+        link[1][4].setDistance(500);
+        link[1][4].setCongestionRate(INIT_RATE);
+        adjMatrix[1][4] = 1;
+
+        link[4][1].setLink(beaconList.getBeacon(4), beaconList.getBeacon(1), 10);
+        link[4][1].setD_tubeThickness(INIT_THICKNESS);
+        link[4][1].setL_tubeLength(2);
+        link[4][1].setDistance(500);
+        link[4][1].setCongestionRate(INIT_RATE);
+        adjMatrix[4][1] = 1;
+
+        link[2][3].setLink(beaconList.getBeacon(2), beaconList.getBeacon(3), 5);
+        link[2][3].setD_tubeThickness(INIT_THICKNESS);
+        link[2][3].setL_tubeLength(1);
+        link[2][3].setDistance(250);
+        link[2][3].setCongestionRate(INIT_RATE);
+        adjMatrix[2][3] = 1;
+
+        link[3][2].setLink(beaconList.getBeacon(3), beaconList.getBeacon(2), 5);
+        link[3][2].setD_tubeThickness(INIT_THICKNESS);
+        link[3][2].setL_tubeLength(1);
+        link[3][2].setDistance(250);
+        link[3][2].setCongestionRate(INIT_RATE);
+        adjMatrix[3][2] = 1;
+
+        link[2][5].setLink(beaconList.getBeacon(2), beaconList.getBeacon(5), 15);
+        link[2][5].setD_tubeThickness(INIT_THICKNESS);
+        link[2][5].setL_tubeLength(3);
+        link[2][5].setDistance(750);
+        link[2][5].setCongestionRate(INIT_RATE);
+        adjMatrix[2][5] = 1;
+
+        link[5][2].setLink(beaconList.getBeacon(5), beaconList.getBeacon(2), 15);
+        link[5][2].setD_tubeThickness(INIT_THICKNESS);
+        link[5][2].setL_tubeLength(3);
+        link[5][2].setDistance(750);
+        link[5][2].setCongestionRate(INIT_RATE);
+        adjMatrix[5][2] = 1;
+
+        link[3][5].setLink(beaconList.getBeacon(3), beaconList.getBeacon(5), 10);
+        link[3][5].setD_tubeThickness(INIT_THICKNESS);
+        link[3][5].setL_tubeLength(2);
+        link[3][5].setDistance(500);
+        link[3][5].setCongestionRate(INIT_RATE);
+        adjMatrix[3][5] = 1;
+
+        link[5][3].setLink(beaconList.getBeacon(5), beaconList.getBeacon(3), 10);
+        link[5][3].setD_tubeThickness(INIT_THICKNESS);
+        link[5][3].setL_tubeLength(2);
+        link[5][3].setDistance(500);
+        link[5][3].setCongestionRate(INIT_RATE);
+        adjMatrix[5][3] = 1;
+
+        link[4][5].setLink(beaconList.getBeacon(4), beaconList.getBeacon(5), 15);
+        link[4][5].setD_tubeThickness(INIT_THICKNESS);
+        link[4][5].setL_tubeLength(4);
+        link[4][5].setDistance(1000);
+        link[4][5].setCongestionRate(INIT_RATE);
+        adjMatrix[4][5] = 1;
+
+        link[5][4].setLink(beaconList.getBeacon(5), beaconList.getBeacon(4), 15);
+        link[5][4].setD_tubeThickness(INIT_THICKNESS);
+        link[5][4].setL_tubeLength(4);
+        link[5][4].setDistance(1000);
+        link[5][4].setCongestionRate(INIT_RATE);
+        adjMatrix[5][4] = 1;
+
+    }
+
+    public void nodeConfigureToPajek(String NET_file, Client client, BeaconCluster beaconList) {
+        double maxDistance = Math.sqrt(2);  // 最大距離 sqrt(2)
+
+        //sourceとdistを取得
+        Beacon source = client.getFlow().getSource();
+        Beacon dist = client.getFlow().getDestination();
+
+        // ファイル出力処理
+        try (FileWriter writer = new FileWriter(new File(NET_file))) {
+            writer.write("*Vertices\t" + node + "\n");
+            for (int i = 0; i < node; i++) {
+
+                if (i == source.getId()) {
+                    fig_SOURCE = true;
+                }
+
+                if (i == dist.getId()) {
+                    fig_DIST = true;
+                }
+
+                if (fig_SOURCE || fig_DIST) {
+                    writer.write(String.format("%d \"%d\" %.4f %.4f ic Black\n", i + 1, i + 1, beaconList.getBeacon(i).getX(), beaconList.getBeacon(i).getY()));
+                } else {
+                    writer.write(String.format("%d \"%d\" %.4f %.4f ic White\n", i + 1, i + 1, beaconList.getBeacon(i).getX(), beaconList.getBeacon(i).getY()));
+                }
+                fig_SOURCE = false;
+                fig_DIST = false;
+            }
+            writer.write("*Arcs\n*Edges\n");
+
+            for (int i = 0; i < node; i++) {
+                for (int j = 0; j < node; j++) {
+                    if (i != j && link[i][j].getL_tubeLength() != INF) {
+                        writer.write(String.format("%d %d 1\n", i + 1, j + 1));
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // setTopologyColorメソッドの追加
+    public void outputToPajek(Client client, double eps, double Q_allFlow, int ct) throws IOException {
+
+        Beacon source = client.getFlow().getSource();
+        Beacon dist = client.getFlow().getDestination();
+
+        // ディレクトリパスを作成
+        String dirPath = "src/result/pajek/result" + runCounter;
+        // ファイル名を作成
+        String filename = dirPath + "/test_topology_" + (ct + 1) + ".net";
+
+        // Fileオブジェクトでディレクトリの存在を確認・作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            // ディレクトリが存在しない場合は作成
+            dir.mkdirs();
+        }
+        try (FileWriter writer = new FileWriter(filename)) {
+            writer.write("*Vertices\t" + node + "\n");
+            for (int i = 0; i < node; i++) {
+                if (i == source.getId() || i == dist.getId()) {
+                    writer.write(String.format("%d \"%d\" %.4f %.4f ic Black\n", i + 1, i + 1, source.getX(), source.getY()));
+                } else {
+                    writer.write(String.format("%d \"%d\" %.4f %.4f ic White\n", i + 1, i + 1, beaconCluster.getBeacon(i).getX(), beaconCluster.getBeacon(i).getY()));
+                }
+            }
+            writer.write("*Arcs\n*Edges\n");
+
+            for (int i = 0; i < node; i++) {
+                for (int j = 0; j < node; j++) {
+                    if (link[i][j].getL_tubeLength() != INF) {
+                        double flow = link[i][j].getQ_tubeFlow();
+                        if (link[i][j].getDistance() > 0) {
+                            if (flow > 0 && flow <= eps) {
+                                // Small flow, no color
+                            } else if (flow > eps && flow <= THRESHOLD_1) {
+                                writer.write(String.format("%d %d 1 c Blue\n", i + 1, j + 1));
+                            } else if (flow > THRESHOLD_1 && flow <= THRESHOLD_2) {
+                                writer.write(String.format("%d %d 2 c Green\n", i + 1, j + 1));
+                            } else if (flow > THRESHOLD_2 && flow <= Q_allFlow) {
+                                writer.write(String.format("%d %d 3 c Red\n", i + 1, j + 1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    //Excelファイルに各リンクの流量を出力するメソッド
+    public void outputToExcel(Client client, int ct) throws IOException {
+
+        // ディレクトリパスを作成
+        String dirPath = "src/result/excel/result" + runCounter;
+        // ファイル名を作成
+        String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
+
+        // Fileオブジェクトでディレクトリの存在を確認・作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            // ディレクトリが存在しない場合は作成
+            dir.mkdirs();
+        }
+        try (FileWriter writer = new FileWriter(filename)) {
+            writer.write("source,destination,flow\n");
+            for (int i = 0; i < node; i++) {
+                for (int j = 0; j < node; j++) {
+                    if (link[i][j].getL_tubeLength() != INF) {
+                        writer.write(String.format("%d,%d,%.4f\n", i, j, link[i][j].getQ_tubeFlow()));
+                    }
+                }
+            }
+        }
+    }
+
+    // 経路ごとのUAV数をExcel形式で出力するメソッド
+    public void outputRouteToExcel(Client client, int ct) throws IOException {
+        // ディレクトリパスを作成
+        String dirPath = "src/result/rute/result" + runCounter;
+        // ファイル名を作成
+        String filename = dirPath + "/test_topology_routes.txt";
+
+        // Fileオブジェクトでディレクトリの存在を確認・作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            // ディレクトリが存在しない場合は作成
+            dir.mkdirs();
+        }
+
+        // ファイルに追記
+        try (FileWriter writer = new FileWriter(filename, true)) { // true で追記モードに設定
+            // ヘッダーは1回だけ記載されるようにする
+            File file = new File(filename);
+            if (file.length() == 0) { // ファイルが空の場合のみヘッダーを書き込む
+                writer.write("ct,v0->v1->v4->v5,v0->v2->v3->v5,v0->v2->v5,v0->v3->v5\n");
+            }
+            if (runCounter == 0 || runCounter == 1) {
+                if (file.length() == 0) { // ファイルが空の場合のみヘッダーを書き込む
+                    writer.write("ct,v0->v1->v4->v5,v0->v2->v3->v5,v0->v2->v5,v0->v3->v5\n");
+                }
+                double route1 = Math.min(link[0][1].getQ_tubeFlow(),
+                        Math.min(link[1][4].getQ_tubeFlow(), link[4][5].getQ_tubeFlow()));
+
+                double route2 = Math.min(link[0][2].getQ_tubeFlow(),
+                        Math.min(link[2][3].getQ_tubeFlow(), link[3][5].getQ_tubeFlow()));
+
+                double route3 = Math.min(link[0][2].getQ_tubeFlow(), link[2][5].getQ_tubeFlow());
+
+                double route4 = Math.min(link[0][3].getQ_tubeFlow(), link[3][5].getQ_tubeFlow());
+                // 経路ごとの情報を1行にまとめて追記
+                writer.write(String.format("%d,%.4f,%.4f,%.4f,%.4f\n", ct, route1, route2, route3, route4));
+
+            } else if (runCounter == 2) {
+                if (file.length() == 0) { // ファイルが空の場合のみヘッダーを書き込む
+                    writer.write("ct,v0->v1->v4->v5,v0->v2->v3->v5,v0->v2->v5,v0->v3->v5\n");
+                }
+                double route1 = Math.min(link[2][0].getQ_tubeFlow(),
+                        Math.min(link[0][1].getQ_tubeFlow(), link[1][4].getQ_tubeFlow()));
+
+                double route2 = Math.min(link[2][3].getQ_tubeFlow(),
+                        Math.min(link[3][0].getQ_tubeFlow(), Math.min(link[0][1].getQ_tubeFlow(), link[1][4].getQ_tubeFlow())));
+
+                double route3 = Math.min(link[2][3].getQ_tubeFlow(), Math.min(link[3][5].getQ_tubeFlow(), link[5][4].getQ_tubeFlow()));
+
+                double route4 = Math.min(link[2][5].getQ_tubeFlow(), link[5][4].getQ_tubeFlow());
+                // 経路ごとの情報を1行にまとめて追記
+                writer.write(String.format("%d,%.4f,%.4f,%.4f,%.4f\n", ct, route1, route2, route3, route4));
+            }
+        }
+    }
+
+    //txtファイルに管の長さ，管の太さ，管の容量を出力するメソッド
+    public void outputToTxt(Client client, int ct) throws IOException {
+        // ディレクトリパスを作成
+        String dirPath = "src/result/txt/result" + runCounter;
+        // ファイル名を作成
+        String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
+
+        // Fileオブジェクトでディレクトリの存在を確認・作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            // ディレクトリが存在しない場合は作成
+            dir.mkdirs();
+        }
+        try (FileWriter writer = new FileWriter(filename)) {
+            //要求uav台数，出発ノード，到着ノードを１行目に出力
+            writer.write(String.format("%.1f,%d,%d\n", client.getFlow().getTheNumberOfUAV(), client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
+            writer.write("source,destination,length,thickness,capacity\n");
+            for (int i = 0; i < node; i++) {
+                for (int j = 0; j < node; j++) {
+                    if (link[i][j].getL_tubeLength() != INF) {
+                        writer.write(String.format("%d,%d,%.4f,%.4f,%.4f\n", i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), link[i][j].getCapacity()));
+                    }
+                }
+            }
+        }
+    }
+
+
+    // UAVを移動させるメソッド
+    public static void flyUAV(ClientController clientcontroller, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
+        // リンク上の飛行UAV数を保持する配列を初期化
+        int[][] FlyingUAV = new int[node][node];
+
+        // 飛行中のUAVを移動させる
+        int queueSize = flyingUavQueue.size();
+        for (int i = 0; i < queueSize; i++) {
+            Uav uav = flyingUavQueue.poll(); // キューから取り出す
+            // 現在の飛行時間と速度から移動距離を計算
+            double flightDistance = uav.getFlightTime() * uav.getSpeed();
+            int[] path = uav.getPath();
+
+            // UAVの経路上の総距離を計算
+            double totalPathDistance = 0.0;
+            for (int k = 0; k < path.length - 1; k++) {
+                int startNode = path[k];
+                int endNode = path[k + 1];
+                totalPathDistance += link[startNode][endNode].getDistance();
+            }
+
+            // UAVが飛行完了しているかを確認
+            if (flightDistance >= totalPathDistance) {
+                // 飛行が完了している場合、タイマーをキャンセル
+                uav.cancelTimer();
+                clientcontroller.getClient(uav.getClientId()-1).incrementFinishFlyingCounter();// 完了したUAVの数を増加
+
+                // 飛行時間の取得と記録
+                String dirPath = "src/result/time";
+                String filePath = dirPath + "/flight_times.csv";
+
+                // ディレクトリが存在しない場合は作成
+                File dir = new File(dirPath);
+                if (!dir.exists()) {
+                    dir.mkdirs();
+                }
+
+                long flightTime = clientcontroller.getFlightTime();
+                long UAV_flightTime = uav.getFlightTime();
+                long UAV_waitingTime = uav.getWaitingTime();
+
+                try (FileWriter writer = new FileWriter(filePath, true)) {
+                    File file = new File(filePath);
+                    if (file.length() == 0) {
+                        writer.write("passedTime,UAV_flightTime,UAV_waitingTime,clientID,UAVID,speed,distance\n");
+                    }
+                    if(counter == 0){
+                        writer.write(String.format("%f\n", clientcontroller.getClient(0).getFlow().getTheNumberOfUAV()));
+                        counter++;
+                    }
+                    writer.write(String.format("%d,%d,%d,%d,%d,%f,%f\n", flightTime, UAV_flightTime, UAV_waitingTime, uav.getClientId(), uav.getId(), uav.getSpeed(), totalPathDistance));
+                } catch (IOException e) {
+                    System.err.println("ファイル書き込みエラー: " + e.getMessage());
+                }
+            } else {
+                // 経路上のリンクごとにUAVの位置を確認
+                double traveledDistance = 0.0;
+                for (int k = 0; k < path.length - 1; k++) {
+                    int startNode = path[k];
+                    int endNode = path[k + 1];
+                    double linkLength = link[startNode][endNode].getDistance();
+
+                    if (traveledDistance + linkLength >= flightDistance) {
+                        if(link[startNode][endNode] != uav.getFlyingLink()) {
+                            if(link[startNode][endNode].getCapacity() > 0){
+                                uav.setFlyingLink(link[startNode][endNode]);
+                                FlyingUAV[startNode][endNode]++;
+                            }else{
+                                //リンクの容量が0の場合、UAVを待機キューに追加
+                                //System.out.println("待機する");
+                                uav.stopTimer();
+                                uav.startWaitingTimer();
+                                uav.setStayedBeaconId(startNode);
+                                beaconCluster.getBeacon(startNode).addUav(uav);
+                                beaconCluster.getBeacon(startNode).incrementWaitingUavCount();
+                                uavQueue.add(uav);
+                            }
+                        }else{
+                            FlyingUAV[startNode][endNode]++;
+                        }
+                        break;
+                    } else {
+                        traveledDistance += linkLength; // 次のリンクに進む
+                    }
+                }
+                // 飛行中UAVとして再度キューに戻す
+                flyingUavQueue.add(uav);
+            }
+        }
+
+        // 待機中のUAVを飛行させる
+        int waitQueueSize = uavQueue.size();
+        for (int i = 0; i < waitQueueSize; i++) {
+            Uav uav = uavQueue.poll(); // キューから取り出す
+            int[] path = uav.getPath();
+
+            // UAVが次のリンクに進む場合の処理
+            if (path.length > 1) {
+                // 現在の滞在ビーコン位置
+                int startNode = uav.getStayedBeaconId();
+
+                // 現在のノードの次のノードを取得
+                int nextNode = -1;
+                for (int j = 0; j < path.length - 1; j++) {
+                    if (path[j] == startNode) {
+                        nextNode = path[j + 1];
+                        break;
+                    }
+                }
+
+                // 次のノードが存在する場合に処理を行う
+                if (nextNode != -1) {
+                    if (FlyingUAV[startNode][nextNode] < link[startNode][nextNode].getCapacity()) {
+                        // 容量に空きがある場合、飛行を開始
+                        FlyingUAV[startNode][nextNode]++;
+                        uav.stopWaitingTimer();
+                        beaconCluster.getBeacon(startNode).removeUav(uav);
+                        beaconCluster.getBeacon(startNode).decrementWaitingUavCount();
+                        uav.startTimer();
+                        flyingUavQueue.add(uav); // 飛行中UAVキューに追加
+                    } else {
+                        // 容量に空きがない場合、再度待機キューに戻す
+                        uavQueue.add(uav);
+                    }
+                } else {
+                    // 次のノードが見つからない場合、待機キューに戻す
+                    uavQueue.add(uav);
+                }
+            }
+        }
+
+        // 飛行中のUAVに基づいてリンクの容量を更新
+        updateCapacity(FlyingUAV);
+    }
+
+
+    // 管の容量を更新するメソッド
+    public static void updateCapacity(int[][] FlyingUAV) {
+        //Capacityを初期値に戻す
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                if (link[i][j].getL_tubeLength() != INF) {
+                    link[i][j].setCapacity(link[i][j].getInitCapacity());
+                }
+            }
+        }
+        // 各リンクの初期容量から飛行中のUAV分を減少
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                if (link[i][j].getL_tubeLength() != INF && FlyingUAV[i][j] > 0) {
+                    double newCapacity = link[i][j].getCapacity() - FlyingUAV[i][j];
+                    link[i][j].setCapacity(newCapacity);
+                    link[j][i].setCapacity(newCapacity);
+                }
+            }
+        }
+    }
+
+
+    //Dijkstra法により最短経路を求めるメソッド
+    //PSを実行するメソッド
+    public void run(Client client, ClientController clientcontroller, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) throws IOException {
+        int i, j;
+
+        if (runCounter != 0) {
+            //更新メソッドを呼び出す
+            reset();
+        }
+
+        //passedClientが空でない場合，UAVFlySchedulerを停止
+        if (!flyingUavQueue.isEmpty()) {
+            //ここではクライアントタイマーはすでに停止している
+            UAVFlyScheduler.stopFlyUAVUpdates(clientcontroller);
+        }
+
+        // UAV一台ずつに経路を配列として受け渡し、飛行経路をすべてのUAVに割り当てる
+        // 初期設定として、Flow_CapacityにQ_tubeFlowを代入,各リンクを流れる流量の整数値をtubeFlowに追加
+        System.out.println("breakout point");
+        for (i = 0; i < node; i++) {
+            for (j = 0; j < node; j++) {
+                if (link[i][j].getL_tubeLength() != INF) {
+                    adjMatrix[i][j] = 1;
+                }
+            }
+        }
+        // Dijkstraメソッドを呼び出して、結果の配列を受け取る
+        int[] path = Dijkstra(client);
+
+        // スタートノード、ゴールノード、必要なUAV台数を取得
+        int requiredUAVs = (int) client.getFlow().getTheNumberOfUAV();
+
+        if (runCounter != 0) {
+            //UAVFlySchedulerを開始
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientcontroller);
+        }
+        // 実際のUAVに経路を割り当てるためのメイン処理
+        runUAVFlow(client ,path, flyingUavQueue, uavQueue, requiredUAVs);
+
+        //client.startTimer();
+        runCounter++;
+    }
+
+    // runUAVFlow関数
+    public void runUAVFlow(Client client, int[] path, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int requiredUAVs) {
+        // 最小Capacityを計算する
+        int u = path[0];
+        int v = path[1];
+
+        double minCapacity = link[u][v].getCapacity();
+        int flow_count = 0;
+
+        // UAVがrequiredUAVsより少ない場合はすべてのUAVに経路を割り当て
+        for (int f = 0; f < requiredUAVs; f++) {
+            if(flow_count < minCapacity) {
+                client.getFlow().getUav(UAV_count + f).setPath(path);// 配列をUAVに設定
+                client.getFlow().getUav(UAV_count + f).startTimer();
+                client.getFlow().getUav(UAV_count + f).setFlyingLink(link[u][v]);
+                client.getFlow().getUav(UAV_count + f).setPassedLink(link[u][v]);
+                flyingUavQueue.add(client.getFlow().getUav(UAV_count + f));
+                link[u][v].decrementCapacity();
+                flow_count++;
+            }else{
+                client.getFlow().getUav(UAV_count + f).setPath(path);  // UAVに経路をセット
+                client.getFlow().getUav(UAV_count + f).startWaitingTimer();   // UAVの待機タイマーを開始
+                client.getFlow().getUav(UAV_count + f).setStayedBeaconId(u);
+                beaconCluster.getBeacon(u).addUav(client.getFlow().getUav(UAV_count + f));  // UAVをuavQueueに追加
+                beaconCluster.getBeacon(u).incrementWaitingUavCount();  // 待機中のUAV数を増加
+                uavQueue.add(client.getFlow().getUav(UAV_count + f));  // UAVをuavQueueに追加
+            }
+        }
+    }
+
+
+    public int[] Dijkstra(Client client) {
+        // 出発地と目的地のノードIDを取得
+        int source = client.getFlow().getSource().getId();
+        int destination = client.getFlow().getDestination().getId();
+
+        // グローバル変数として利用可能なノード数
+        int numNodes = node;
+
+        // 必要な配列を定義
+        double[] minDist = new double[node];    // 各ノードへの最短距離
+        int[] minHops = new int[node];          // 各ノードへのホップ数
+        boolean[] visited = new boolean[node]; // 訪問済みフラグ
+        int[] previous = new int[node];         // 経路復元用の配列
+        int[] unvisited = new int[node];        // 未訪問ノードのリスト
+
+        // 初期化
+        for (int i = 0; i < numNodes; i++) {
+            minDist[i] = Double.POSITIVE_INFINITY; // 初期距離を無限大に
+            minHops[i] = Integer.MAX_VALUE;        // 初期ホップ数を最大値に
+            visited[i] = false;                    // 全ノード未訪問
+            previous[i] = -1;                      // 前のノードを-1で初期化
+            unvisited[i] = i;                      // 未訪問ノードリストを初期化
+        }
+        minDist[source] = 0;                        // 出発ノードの距離は0
+        minHops[source] = 0;                        // 出発ノードのホップ数は0
+
+        // Dijkstra法のメインループ
+        while (true) {
+            // 最短距離で未訪問のノードを探索
+            int currentNode = -1;
+            double shortestDistance = Double.POSITIVE_INFINITY;
+            for (int i = 0; i < numNodes; i++) {
+                if (!visited[unvisited[i]] && minDist[unvisited[i]] < shortestDistance) {
+                    currentNode = unvisited[i];
+                    shortestDistance = minDist[currentNode];
+                }
+            }
+
+            // 未訪問ノードが見つからない場合、または目的地に到達した場合は終了
+            if (currentNode == -1 || currentNode == destination) {
+                break;
+            }
+
+            // 現在のノードを訪問済みにマーク
+            visited[currentNode] = true;
+
+            // 隣接ノードを探索
+            for (int neighbor = 0; neighbor < numNodes; neighbor++) {
+                if (adjMatrix[currentNode][neighbor] == 1 && !visited[neighbor]) {
+                    // 距離を計算
+                    double newDist = minDist[currentNode] + link[currentNode][neighbor].getDistance();
+                    int newHops = minHops[currentNode] + 1;
+
+                    // 条件に応じて更新
+                    if (newDist < minDist[neighbor] ||
+                            (Double.compare(newDist, minDist[neighbor]) == 0 && newHops < minHops[neighbor])) {
+                        minDist[neighbor] = newDist;
+                        minHops[neighbor] = newHops;
+                        previous[neighbor] = currentNode;
+                    }
+                }
+            }
+        }
+
+        // 経路を復元（逆順で格納し直す）
+        int[] path = new int[numNodes];
+        int pathIndex = 0; // 経路の現在のインデックス
+        for (int at = destination; at != -1; at = previous[at]) {
+            path[pathIndex++] = at;
+        }
+
+        // 出発ノードから到達できない場合
+        if (pathIndex == 1 && path[0] != source) {
+            return new int[0]; // 空の配列を返す
+        }
+
+        // 経路を逆順にする
+        int[] result = new int[pathIndex];
+        for (int i = 0; i < pathIndex; i++) {
+            result[i] = path[pathIndex - i - 1];
+        }
+        return result;
+    }
+}
