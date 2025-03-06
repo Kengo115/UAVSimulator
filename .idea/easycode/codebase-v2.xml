@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="com.obiscr.chatgpt.settings.EasyCodeState">
+    <option name="projectFiles" value="$PROJECT_DIR$/src/client/Client.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/client/ClientController.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/controller/BoundaryController.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/item/Beacon.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/item/BeaconCluster.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/item/ClientTimer.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/item/Flow.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/item/Link.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/item/Uav.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/item/UAVTimer.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/server/BiCGSTAB.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/server/ICCG.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/server/ServerController.java;/Users/ninomiyakengo/IdeaProjects/UAVSimulator/src/server/UAVFlyScheduler.java" />
+  </component>
+</project>
