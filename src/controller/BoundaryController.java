@@ -75,11 +75,14 @@ public class BoundaryController {
     }
 
     public void routeRequest(Client client) throws IOException {
-        //PSを実行
         server.nodeConfigureToPajek(filePath, client, beaconCluster);
+        /**
+         * UAVの経路探索方法を選択
+         * ServerController内の出力先も適宜変更
+         */
         //server.run_EPS(client, flyingUavQueue, uavQueue, clientController, num_loop);
-        //server.run_PS(client, flyingUavQueue, uavQueue, clientController, num_loop);
-        server.run_Dijkstra(client, clientController,flyingUavQueue, uavQueue);
+        server.run_PS(client, flyingUavQueue, uavQueue, clientController, num_loop);
+        //server.run_Dijkstra(client, clientController,flyingUavQueue, uavQueue);
     }
 
     public static void main(String[] args) {

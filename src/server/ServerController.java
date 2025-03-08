@@ -32,8 +32,8 @@ public class ServerController {
     private static final double INIT_THICKNESS = 0.5;
     private static final double INIT_LENGTH = 1.0;
     private static final double INIT_RATE = 100.0;
-    private static final double THRESHOLD_1 = 0.4;
-    private static final double THRESHOLD_2 = 1.0;
+    private static final double THRESHOLD_1 = 0.5;
+    private static final double THRESHOLD_2 = 2.0;
     private static int node;
     private int runCounter = 0;
     private boolean fig_SOURCE = false;
@@ -224,8 +224,8 @@ public class ServerController {
 
         // ディレクトリパスを作成
         //String dirPath = "src/result/EPS/pajek/result" + runCounter;
-        //String dirPath = "src/result/PS/pajek/result" + runCounter;
-        String dirPath = "src/result/Dijkstra/pajek/result" + runCounter;
+        String dirPath = "src/result/PS/pajek/result" + runCounter;
+        //String dirPath = "src/result/Dijkstra/pajek/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".net";
 
@@ -272,8 +272,8 @@ public class ServerController {
 
         // ディレクトリパスを作成
         //String dirPath = "src/result/EPS/excel/result" + runCounter;
-        //String dirPath = "src/result/PS/excel/result" + runCounter;
-        String dirPath = "src/result/Dijkstra/excel/result" + runCounter;
+        String dirPath = "src/result/PS/excel/result" + runCounter;
+        //String dirPath = "src/result/Dijkstra/excel/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
 
@@ -297,8 +297,8 @@ public class ServerController {
 
     public void outputToflow(Client client, int ct) throws IOException {
         //String dirPath = "src/result/EPS/flow/result" + runCounter;
-        //String dirPath = "src/result/PS/flow/result" + runCounter;
-        String dirPath = "src/result/Dijkstra/flow/result" + runCounter;
+        String dirPath = "src/result/PS/flow/result" + runCounter;
+        //String dirPath = "src/result/Dijkstra/flow/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_flow.txt";
 
@@ -338,8 +338,8 @@ public class ServerController {
     public void outputRouteToExcel(Client client, int ct) throws IOException {
         // ディレクトリパスを作成
         //String dirPath = "src/result/EPS/rute/result" + runCounter;
-        //String dirPath = "src/result/PS/rute/result" + runCounter;
-        String dirPath = "src/result/Dijkstra/rute/result" + runCounter;
+        String dirPath = "src/result/PS/rute/result" + runCounter;
+        //String dirPath = "src/result/Dijkstra/rute/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_routes.txt";
 
@@ -396,8 +396,8 @@ public class ServerController {
     public void outputToTxt(Client client, int ct) throws IOException {
         // ディレクトリパスを作成
         //String dirPath = "src/result/EPS/txt/result" + runCounter;
-        //String dirPath = "src/result/PS/txt/result" + runCounter;
-        String dirPath = "src/result/Dijkstra/txt/result" + runCounter;
+        String dirPath = "src/result/PS/txt/result" + runCounter;
+        //String dirPath = "src/result/Dijkstra/txt/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
 
@@ -423,8 +423,8 @@ public class ServerController {
 
     public static void outputRoute(Uav currentUAV) {
         //String dirPath = "src/result/EPS/path";
-        //String dirPath = "src/result/PS/path";
-        String dirPath = "src/result/Dijkstra/path";
+        String dirPath = "src/result/PS/path";
+        //String dirPath = "src/result/Dijkstra/path";
         String filePath = dirPath + "/flight_path.txt";
 
         // ディレクトリが存在しない場合は作成
@@ -530,8 +530,8 @@ public class ServerController {
     // フライトデータを保存するメソッド
     private static void saveFlightData(ClientController clientcontroller, Uav uav, double totalPathDistance) {
         //String dirPath = "src/result/EPS/time";
-        //String dirPath = "src/result/PS/time";
-        String dirPath = "src/result/Dijkstra/time";
+        String dirPath = "src/result/PS/time";
+        //String dirPath = "src/result/Dijkstra/time";
         String filePath = dirPath + "/flight_times.csv";
 
         File dir1 = new File(dirPath);
