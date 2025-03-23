@@ -64,7 +64,7 @@ public class BoundaryController {
         Beacon source = beaconCluster.getBeacon(sourceId);
         Beacon destination = beaconCluster.getBeacon(destinationId);
 
-        int uavNum = 1 + (int)(Math.random() * 19);
+        int uavNum = 10 + (int)(Math.random() * 20);
         //flowListにsource, destination, uavNumを格納
         flow = new Flow(source, destination, uavNum);
 
@@ -140,7 +140,7 @@ public class BoundaryController {
 
                 // 次のクライアント生成まで60秒待機
                 if (i < clientCount - 1) { // 最後のクライアント以外
-                    Thread.sleep(60000); // 60秒待機
+                    Thread.sleep(20000); // 60秒待機
                 }
             }
 

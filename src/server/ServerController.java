@@ -165,7 +165,7 @@ public class ServerController {
 
     // リンク初期化用のメソッド
     private static void initializeLink(Link link, Beacon start, Beacon end) {
-        link.setLink(start, end, 10);
+        link.setLink(start, end, 3);
         link.setD_tubeThickness(INIT_THICKNESS);
         link.setInitD_tubeThickness(INIT_THICKNESS);
         link.setL_tubeLength(link.getDistance() * 10);
@@ -421,7 +421,7 @@ public class ServerController {
         }
     }
 
-    public static void outputRoute(Uav currentUAV) {
+    public static void outputRoute(Uav currentUAV, String method) {
         //String dirPath = "src/result/EPS/path";
         String dirPath = "src/result/PS/path";
         //String dirPath = "src/result/Dijkstra/path";
@@ -437,12 +437,12 @@ public class ServerController {
             // ファイルが空の場合、ヘッダーを追加
             File file = new File(filePath);
             if (file.length() == 0) {
-                writer.write("clientId,UAVId,flightPath\n");
+                writer.write("clientId,UAVId,flightPath,method\n");
             }
             // UAVの飛行経路を取得し、"-" 区切りの文字列に変換
             String pathString = Arrays.stream(currentUAV.getPath()).mapToObj(String::valueOf).collect(Collectors.joining("-"));
             // 行を書き込み
-            writer.write(String.format("%d,%d,%s\n", currentUAV.getClientId(), currentUAV.getId(), pathString));
+            writer.write(String.format("%d,%d,%s,%s\n", currentUAV.getClientId(), currentUAV.getId(), pathString, method));
         } catch (IOException e) {
             System.err.println("ファイル書き込みエラー: " + e.getMessage());
         }
@@ -519,42 +519,12 @@ public class ServerController {
                 }
             }
         }
+        // 容量の更新
+        updateCapacity(FlyingUAV);
 
         // 待機中のUAVを移動させる
         processWaitingUAVs(uavQueue, flyingUavQueue, FlyingUAV);
 
-        // 容量の更新
-        updateCapacity(FlyingUAV);
-    }
-
-    // フライトデータを保存するメソッド
-    private static void saveFlightData(ClientController clientcontroller, Uav uav, double totalPathDistance) {
-        //String dirPath = "src/result/EPS/time";
-        String dirPath = "src/result/PS/time";
-        //String dirPath = "src/result/Dijkstra/time";
-        String filePath = dirPath + "/flight_times.csv";
-
-        File dir1 = new File(dirPath);
-        if (!dir1.exists()) {
-            dir1.mkdirs();
-        }
-
-        long flightTime = clientcontroller.getFlightTime();
-        long UAV_flightTime = uav.getFlightTime();
-        long UAV_waitingTime = uav.getWaitingTime();
-
-        try (FileWriter writer = new FileWriter(filePath, true)) {
-            File file = new File(filePath);
-            if (file.length() == 0) {
-                writer.write("source,dist,passedTime,UAV_flightTime,UAV_waitingTime,ClientID,UAVID,speed,distance,path\n");
-            }
-            String pathString = Arrays.stream(uav.getPath()).mapToObj(String::valueOf).collect(Collectors.joining("-"));
-            writer.write(String.format("%d,%d,%d,%d,%d,%d,%d,%f,%f,%s\n",
-                    uav.getSource().getId(), uav.getDistination().getId(), flightTime, UAV_flightTime, UAV_waitingTime,
-                    uav.getClientId(), uav.getId(), uav.getSpeed(), totalPathDistance, pathString));
-        } catch (IOException e) {
-            System.err.println("ファイル書き込みエラー: " + e.getMessage());
-        }
     }
 
     // 待機中のUAVを処理するメソッド
@@ -600,7 +570,38 @@ public class ServerController {
                 System.out.println("client " + uav.getClientId() + " :UAV " + uav.getId() + " は移動できるリンクがないため待機継続");
                 uavQueue.add(uav);
             }
+        }
+        // 容量の更新
+        updateCapacity(FlyingUAV);
+    }
 
+    // フライトデータを保存するメソッド
+    private static void saveFlightData(ClientController clientcontroller, Uav uav, double totalPathDistance) {
+        //String dirPath = "src/result/EPS/time";
+        String dirPath = "src/result/PS/time";
+        //String dirPath = "src/result/Dijkstra/time";
+        String filePath = dirPath + "/flight_times.csv";
+
+        File dir1 = new File(dirPath);
+        if (!dir1.exists()) {
+            dir1.mkdirs();
+        }
+
+        long flightTime = clientcontroller.getFlightTime();
+        long UAV_flightTime = uav.getFlightTime();
+        long UAV_waitingTime = uav.getWaitingTime();
+
+        try (FileWriter writer = new FileWriter(filePath, true)) {
+            File file = new File(filePath);
+            if (file.length() == 0) {
+                writer.write("source,dist,passedTime,UAV_flightTime,UAV_waitingTime,ClientID,UAVID,speed,distance,path\n");
+            }
+            String pathString = Arrays.stream(uav.getPath()).mapToObj(String::valueOf).collect(Collectors.joining("-"));
+            writer.write(String.format("%d,%d,%d,%d,%d,%d,%d,%f,%f,%s\n",
+                    uav.getSource().getId(), uav.getDistination().getId(), flightTime, UAV_flightTime, UAV_waitingTime,
+                    uav.getClientId(), uav.getId(), uav.getSpeed(), totalPathDistance, pathString));
+        } catch (IOException e) {
+            System.err.println("ファイル書き込みエラー: " + e.getMessage());
         }
     }
 
@@ -1129,6 +1130,7 @@ public class ServerController {
     private int explorePath(int startNode, int currentNode, int goalNode, int[] path, int pathIndex, int passedFlow) {
         // ゴールノードに到達したら流量を返して経路探索を終了
         if (currentNode == goalNode) {
+            maxPathIndex = pathIndex; // **修正: 正しい最大経路長を記録**
             return passedFlow;
         }
 
@@ -1143,25 +1145,20 @@ public class ServerController {
                 int flow = tubeFlow[currentNode][nextNode]; // 現在ノード間の流量
 
                 // 最小フローの計算
-                if (passedFlow == 0) {
-                    min_Flow = flow;
-                } else {
-                    min_Flow = Math.min(min_Flow, flow);
-                }
+                int prevMinFlow = min_Flow;  // **バックトラックのために保存**
+                min_Flow = (passedFlow == 0) ? flow : Math.min(min_Flow, flow);
 
                 // 経路に次のノードを追加
                 path[pathIndex] = nextNode;
 
-                // 最終的に見つかった経路に沿ってフローを減少させる
+                // ゴールに到達した場合、`tubeFlow` を減算
                 if (nextNode == goalNode && min_Flow > 0) {
                     int nodeA = startNode;
                     for (int i = 0; i <= pathIndex; i++) {
                         int nodeB = path[i];
-                        // `tubeFlow` と `Flow_Capacity` を減算
                         tubeFlow[nodeA][nodeB] -= min_Flow;
                         Flow_Capacity[nodeA][nodeB] -= min_Flow;
 
-                        // `tubeFlow` が0なら `adjMatrix` から接続を削除
                         if (tubeFlow[nodeA][nodeB] == 0) {
                             adjMatrix[nodeA][nodeB] = 0;
                         }
@@ -1169,53 +1166,53 @@ public class ServerController {
                     }
                 }
 
-                // 再帰的に経路を探索し、成功時には流量を返す
+                // 再帰的に経路を探索
                 int resultFlow = explorePath(startNode, nextNode, goalNode, path, pathIndex + 1, min_Flow);
                 if (resultFlow > 0) {
-                    return resultFlow; // 見つかった最小フローを返す
+                    return resultFlow; // 成功した場合は流量を返す
                 }
 
-                // 探索が失敗した場合、pathIndexを戻して最後のノードを削除（バックトラック）
-                min_Flow = (int) INF;  // 最小フローをリセット
+                // **バックトラック処理**
+                min_Flow = prevMinFlow;  // **元の min_Flow を復元**
             }
         }
 
         return 0; // 失敗した場合、流量0を返す
     }
 
-    // runUAVFlow関数
-    public void runUAVFlow(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
-        UAV_count = 0; // ゴールに到達したUAVの数を追跡
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1); // UAVの飛行をスケジュールするためのスレッドプール
-        CountDownLatch latch = new CountDownLatch(requiredUAVs); // UAVの完了を待つためのカウントダウンラッチ
 
-        boolean flowAvailable = true; // 流入フローがあるかどうかを示すフラグ
+    public void runUAVFlow(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
+        UAV_count = 0;
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+        CountDownLatch latch = new CountDownLatch(requiredUAVs);
+        boolean flowAvailable = true;
 
         while (UAV_count < requiredUAVs && flowAvailable) {
             int previousUAVCount = UAV_count;
             min_Flow = 100;
 
-            int[] path = new int[20]; // 経路の最大ノード数を想定
+            int[] path = new int[20];
             int pathIndex = 0;
             path[pathIndex++] = startNode;
 
-            maxPathIndex = pathIndex;
+            maxPathIndex = pathIndex;  // **修正: 初期化を適切に**
 
             int flow = explorePath(startNode, startNode, goalNode, path, pathIndex, 0);
 
             if (flow > 0) {
-                int[] pathArray = new int[maxPathIndex + 1];
-                System.arraycopy(path, 0, pathArray, 0, maxPathIndex + 1);
+                int pathLength = maxPathIndex;  // **修正: 正しい長さを取得**
+                int[] pathArray = Arrays.copyOf(path, pathLength);  // **修正: 正しい長さでコピー**
+
                 int u = pathArray[0];
                 int v = pathArray[1];
 
                 double minCapacity = link[u][v].getCapacity();
-                AtomicInteger flowCounter = new AtomicInteger(0); // スレッドセーフなカウンタ
+                AtomicInteger flowCounter = new AtomicInteger(0);
 
                 for (int f = 0; f < flow; f++) {
                     int currentUAVIndex;
 
-                    synchronized (this) { // `UAV_count` のインクリメントをスレッドセーフに
+                    synchronized (this) {
                         UAV_count++;
                         currentUAVIndex = UAV_count - 1;
                     }
@@ -1224,7 +1221,7 @@ public class ServerController {
 
                     scheduler.schedule(() -> {
                         currentUAV.setPath(pathArray);
-                        outputRoute(currentUAV);
+                        outputRoute(currentUAV, "runUAVFlow");
 
                         if (flowCounter.get() < minCapacity) {
                             currentUAV.startTimer();
@@ -1243,27 +1240,24 @@ public class ServerController {
                             System.out.println("UAV " + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ")");
                         }
 
-                        latch.countDown(); // UAV の処理が完了したらカウントを減らす
+                        latch.countDown();
                     }, f * 2, TimeUnit.SECONDS);
                 }
             } else {
-                // `flow == 0` の場合、整数台のフローが終了したためフラグを変更
                 flowAvailable = false;
             }
 
             if (UAV_count == requiredUAVs) break;
         }
 
-        // UAV のスケジュールが全て完了するまで待機
         scheduler.shutdown();
         try {
-            scheduler.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS); // すべての UAV のスケジュールが完了するまで待機
+            scheduler.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             System.err.println("スレッドが割り込まれました: " + e.getMessage());
         }
 
-        // すべての UAV のスケジュールが完了後に `adjustRemainingFlow()` を呼び出す
         if (!flowAvailable) {
             int needUAV = requiredUAVs - UAV_count;
             if (needUAV > 0) {
@@ -1336,7 +1330,7 @@ public class ServerController {
                         int currentUAVIndex = UAV_count + countOfUAV;
                         Uav currentUAV = client.getFlow().getUav(currentUAVIndex);
                         currentUAV.setPath(assignedPath);
-                        outputRoute(currentUAV);
+                        outputRoute(currentUAV, "remainingFlow");
 
                         if (countOfUAV < minCapacity) {
                             currentUAV.startTimer();
