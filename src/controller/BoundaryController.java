@@ -44,6 +44,7 @@ public class BoundaryController {
 
     private void setLink(){
         server.setLink(nodeNum, beaconCluster);
+        //server.setLink_random(nodeNum, beaconCluster);
     }
 
     public void setNodeNum(int nodeNum){
@@ -53,25 +54,115 @@ public class BoundaryController {
     public int getNodeNum() {
         return nodeNum;
     }
-
-    //sourceId, destinationId, uavNumをランダムに決める
-    public Client createRandomClient(){
-        int sourceId = (int)(Math.random() * nodeNum);
-        int destinationId = (int)(Math.random() * nodeNum);
-        while(sourceId == destinationId){
-            destinationId = (int)(Math.random() * nodeNum);
-        }
+    //クライアントを生成する関数
+    public Client createClient1() {
+        int sourceId = 0;
+        int destinationId = 5;
         Beacon source = beaconCluster.getBeacon(sourceId);
         Beacon destination = beaconCluster.getBeacon(destinationId);
 
-        int uavNum = 10 + (int)(Math.random() * 20);
+        int uavNum = 12;
         //flowListにsource, destination, uavNumを格納
         flow = new Flow(source, destination, uavNum);
 
-        Client client = new Client(flow, clientId);
+        Client client = new Client(flow, 1);
         clientController.addClient(client);
-        clientId++;
+
         return client;
+    }
+
+    public Client createClient2(){
+        int sourceId = 0;
+        int destinationId = 5;
+        Beacon source = beaconCluster.getBeacon(sourceId);
+        Beacon destination = beaconCluster.getBeacon(destinationId);
+
+        int uavNum = 12;
+        //flowListにsource, destination, uavNumを格納
+        flow = new Flow(source, destination, uavNum);
+
+        Client client = new Client(flow, 2);
+        clientController.addClient(client);
+
+        return client;
+    }
+
+    public Client createClient3(){
+        int sourceId = 2;
+        int destinationId = 4;
+        Beacon source = beaconCluster.getBeacon(sourceId);
+        Beacon destination = beaconCluster.getBeacon(destinationId);
+
+        int uavNum = 14;
+        //flowListにsorrce, destination, uavNumを格納
+        flow = new Flow(source, destination, uavNum);
+
+        Client client = new Client(flow, 3);
+        clientController.addClient(client);
+
+        return client;
+    }
+
+
+    //sourceId, destinationId, uavNumをランダムに決める
+    public Client createRandomClient(){
+        /**
+        int sourceId = (int)(Math.random() * nodeNum);
+        int destinationId = (int)(Math.random() * nodeNum);
+         */
+
+        if(clientId == 1) {
+            int sourceId = 0;
+            int destinationId = 5;
+            while (sourceId == destinationId) {
+                destinationId = (int) (Math.random() * nodeNum);
+            }
+            Beacon source = beaconCluster.getBeacon(sourceId);
+            Beacon destination = beaconCluster.getBeacon(destinationId);
+
+            int uavNum = 29; //+ (int)(Math.random() * 20);
+            //flowListにsource, destination, uavNumを格納
+            flow = new Flow(source, destination, uavNum);
+
+            Client client = new Client(flow, clientId);
+            clientController.addClient(client);
+            clientId++;
+            return client;
+        }else if(clientId == 2){
+            int sourceId = 0;
+            int destinationId = 5;
+            while (sourceId == destinationId) {
+                destinationId = (int) (Math.random() * nodeNum);
+            }
+            Beacon source = beaconCluster.getBeacon(sourceId);
+            Beacon destination = beaconCluster.getBeacon(destinationId);
+
+            int uavNum = 15; //+ (int)(Math.random() * 20);
+            //flowListにsource, destination, uavNumを格納
+            flow = new Flow(source, destination, uavNum);
+
+            Client client = new Client(flow, clientId);
+            clientController.addClient(client);
+            clientId++;
+            return client;
+        }else{
+            int sourceId = 2;
+            int destinationId = 4;
+            while (sourceId == destinationId) {
+                destinationId = (int) (Math.random() * nodeNum);
+            }
+            Beacon source = beaconCluster.getBeacon(sourceId);
+            Beacon destination = beaconCluster.getBeacon(destinationId);
+
+            int uavNum = 15; //+ (int)(Math.random() * 20);
+            //flowListにsource, destination, uavNumを格納
+            flow = new Flow(source, destination, uavNum);
+
+            Client client = new Client(flow, clientId);
+            clientController.addClient(client);
+            clientId++;
+            return client;
+        }
     }
 
     public void routeRequest(Client client) throws IOException {
@@ -81,16 +172,74 @@ public class BoundaryController {
          * ServerController内の出力先も適宜変更
          */
         //server.run_EPS(client, flyingUavQueue, uavQueue, clientController, num_loop);
-        server.run_PS(client, flyingUavQueue, uavQueue, clientController, num_loop);
-        //server.run_Dijkstra(client, clientController,flyingUavQueue, uavQueue);
+        //server.run_PS(client, flyingUavQueue, uavQueue, clientController, num_loop);
+        server.run_Dijkstra(client, clientController,flyingUavQueue, uavQueue);
     }
 
     public static void main(String[] args) {
         BoundaryController boundaryController = new BoundaryController();
-        boundaryController.setNodeNum(20);
+        boundaryController.setNodeNum(6);
+        //boundaryController.setNodeNum(20);
         server = new ServerController(nodeNum);
         beaconCluster = new BeaconCluster(nodeNum);
+/**
+        //事業者指定実験
+        try {
+            boundaryController.setNetworkTopology();
 
+            client = boundaryController.createClient1();
+            boundaryController.routeRequest(client);
+            synchronized (passedClient) {
+                passedClient.add(client);
+                System.out.println("クライアント1をpassedClientに追加しました");
+            }
+
+            clientController.startTimer();
+
+
+            //UAVの飛行を全て終えたクライアントをdequeueする
+            // 12秒待機してから次の処理に移る
+            try {
+                Thread.sleep(30000); // 30秒待機
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.err.println("Thread was interrupted, failed to complete wait");
+            }
+
+
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+
+
+            client = boundaryController.createClient2();//ここでクライアントタイマーが停止したと考えられる
+            //ここではクライアントタイマーはすでに停止
+            boundaryController.routeRequest(client);
+            synchronized (passedClient) {
+                passedClient.add(client);
+                System.out.println("クライアント2をpassedClientに追加しました");
+            }
+
+            //ここではクライアントタイマーすでに停止
+            try {
+                Thread.sleep(30000); // 30秒待機
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.err.println("Thread was interrupted, failed to complete wait");
+            }
+
+
+            client = boundaryController.createClient3();
+            boundaryController.routeRequest(client);
+            synchronized (passedClient) {
+                passedClient.add(client);
+                System.out.println("クライアント3をpassedClientに追加しました");
+            }
+            //passedClientが空になるまでUAVFlySchedulerを実行
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+*/
+        //ランダムクライアント生成実験
         try {
             boundaryController.setNetworkTopology(); // ネットワークの初期化
 
@@ -140,7 +289,7 @@ public class BoundaryController {
 
                 // 次のクライアント生成まで60秒待機
                 if (i < clientCount - 1) { // 最後のクライアント以外
-                    Thread.sleep(20000); // 60秒待機
+                    Thread.sleep(40000); // 60秒待機
                 }
             }
 

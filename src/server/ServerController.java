@@ -10,9 +10,7 @@ import item.Uav;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -99,7 +97,90 @@ public class ServerController {
     }
 
     //フィールドをすべてリセットする
-    public void reset() {
+    public void reset(){
+        Arrays.fill(Q_Kirchhoff, 0.0);
+        Arrays.fill(P_tubePressure, 0.0);
+        // 2次元配列の初期化
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                pressureCoefficient[i][j] = 0.0;  // すべての要素に0.0を設定
+                D_tubeThickness_deltaT[i][j] = 0.0;
+                Q_tubeFlow_sigmoidOutput[i][j] = 0.0;
+                Flow_Capacity[i][j] = 0.0;
+                tubeFlow[i][j] = 0;
+                adjMatrix[i][j] = 0;
+                link[i][j].setD_tubeThickness(0.0);
+                link[i][j].setL_tubeLength(INF);
+                link[i][j].setQ_tubeFlow(0.0);
+            }
+        }
+        link[0][1].setD_tubeThickness(INIT_THICKNESS);
+        link[0][1].setL_tubeLength(1);
+        adjMatrix[0][1] = 1;
+
+        link[1][0].setD_tubeThickness(INIT_THICKNESS);
+        link[1][0].setL_tubeLength(1);
+        adjMatrix[1][0] = 1;
+
+        link[0][2].setD_tubeThickness(INIT_THICKNESS);
+        link[0][2].setL_tubeLength(2);
+        adjMatrix[0][2] = 1;
+
+        link[2][0].setD_tubeThickness(INIT_THICKNESS);
+        link[2][0].setL_tubeLength(2);
+        adjMatrix[2][0] = 1;
+
+        link[0][3].setD_tubeThickness(INIT_THICKNESS);
+        link[0][3].setL_tubeLength(2);
+        adjMatrix[0][3] = 1;
+
+        link[3][0].setD_tubeThickness(INIT_THICKNESS);
+        link[3][0].setL_tubeLength(2);
+        adjMatrix[3][0] = 1;
+
+        link[1][4].setD_tubeThickness(INIT_THICKNESS);
+        link[1][4].setL_tubeLength(2);
+        adjMatrix[1][4] = 1;
+
+        link[4][1].setD_tubeThickness(INIT_THICKNESS);
+        link[4][1].setL_tubeLength(2);
+        adjMatrix[4][1] = 1;
+
+        link[2][3].setD_tubeThickness(INIT_THICKNESS);
+        link[2][3].setL_tubeLength(1);
+        adjMatrix[2][3] = 1;
+
+        link[3][2].setD_tubeThickness(INIT_THICKNESS);
+        link[3][2].setL_tubeLength(1);
+        adjMatrix[3][2] = 1;
+
+        link[2][5].setD_tubeThickness(INIT_THICKNESS);
+        link[2][5].setL_tubeLength(3);
+        adjMatrix[2][5] = 1;
+
+        link[5][2].setD_tubeThickness(INIT_THICKNESS);
+        link[5][2].setL_tubeLength(3);
+        adjMatrix[5][2] = 1;
+
+        link[3][5].setD_tubeThickness(INIT_THICKNESS);
+        link[3][5].setL_tubeLength(2);
+        adjMatrix[3][5] = 1;
+
+        link[5][3].setD_tubeThickness(INIT_THICKNESS);
+        link[5][3].setL_tubeLength(2);
+        adjMatrix[5][3] = 1;
+
+        link[4][5].setD_tubeThickness(INIT_THICKNESS);
+        link[4][5].setL_tubeLength(3.3);
+        adjMatrix[4][5] = 1;
+
+        link[5][4].setD_tubeThickness(INIT_THICKNESS);
+        link[5][4].setL_tubeLength(3.3);
+        adjMatrix[5][4] = 1;
+    }
+
+    //フィールドをすべてリセットする
+    public void reset_random() {
         Arrays.fill(Q_Kirchhoff, 0.0);
         Arrays.fill(P_tubePressure, 0.0);
         Arrays.fill(Q_Kirchhoff_sinkExcept, 0.0);
@@ -133,9 +214,136 @@ public class ServerController {
         }
     }
 
+    public void setLink(int node, BeaconCluster beaconList){
+        this.node = node;
+        this.beaconCluster = beaconList;
+
+        //手動でリンクを決定
+        for(int i=0; i<node; i++){
+            for(int j=0; j<node; j++){
+                link[i][j].setD_tubeThickness(0.0);
+                link[i][j].setL_tubeLength(INF);
+                //link.get(i).get(j).setDistance(Math.sqrt(Math.pow(beaconList.getBeacon(i).getX() - beaconList.getBeacon(j).getX(), 2) + Math.pow(beaconList.getBeacon(i).getY() - beaconList.getBeacon(j).getY(), 2)));
+            }
+        }
+
+        link[0][1].setLink(beaconList.getBeacon(0), beaconList.getBeacon(1), 5);
+        link[0][1].setD_tubeThickness(INIT_THICKNESS);
+        link[0][1].setL_tubeLength(1);
+        link[0][1].setDistance(250);
+        link[0][1].setCongestionRate(INIT_RATE);
+        adjMatrix[0][1] = 1;
+
+        link[1][0].setLink(beaconList.getBeacon(1), beaconList.getBeacon(0), 5);
+        link[1][0].setD_tubeThickness(INIT_THICKNESS);
+        link[1][0].setL_tubeLength(1);
+        link[1][0].setDistance(250);
+        link[1][0].setCongestionRate(INIT_RATE);
+        adjMatrix[1][0] = 1;
+
+        link[0][2].setLink(beaconList.getBeacon(0), beaconList.getBeacon(2), 15);
+        link[0][2].setD_tubeThickness(INIT_THICKNESS);
+        link[0][2].setL_tubeLength(3);
+        link[0][2].setDistance(750);
+        link[0][2].setCongestionRate(INIT_RATE);
+        adjMatrix[0][2] = 1;
+
+        link[2][0].setLink(beaconList.getBeacon(2), beaconList.getBeacon(0), 15);
+        link[2][0].setD_tubeThickness(INIT_THICKNESS);
+        link[2][0].setL_tubeLength(3);
+        link[2][0].setDistance(750);
+        link[2][0].setCongestionRate(INIT_RATE);
+        adjMatrix[2][0] = 1;
+
+        link[0][3].setLink(beaconList.getBeacon(0), beaconList.getBeacon(3), 10);
+        link[0][3].setD_tubeThickness(INIT_THICKNESS);
+        link[0][3].setL_tubeLength(2);
+        link[0][3].setDistance(500);
+        link[0][3].setCongestionRate(INIT_RATE);
+        adjMatrix[0][3] = 1;
+
+        link[3][0].setLink(beaconList.getBeacon(3), beaconList.getBeacon(0), 10);
+        link[3][0].setD_tubeThickness(INIT_THICKNESS);
+        link[3][0].setL_tubeLength(2);
+        link[3][0].setDistance(500);
+        link[3][0].setCongestionRate(INIT_RATE);
+        adjMatrix[3][0] = 1;
+
+        link[1][4].setLink(beaconList.getBeacon(1), beaconList.getBeacon(4), 10);
+        link[1][4].setD_tubeThickness(INIT_THICKNESS);
+        link[1][4].setL_tubeLength(2);
+        link[1][4].setDistance(500);
+        link[1][4].setCongestionRate(INIT_RATE);
+        adjMatrix[1][4] = 1;
+
+        link[4][1].setLink(beaconList.getBeacon(4), beaconList.getBeacon(1), 10);
+        link[4][1].setD_tubeThickness(INIT_THICKNESS);
+        link[4][1].setL_tubeLength(2);
+        link[4][1].setDistance(500);
+        link[4][1].setCongestionRate(INIT_RATE);
+        adjMatrix[4][1] = 1;
+
+        link[2][3].setLink(beaconList.getBeacon(2), beaconList.getBeacon(3), 5);
+        link[2][3].setD_tubeThickness(INIT_THICKNESS);
+        link[2][3].setL_tubeLength(1);
+        link[2][3].setDistance(250);
+        link[2][3].setCongestionRate(INIT_RATE);
+        adjMatrix[2][3] = 1;
+
+        link[3][2].setLink(beaconList.getBeacon(3), beaconList.getBeacon(2), 5);
+        link[3][2].setD_tubeThickness(INIT_THICKNESS);
+        link[3][2].setL_tubeLength(1);
+        link[3][2].setDistance(250);
+        link[3][2].setCongestionRate(INIT_RATE);
+        adjMatrix[3][2] = 1;
+
+        link[2][5].setLink(beaconList.getBeacon(2), beaconList.getBeacon(5), 15);
+        link[2][5].setD_tubeThickness(INIT_THICKNESS);
+        link[2][5].setL_tubeLength(3);
+        link[2][5].setDistance(750);
+        link[2][5].setCongestionRate(INIT_RATE);
+        adjMatrix[2][5] = 1;
+
+        link[5][2].setLink(beaconList.getBeacon(5), beaconList.getBeacon(2), 15);
+        link[5][2].setD_tubeThickness(INIT_THICKNESS);
+        link[5][2].setL_tubeLength(3);
+        link[5][2].setDistance(750);
+        link[5][2].setCongestionRate(INIT_RATE);
+        adjMatrix[5][2] = 1;
+
+        link[3][5].setLink(beaconList.getBeacon(3), beaconList.getBeacon(5), 10);
+        link[3][5].setD_tubeThickness(INIT_THICKNESS);
+        link[3][5].setL_tubeLength(2);
+        link[3][5].setDistance(500);
+        link[3][5].setCongestionRate(INIT_RATE);
+        adjMatrix[3][5] = 1;
+
+        link[5][3].setLink(beaconList.getBeacon(5), beaconList.getBeacon(3), 10);
+        link[5][3].setD_tubeThickness(INIT_THICKNESS);
+        link[5][3].setL_tubeLength(2);
+        link[5][3].setDistance(500);
+        link[5][3].setCongestionRate(INIT_RATE);
+        adjMatrix[5][3] = 1;
+
+        link[4][5].setLink(beaconList.getBeacon(4), beaconList.getBeacon(5), 15);
+        link[4][5].setD_tubeThickness(INIT_THICKNESS);
+        link[4][5].setL_tubeLength(3.3);
+        link[4][5].setDistance(850);
+        link[4][5].setCongestionRate(INIT_RATE);
+        adjMatrix[4][5] = 1;
+
+        link[5][4].setLink(beaconList.getBeacon(5), beaconList.getBeacon(4), 15);
+        link[5][4].setD_tubeThickness(INIT_THICKNESS);
+        link[5][4].setL_tubeLength(3.3);
+        link[5][4].setDistance(850);
+        link[5][4].setCongestionRate(INIT_RATE);
+        adjMatrix[5][4] = 1;
+
+    }
+
 
     // nodeConfigureメソッドの追加
-    public void setLink(int node, BeaconCluster beaconList) {
+    public void setLink_random(int node, BeaconCluster beaconList) {
         this.node = node;
         this.beaconCluster = beaconList;
         double maxDistance = sqrt(2);  // 最大距離
@@ -574,12 +782,34 @@ public class ServerController {
         // 容量の更新
         updateCapacity(FlyingUAV);
     }
+    // 管の容量を更新するメソッド
+    public static void updateCapacity(int[][] FlyingUAV) {
+        //Capacityを初期値に戻す
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                if (link[i][j].getL_tubeLength() != INF) {
+                    link[i][j].setCapacity(link[i][j].getInitCapacity());
+                    link[j][i].setCapacity(link[j][i].getInitCapacity());
+                }
+            }
+        }
+        // 各リンクの初期容量から飛行中のUAV分を減少
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                if (link[i][j].getL_tubeLength() != INF && FlyingUAV[i][j] > 0) {
+                    double newCapacity = link[i][j].getCapacity() - FlyingUAV[i][j];
+                    link[i][j].setCapacity(Math.max(0, newCapacity));
+                    link[j][i].setCapacity(Math.max(0, newCapacity));
+                }
+            }
+        }
+    }
 
     // フライトデータを保存するメソッド
     private static void saveFlightData(ClientController clientcontroller, Uav uav, double totalPathDistance) {
         //String dirPath = "src/result/EPS/time";
-        String dirPath = "src/result/PS/time";
-        //String dirPath = "src/result/Dijkstra/time";
+        //String dirPath = "src/result/PS/time";
+        String dirPath = "src/result/Dijkstra/time";
         String filePath = dirPath + "/flight_times.csv";
 
         File dir1 = new File(dirPath);
@@ -606,35 +836,13 @@ public class ServerController {
     }
 
 
-    // 管の容量を更新するメソッド
-    public static void updateCapacity(int[][] FlyingUAV) {
-        //Capacityを初期値に戻す
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    link[i][j].setCapacity(link[i][j].getInitCapacity());
-                    link[j][i].setCapacity(link[j][i].getInitCapacity());
-                }
-            }
-        }
-        // 各リンクの初期容量から飛行中のUAV分を減少
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF && FlyingUAV[i][j] > 0) {
-                    double newCapacity = link[i][j].getCapacity() - FlyingUAV[i][j];
-                    link[i][j].setCapacity(Math.max(0, newCapacity));
-                    link[j][i].setCapacity(Math.max(0, newCapacity));
-                }
-            }
-        }
-    }
-
     public void run_Dijkstra(Client client, ClientController clientcontroller, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue)throws IOException{
         int i, j;
 
         if (runCounter != 0) {
             //更新メソッドを呼び出す
             reset();
+            //reset_random();
         }
 
         //passedClientが空でない場合，UAVFlySchedulerを停止
@@ -808,8 +1016,8 @@ public class ServerController {
 
         if(runCounter != 0){
             //更新メソッドを呼び出す
-            //flyUAV(passedClient);
             reset();
+            //reset_random();
         }
 
         //Queueが空でない場合，UAVFlySchedulerを停止
@@ -979,8 +1187,8 @@ public class ServerController {
 
         if(runCounter != 0){
             //更新メソッドを呼び出す
-            //flyUAV(passedClient);
             reset();
+            //reset_random();
         }
 
         //passedClientが空でない場合，UAVFlySchedulerを停止
