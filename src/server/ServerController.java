@@ -431,8 +431,8 @@ public class ServerController {
         Beacon dist = client.getFlow().getDestination();
 
         // ディレクトリパスを作成
-        //String dirPath = "src/result/EPS/pajek/result" + runCounter;
-        String dirPath = "src/result/PS/pajek/result" + runCounter;
+        String dirPath = "src/result/EPS/pajek/result" + runCounter;
+        //String dirPath = "src/result/PS/pajek/result" + runCounter;
         //String dirPath = "src/result/Dijkstra/pajek/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".net";
@@ -479,8 +479,8 @@ public class ServerController {
     public void outputToExcel(Client client, int ct) throws IOException {
 
         // ディレクトリパスを作成
-        //String dirPath = "src/result/EPS/excel/result" + runCounter;
-        String dirPath = "src/result/PS/excel/result" + runCounter;
+        String dirPath = "src/result/EPS/excel/result" + runCounter;
+        //String dirPath = "src/result/PS/excel/result" + runCounter;
         //String dirPath = "src/result/Dijkstra/excel/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
@@ -504,8 +504,8 @@ public class ServerController {
     }
 
     public void outputToflow(Client client, int ct) throws IOException {
-        //String dirPath = "src/result/EPS/flow/result" + runCounter;
-        String dirPath = "src/result/PS/flow/result" + runCounter;
+        String dirPath = "src/result/EPS/flow/result" + runCounter;
+        //String dirPath = "src/result/PS/flow/result" + runCounter;
         //String dirPath = "src/result/Dijkstra/flow/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_flow.txt";
@@ -545,8 +545,8 @@ public class ServerController {
     // 経路ごとのUAV数をExcel形式で出力するメソッド
     public void outputRouteToExcel(Client client, int ct) throws IOException {
         // ディレクトリパスを作成
-        //String dirPath = "src/result/EPS/rute/result" + runCounter;
-        String dirPath = "src/result/PS/rute/result" + runCounter;
+        String dirPath = "src/result/EPS/rute/result" + runCounter;
+        //String dirPath = "src/result/PS/rute/result" + runCounter;
         //String dirPath = "src/result/Dijkstra/rute/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_routes.txt";
@@ -603,8 +603,8 @@ public class ServerController {
     //txtファイルに管の長さ，管の太さ，管の容量を出力するメソッド
     public void outputToTxt(Client client, int ct) throws IOException {
         // ディレクトリパスを作成
-        //String dirPath = "src/result/EPS/txt/result" + runCounter;
-        String dirPath = "src/result/PS/txt/result" + runCounter;
+        String dirPath = "src/result/EPS/txt/result" + runCounter;
+        //String dirPath = "src/result/PS/txt/result" + runCounter;
         //String dirPath = "src/result/Dijkstra/txt/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
@@ -630,8 +630,8 @@ public class ServerController {
     }
 
     public static void outputRoute(Uav currentUAV, String method) {
-        //String dirPath = "src/result/EPS/path";
-        String dirPath = "src/result/PS/path";
+        String dirPath = "src/result/EPS/path";
+        //String dirPath = "src/result/PS/path";
         //String dirPath = "src/result/Dijkstra/path";
         String filePath = dirPath + "/flight_path.txt";
 
@@ -807,9 +807,9 @@ public class ServerController {
 
     // フライトデータを保存するメソッド
     private static void saveFlightData(ClientController clientcontroller, Uav uav, double totalPathDistance) {
-        //String dirPath = "src/result/EPS/time";
+        String dirPath = "src/result/EPS/time";
         //String dirPath = "src/result/PS/time";
-        String dirPath = "src/result/Dijkstra/time";
+        //String dirPath = "src/result/Dijkstra/time";
         String filePath = dirPath + "/flight_times.csv";
 
         File dir1 = new File(dirPath);
@@ -1004,6 +1004,57 @@ public class ServerController {
         }
     }
 
+    private static class Pair implements Comparable<Pair> {
+        double fractional;
+        int index;
+
+        Pair(double f, int i) {
+            this.fractional = f;
+            this.index = i;
+        }
+
+        @Override
+        public int compareTo(Pair other) {
+            return Double.compare(other.fractional, this.fractional);
+        }
+    }
+
+    private void roundWithConservation(double[] output) {
+        int n = output.length;
+        double sum_frac = 0.0;
+        for (double val : output) {
+            sum_frac += val;
+        }
+        long sum_int = Math.round(sum_frac);
+
+        long[] output_floor = new long[n];
+        double[] fractional_parts = new double[n];
+        long sum_floor = 0;
+
+        for (int i = 0; i < n; i++) {
+            output_floor[i] = (long) Math.floor(output[i]);
+            fractional_parts[i] = output[i] - output_floor[i];
+            sum_floor += output_floor[i];
+        }
+
+        long diff = sum_int - sum_floor;
+
+        Pair[] pairs = new Pair[n];
+        for (int i = 0; i < n; i++) {
+            pairs[i] = new Pair(fractional_parts[i], i);
+        }
+
+        Arrays.sort(pairs);
+
+        for (int i = 0; i < diff; i++) {
+            output_floor[pairs[i].index]++;
+        }
+
+        for (int i = 0; i < n; i++) {
+            output[i] = output_floor[i];
+        }
+    }
+
     public void run_PS(Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, ClientController clientcontroller, int numLoop)throws IOException{
         int nodeExcept = node - 1;
         int ct = 0;
@@ -1101,6 +1152,38 @@ public class ServerController {
                 for (j = 0; j < node; j++) {
                     if (link[i][j].getL_tubeLength() != INF) {
                         link[i][j].setQ_tubeFlow((link[i][j].getD_tubeThickness() / link[i][j].getL_tubeLength()) * (P_tubePressure[i] - P_tubePressure[j]));
+                    }
+                }
+            }
+
+            if (ct == numLoop - 1) {
+                int linkCount = 0;
+                for (i = 0; i < node; i++) {
+                    for (j = 0; j < node; j++) {
+                        if (link[i][j].getL_tubeLength() != INF) {
+                            linkCount++;
+                        }
+                    }
+                }
+
+                double[] flows = new double[linkCount];
+                int index = 0;
+                for (i = 0; i < node; i++) {
+                    for (j = 0; j < node; j++) {
+                        if (link[i][j].getL_tubeLength() != INF) {
+                            flows[index++] = link[i][j].getQ_tubeFlow();
+                        }
+                    }
+                }
+
+                roundWithConservation(flows);
+
+                index = 0;
+                for (i = 0; i < node; i++) {
+                    for (j = 0; j < node; j++) {
+                        if (link[i][j].getL_tubeLength() != INF) {
+                            link[i][j].setQ_tubeFlow(flows[index++]);
+                        }
                     }
                 }
             }
@@ -1247,6 +1330,38 @@ public class ServerController {
                 for (j = 0; j < node; j++) {
                     if (link[i][j].getL_tubeLength() != INF) {
                         link[i][j].setQ_tubeFlow((link[i][j].getD_tubeThickness() / link[i][j].getL_tubeLength()) * (P_tubePressure[i] - P_tubePressure[j]));
+                    }
+                }
+            }
+
+            if (ct == numLoop - 1) {
+                int linkCount = 0;
+                for (i = 0; i < node; i++) {
+                    for (j = 0; j < node; j++) {
+                        if (link[i][j].getL_tubeLength() != INF) {
+                            linkCount++;
+                        }
+                    }
+                }
+
+                double[] flows = new double[linkCount];
+                int index = 0;
+                for (i = 0; i < node; i++) {
+                    for (j = 0; j < node; j++) {
+                        if (link[i][j].getL_tubeLength() != INF) {
+                            flows[index++] = link[i][j].getQ_tubeFlow();
+                        }
+                    }
+                }
+
+                roundWithConservation(flows);
+
+                index = 0;
+                for (i = 0; i < node; i++) {
+                    for (j = 0; j < node; j++) {
+                        if (link[i][j].getL_tubeLength() != INF) {
+                            link[i][j].setQ_tubeFlow(flows[index++]);
+                        }
                     }
                 }
             }

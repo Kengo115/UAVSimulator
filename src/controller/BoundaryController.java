@@ -120,7 +120,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 29; //+ (int)(Math.random() * 20);
+            int uavNum = 15; //+ (int)(Math.random() * 20);
             //flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -171,9 +171,9 @@ public class BoundaryController {
          * UAVの経路探索方法を選択
          * ServerController内の出力先も適宜変更
          */
-        //server.run_EPS(client, flyingUavQueue, uavQueue, clientController, num_loop);
+        server.run_EPS(client, flyingUavQueue, uavQueue, clientController, num_loop);
         //server.run_PS(client, flyingUavQueue, uavQueue, clientController, num_loop);
-        server.run_Dijkstra(client, clientController,flyingUavQueue, uavQueue);
+        //server.run_Dijkstra(client, clientController,flyingUavQueue, uavQueue);
     }
 
     public static void main(String[] args) {
