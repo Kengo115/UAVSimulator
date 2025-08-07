@@ -1,6 +1,5 @@
 package server.uav;
 
-import client.ClientController;
 import item.Uav;
 
 import java.io.IOException;
@@ -13,11 +12,11 @@ public interface FlightDataRecorder {
     /**
      * 飛行データを保存する
      * 
-     * @param clientController クライアントコントローラ
+     * @param flightTime 飛行時間
      * @param uav UAV
      * @param totalPathDistance 総飛行距離
      */
-    void saveFlightData(ClientController clientController, Uav uav, double totalPathDistance);
+    void saveFlightData(long flightTime, Uav uav, double totalPathDistance);
     
     /**
      * 飛行時間を記録する
@@ -59,6 +58,7 @@ public interface FlightDataRecorder {
      * @param source 出発地
      * @param destination 目的地
      * @param flightTime 飛行時間
+     * @param uavFlightTime UAV飛行時間
      * @param waitingTime 待機時間
      * @param clientId クライアントID
      * @param uavId UAVID
@@ -67,5 +67,7 @@ public interface FlightDataRecorder {
      * @param path 経路
      * @throws IOException 入出力例外
      */
-    void writeFlightData(String filePath, int source, int destination, long flightTime, long waitingTime, int clientId, int uavId, double speed, double distance, String path) throws IOException;
+    void writeFlightData(String filePath, int source, int destination, long flightTime, 
+                        long uavFlightTime, long waitingTime, int clientId, int uavId, 
+                        double speed, double distance, String path) throws IOException;
 }

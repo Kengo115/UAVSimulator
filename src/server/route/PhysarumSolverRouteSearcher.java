@@ -78,18 +78,6 @@ public interface PhysarumSolverRouteSearcher extends RouteSearchServer {
     void saveFlow(int nodeNum);
     
     /**
-     * UAVに経路を割り当てる
-     * 
-     * @param startNode 開始ノード
-     * @param goalNode 目標ノード
-     * @param requiredUAVs 必要なUAV数
-     * @param client クライアント
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
-     */
-    void runUAVFlow(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue);
-    
-    /**
      * 数値計算ソルバーを設定する
      * 
      * @param numericalSolver 数値計算ソルバー
@@ -102,4 +90,23 @@ public interface PhysarumSolverRouteSearcher extends RouteSearchServer {
      * @return 数値計算ソルバー
      */
     NumericalSolverService getNumericalSolver();
+    
+    /**
+     * 流量を保存する（整数値に丸める）
+     * 
+     * @param flows 流量配列
+     */
+    void roundWithConservation(double[] flows);
+    
+    /**
+     * UAVに経路を割り当てる
+     * 
+     * @param startNode 開始ノード
+     * @param goalNode 目標ノード
+     * @param requiredUAVs 必要なUAV数
+     * @param client クライアント
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     */
+    void runUAVFlow(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue);
 }

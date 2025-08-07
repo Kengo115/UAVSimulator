@@ -1,6 +1,5 @@
 package server.uav;
 
-import client.ClientController;
 import item.Uav;
 
 import java.io.File;
@@ -28,19 +27,18 @@ public class FlightDataRecorderImpl implements FlightDataRecorder {
     /**
      * 飛行データを保存する
      * 
-     * @param clientController クライアントコントローラ
+     * @param flightTime 飛行時間
      * @param uav UAV
      * @param totalPathDistance 総飛行距離
      */
     @Override
-    public void saveFlightData(ClientController clientController, Uav uav, double totalPathDistance) {
+    public void saveFlightData(long flightTime, Uav uav, double totalPathDistance) {
         String dirPath = baseDirectoryPath + "/time";
         String filePath = dirPath + "/flight_times.csv";
         
         try {
             File dir = createFlightDataFile(dirPath);
             
-            long flightTime = clientController.getFlightTime();
             long uavFlightTime = recordFlightTime(uav);
             long uavWaitingTime = recordWaitingTime(uav);
             
