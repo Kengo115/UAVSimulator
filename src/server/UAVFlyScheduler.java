@@ -79,7 +79,7 @@ public class UAVFlyScheduler {
                 
                 try {
                     // UAVの飛行を管理
-                    serverController.manageUAVFlight(clientController);
+                    serverController.manageUAVFlight();
                     
                     // 結果を出力
                     if (currentIteration % 10 == 0) {
@@ -93,7 +93,9 @@ public class UAVFlyScheduler {
                     currentIteration++;
                     
                     // すべてのUAVが目的地に到着したかチェック
-                    if (client.getFinishFlyingCounter() >= client.getFlow().getTheNumberOfUAV()) {
+                    UAVManagementServerImpl uavManager = (UAVManagementServerImpl) serverController.getUavManagementServer();
+                    int finishedUAVs = uavManager.getFinishedUAVCount(client.getId());
+                    if (finishedUAVs >= client.getFlow().getTheNumberOfUAV()) {
                         System.out.println("All UAVs have reached their destinations.");
                         stopSimulation();
                     }

@@ -191,11 +191,9 @@ public class ServerController {
     
     /**
      * UAVの飛行を管理する
-     * 
-     * @param clientController クライアントコントローラ
      */
-    public void manageUAVFlight(ClientController clientController) {
-        uavManagementServer.flyUAV(clientController, flyingUavQueue, uavQueue);
+    public void manageUAVFlight() {
+        uavManagementServer.flyUAV(flyingUavQueue, uavQueue);
     }
     
     /**
