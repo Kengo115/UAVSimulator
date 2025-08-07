@@ -333,6 +333,19 @@ public class ExtendedPhysarumSolverRouteSearcherImpl implements ExtendedPhysarum
     }
     
     /**
+     * 管の太さを更新する
+     * 
+     * @param nodeNum ノード数
+     * @param degeneracyEffect 退化効果
+     * @param deltaTime デルタ時間
+     */
+    @Override
+    public void updateTubeThickness(int nodeNum, double degeneracyEffect, double deltaTime) {
+        // 拡張版のメソッドを呼び出す（デフォルトのcoefficientTanhを使用）
+        updateTubeThickness(nodeNum, degeneracyEffect, deltaTime, config.getCoefficientTanh());
+    }
+    
+    /**
      * 管の太さを更新する（拡張版）
      * 
      * @param nodeNum ノード数
@@ -524,6 +537,22 @@ public class ExtendedPhysarumSolverRouteSearcherImpl implements ExtendedPhysarum
      */
     public void setRouteAssignmentService(RouteAssignmentService routeAssignmentService) {
         this.routeAssignmentService = routeAssignmentService;
+    }
+    
+    /**
+     * 粘菌アルゴリズムを実行する
+     * 
+     * @param client クライアント
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param clientController クライアントコントローラ
+     * @param numLoop 繰り返し回数
+     * @throws IOException 入出力例外
+     */
+    @Override
+    public void run_PS(Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, ClientController clientController, int numLoop) throws IOException {
+        // 拡張版のメソッドを呼び出す
+        run_EPS(client, flyingUavQueue, uavQueue, clientController, numLoop);
     }
     
     /**

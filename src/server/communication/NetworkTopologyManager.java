@@ -65,4 +65,11 @@ public interface NetworkTopologyManager {
      * @return リンク行列
      */
     Link[][] getLinkMatrix();
+    
+    /**
+     * ノード数を設定する
+     * 
+     * @param nodeNum ノード数
+     */
+    void setNodeNum(int nodeNum);
 }

@@ -86,4 +86,11 @@ public interface ResultOutputManager {
      * @return 作成されたディレクトリ
      */
     java.io.File createOutputDirectory(String dirPath);
+    
+    /**
+     * ノード数を設定する
+     * 
+     * @param nodeNum ノード数
+     */
+    void setNodeNum(int nodeNum);
 }
