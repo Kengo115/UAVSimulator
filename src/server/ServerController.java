@@ -47,7 +47,7 @@ public class ServerController {
     
     // 定数
     private static final int DEFAULT_NODE_NUM = 6;
-    private static final String BASE_DIR_PATH = "output";
+    private static final String BASE_DIR_PATH = "src/output";
     
     // サーバーコンポーネント
     private CommunicationServer communicationServer;

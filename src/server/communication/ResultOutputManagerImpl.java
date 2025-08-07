@@ -42,6 +42,11 @@ public class ResultOutputManagerImpl implements ResultOutputManager {
         this.runCounter = 0;
         this.config = ConfigurationManager.getInstance();
         this.baseDirectoryPath = baseDirectoryPath;
+        
+        // デフォルトのディレクトリパスが指定されていない場合は、src/outputを使用
+        if (this.baseDirectoryPath == null || this.baseDirectoryPath.isEmpty()) {
+            this.baseDirectoryPath = "src/output";
+        }
     }
     
     /**
@@ -56,7 +61,7 @@ public class ResultOutputManagerImpl implements ResultOutputManager {
     @Override
     public void outputToPajek(Client client, double eps, double allFlow, int ct) throws IOException {
         // ディレクトリパスを作成
-        String dirPath = baseDirectoryPath + "/EPS/pajek/result" + runCounter;
+        String dirPath = baseDirectoryPath + "/pajek/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".net";
         
@@ -108,7 +113,7 @@ public class ResultOutputManagerImpl implements ResultOutputManager {
     @Override
     public void outputToExcel(Client client, int ct) throws IOException {
         // ディレクトリパスを作成
-        String dirPath = baseDirectoryPath + "/EPS/excel/result" + runCounter;
+        String dirPath = baseDirectoryPath + "/excel/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
         
@@ -137,7 +142,7 @@ public class ResultOutputManagerImpl implements ResultOutputManager {
     @Override
     public void outputToTxt(Client client, int ct) throws IOException {
         // ディレクトリパスを作成
-        String dirPath = baseDirectoryPath + "/EPS/txt/result" + runCounter;
+        String dirPath = baseDirectoryPath + "/txt/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
         
@@ -166,7 +171,7 @@ public class ResultOutputManagerImpl implements ResultOutputManager {
      */
     @Override
     public void outputRoute(Uav currentUAV, String method) {
-        String dirPath = baseDirectoryPath + "/EPS/path";
+        String dirPath = baseDirectoryPath + "/path";
         String filePath = dirPath + "/flight_path.txt";
         
         try {
@@ -206,7 +211,7 @@ public class ResultOutputManagerImpl implements ResultOutputManager {
      */
     @Override
     public void outputToFlow(Client client, int ct) throws IOException {
-        String dirPath = baseDirectoryPath + "/EPS/flow/result" + runCounter;
+        String dirPath = baseDirectoryPath + "/flow/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_flow.txt";
         
@@ -263,7 +268,7 @@ public class ResultOutputManagerImpl implements ResultOutputManager {
     @Override
     public void outputRouteToExcel(Client client, int ct) throws IOException {
         // ディレクトリパスを作成
-        String dirPath = baseDirectoryPath + "/EPS/rute/result" + runCounter;
+        String dirPath = baseDirectoryPath + "/rute/result" + runCounter;
         // ファイル名を作成
         String filename = dirPath + "/test_topology_routes.txt";
         

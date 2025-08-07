@@ -22,6 +22,10 @@ public class FlightDataRecorderImpl implements FlightDataRecorder {
      */
     public FlightDataRecorderImpl(String baseDirectoryPath) {
         this.baseDirectoryPath = baseDirectoryPath;
+        // デフォルトのディレクトリパスが指定されていない場合は、src/outputを使用
+        if (this.baseDirectoryPath == null || this.baseDirectoryPath.isEmpty()) {
+            this.baseDirectoryPath = "src/output";
+        }
     }
     
     /**
