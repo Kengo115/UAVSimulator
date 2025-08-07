@@ -1,6 +1,5 @@
 package server.uav;
 
-import client.ClientController;
 import item.Uav;
 
 import java.util.Queue;
@@ -9,16 +8,15 @@ import java.util.Queue;
  * UAV管理サーバのインターフェース
  * UAVの飛行状況を管理する
  */
-public interface UAVManagementServer {
+public interface UAVManagementServer extends UAVStateListener {
     
     /**
      * UAVの飛行を管理する
      * 
-     * @param clientController クライアントコントローラ
      * @param flyingUavQueue 飛行中のUAVキュー
      * @param uavQueue 待機中のUAVキュー
      */
-    void flyUAV(ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue);
+    void flyUAV(Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue);
     
     /**
      * リンク容量を更新する
@@ -39,9 +37,8 @@ public interface UAVManagementServer {
     /**
      * 飛行データを保存する
      * 
-     * @param clientController クライアントコントローラ
      * @param uav UAV
      * @param totalPathDistance 総飛行距離
      */
-    void saveFlightData(ClientController clientController, Uav uav, double totalPathDistance);
+    void saveFlightData(Uav uav, double totalPathDistance);
 }

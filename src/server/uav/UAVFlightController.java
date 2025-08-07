@@ -1,6 +1,5 @@
 package server.uav;
 
-import client.ClientController;
 import item.Uav;
 
 import java.util.Queue;
@@ -13,11 +12,10 @@ public interface UAVFlightController {
     /**
      * UAVの飛行を管理する
      * 
-     * @param clientController クライアントコントローラ
      * @param flyingUavQueue 飛行中のUAVキュー
      * @param uavQueue 待機中のUAVキュー
      */
-    void flyUAV(ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue);
+    void flyUAV(Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue);
     
     /**
      * 飛行中のUAVを移動させる
@@ -26,18 +24,16 @@ public interface UAVFlightController {
      * @param flyingUavQueue 飛行中のUAVキュー
      * @param uavQueue 待機中のUAVキュー
      * @param flyingUAVMatrix 飛行中のUAVの分布を表す行列
-     * @param clientController クライアントコントローラ
      */
-    void moveUAV(Uav uav, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int[][] flyingUAVMatrix, ClientController clientController);
+    void moveUAV(Uav uav, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int[][] flyingUAVMatrix);
     
     /**
      * 飛行データを保存する
      * 
-     * @param clientController クライアントコントローラ
      * @param uav UAV
      * @param totalPathDistance 総飛行距離
      */
-    void saveFlightData(ClientController clientController, Uav uav, double totalPathDistance);
+    void saveFlightData(Uav uav, double totalPathDistance);
     
     /**
      * リンク容量を取得する

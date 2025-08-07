@@ -1,6 +1,5 @@
 package server.uav;
 
-import client.ClientController;
 import item.Beacon;
 import item.BeaconCluster;
 import item.Link;
@@ -18,6 +17,7 @@ public class UAVFlightControllerImpl implements UAVFlightController {
     private FlightDataRecorder dataRecorder;
     private UAVQueueManager queueManager;
     private int nodeNum;
+    private UAVStateListener stateListener;
     
     /**
      * コンストラクタ
@@ -36,17 +36,26 @@ public class UAVFlightControllerImpl implements UAVFlightController {
         this.dataRecorder = dataRecorder;
         this.queueManager = queueManager;
         this.nodeNum = nodeNum;
+        this.stateListener = null;
+    }
+    
+    /**
+     * UAVの状態変更を通知するリスナーを設定する
+     * 
+     * @param listener UAV状態リスナー
+     */
+    public void setStateListener(UAVStateListener listener) {
+        this.stateListener = listener;
     }
     
     /**
      * UAVの飛行を管理する
      * 
-     * @param clientController クライアントコントローラ
      * @param flyingUavQueue 飛行中のUAVキュー
      * @param uavQueue 待機中のUAVキュー
      */
     @Override
-    public void flyUAV(ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
+    public void flyUAV(Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
         int[][] flyingUAVMatrix = new int[nodeNum][nodeNum];
         
         // 飛行中のUAVを移動させる
@@ -54,7 +63,7 @@ public class UAVFlightControllerImpl implements UAVFlightController {
         for (int i = 0; i < queueSize; i++) {
             Uav uav = flyingUavQueue.poll();
             if (uav != null) {
-                moveUAV(uav, flyingUavQueue, uavQueue, flyingUAVMatrix, clientController);
+                moveUAV(uav, flyingUavQueue, uavQueue, flyingUAVMatrix);
             }
         }
     }
@@ -66,10 +75,9 @@ public class UAVFlightControllerImpl implements UAVFlightController {
      * @param flyingUavQueue 飛行中のUAVキュー
      * @param uavQueue 待機中のUAVキュー
      * @param flyingUAVMatrix 飛行中のUAVの分布を表す行列
-     * @param clientController クライアントコントローラ
      */
     @Override
-    public void moveUAV(Uav uav, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int[][] flyingUAVMatrix, ClientController clientController) {
+    public void moveUAV(Uav uav, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int[][] flyingUAVMatrix) {
         double flightDistance = uav.getFlightTime() * uav.getSpeed();
         int[] path = uav.getPath();
         
@@ -82,10 +90,14 @@ public class UAVFlightControllerImpl implements UAVFlightController {
             } else {
                 System.out.println("要修正0");
             }
-            clientController.getClient(uav.getClientId() - 1).incrementFinishFlyingCounter();
+            
+            // UAV状態リスナーに通知
+            if (stateListener != null) {
+                stateListener.onUAVArrived(uav);
+            }
             
             // ログの保存
-            saveFlightData(clientController, uav, totalPathDistance);
+            saveFlightData(uav, totalPathDistance);
         } else {
             // まだ飛行中の場合
             double traveledDistance = 0.0;
@@ -146,13 +158,14 @@ public class UAVFlightControllerImpl implements UAVFlightController {
     /**
      * 飛行データを保存する
      * 
-     * @param clientController クライアントコントローラ
      * @param uav UAV
      * @param totalPathDistance 総飛行距離
      */
     @Override
-    public void saveFlightData(ClientController clientController, Uav uav, double totalPathDistance) {
-        dataRecorder.saveFlightData(clientController, uav, totalPathDistance);
+    public void saveFlightData(Uav uav, double totalPathDistance) {
+        // 現在のシステム時間を飛行時間として使用
+        long flightTime = System.currentTimeMillis();
+        dataRecorder.saveFlightData(flightTime, uav, totalPathDistance);
     }
     
     /**
