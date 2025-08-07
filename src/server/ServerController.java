@@ -47,7 +47,10 @@ public class ServerController {
     
     // 定数
     private static final int DEFAULT_NODE_NUM = 6;
-    private static final String BASE_DIR_PATH = "src/output";
+    private static final String DEFAULT_BASE_DIR_PATH = "src/output/EPS"; // デフォルトはEPS
+    
+    // 変数
+    private String baseDirectoryPath;
     
     // サーバーコンポーネント
     private CommunicationServer communicationServer;
@@ -82,6 +85,7 @@ public class ServerController {
         this.config = ConfigurationManager.getInstance();
         this.flyingUavQueue = new LinkedList<>();
         this.uavQueue = new LinkedList<>();
+        this.baseDirectoryPath = DEFAULT_BASE_DIR_PATH;
         
         initializeComponents();
     }
@@ -103,11 +107,11 @@ public class ServerController {
         
         // 通信関連コンポーネントの初期化
         topologyManager = new NetworkTopologyManagerImpl(nodeNum);
-        outputManager = new ResultOutputManagerImpl(linkMatrix, beaconCluster, nodeNum, BASE_DIR_PATH);
+        outputManager = new ResultOutputManagerImpl(linkMatrix, beaconCluster, nodeNum, baseDirectoryPath);
         communicationServer = new CommunicationServerImpl(topologyManager, outputManager);
         
         // UAV管理関連コンポーネントの初期化
-        dataRecorder = new FlightDataRecorderImpl(BASE_DIR_PATH);
+        dataRecorder = new FlightDataRecorderImpl(baseDirectoryPath);
         capacityManager = new CapacityManagerImpl(linkMatrix, nodeNum);
         queueManager = new UAVQueueManagerImpl(linkMatrix, beaconCluster, nodeNum);
         flightController = new UAVFlightControllerImpl(linkMatrix, beaconCluster, dataRecorder, queueManager, nodeNum);
@@ -333,5 +337,23 @@ public class ServerController {
      */
     public Queue<Uav> getUavQueue() {
         return uavQueue;
+    }
+    
+    /**
+     * 出力先ディレクトリを設定する
+     * 
+     * @param directoryPath 出力先ディレクトリパス
+     */
+    public void setOutputDirectory(String directoryPath) {
+        this.baseDirectoryPath = directoryPath;
+        
+        // 各コンポーネントの出力先ディレクトリを更新
+        if (outputManager != null) {
+            outputManager.setBaseDirectoryPath(directoryPath);
+        }
+        
+        if (dataRecorder != null) {
+            ((FlightDataRecorderImpl) dataRecorder).setBaseDirectoryPath(directoryPath);
+        }
     }
 }

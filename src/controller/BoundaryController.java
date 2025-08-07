@@ -172,6 +172,26 @@ public class BoundaryController {
         String algorithm = "extendedphysarumsolver";
         String solver = "bicgstab"; // "bicgstab" または "iccg"
         
+        // アルゴリズムに応じて出力先ディレクトリを設定
+        String outputDir;
+        switch (algorithm.toLowerCase()) {
+            case "dijkstra":
+                outputDir = "src/output/Dijkstra";
+                break;
+            case "physarumsolver":
+            case "ps":
+                outputDir = "src/output/PS";
+                break;
+            case "extendedphysarumsolver":
+            case "eps":
+            default:
+                outputDir = "src/output/EPS";
+                break;
+        }
+        
+        // 出力先ディレクトリを設定
+        server.setOutputDirectory(outputDir);
+        
         flyScheduler.startSimulation(client, num_loop, algorithm, solver);
     }
 
