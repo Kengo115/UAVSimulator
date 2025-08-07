@@ -41,4 +41,12 @@ public interface UAVManagementServer extends UAVStateListener {
      * @param totalPathDistance 総飛行距離
      */
     void saveFlightData(Uav uav, double totalPathDistance);
+    
+    /**
+     * クライアントIDに対応する完了UAV数を取得する
+     * 
+     * @param clientId クライアントID
+     * @return 完了UAV数
+     */
+    int getFinishedUAVCount(int clientId);
 }
