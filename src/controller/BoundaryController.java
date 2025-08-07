@@ -21,15 +21,14 @@ public class BoundaryController {
     static BeaconCluster beaconCluster;
     public Beacon[] beaconList;
     static ServerController server;
+    static UAVFlyScheduler flyScheduler;
     static Client client;
     static int clientId = 1;
     static ClientController clientController = new ClientController();
-    static Queue<Uav> uavQueue = new LinkedList<>();
-    static Queue<Uav> flyingUavQueue = new LinkedList<>();
     static Queue<Client> passedClient = new LinkedList<>();
     Flow flow;
 
-    String filePath = "src/result/practice.net";
+    String filePath = "output/practice.net";
 
     private static int trial = 5;
 
@@ -43,8 +42,7 @@ public class BoundaryController {
     }
 
     private void setLink(){
-        server.setLink(nodeNum, beaconCluster);
-        //server.setLink_random(nodeNum, beaconCluster);
+        server.setupNetworkTopology();
     }
 
     public void setNodeNum(int nodeNum){
@@ -166,22 +164,31 @@ public class BoundaryController {
     }
 
     public void routeRequest(Client client) throws IOException {
-        server.nodeConfigureToPajek(filePath, client, beaconCluster);
-        /**
-         * UAVの経路探索方法を選択
-         * ServerController内の出力先も適宜変更
-         */
-        server.run_EPS(client, flyingUavQueue, uavQueue, clientController, num_loop);
-        //server.run_PS(client, flyingUavQueue, uavQueue, clientController, num_loop);
-        //server.run_Dijkstra(client, clientController,flyingUavQueue, uavQueue);
+        // Pajekファイル形式でネットワークトポロジーを出力
+        server.getCommunicationServer().nodeConfigureToPajek(filePath, client, beaconCluster);
+        
+        // 経路探索アルゴリズムを選択して実行
+        // "extendedphysarumsolver", "physarumsolver", "dijkstra" から選択可能
+        String algorithm = "extendedphysarumsolver";
+        String solver = "bicgstab"; // "bicgstab" または "iccg"
+        
+        flyScheduler.startSimulation(client, num_loop, algorithm, solver);
     }
 
     public static void main(String[] args) {
         BoundaryController boundaryController = new BoundaryController();
         boundaryController.setNodeNum(6);
         //boundaryController.setNodeNum(20);
-        server = new ServerController(nodeNum);
-        beaconCluster = new BeaconCluster(nodeNum);
+        
+        // 新しいServerControllerの初期化
+        server = new ServerController();
+        server.setNodeNum(nodeNum);
+        
+        beaconCluster = server.getBeaconCluster();
+        
+        // UAVFlySchedulerの初期化
+        flyScheduler = new UAVFlyScheduler(server, clientController);
+        flyScheduler.setSimulationInterval(1000); // 1秒間隔
 /**
         //事業者指定実験
         try {
@@ -263,8 +270,7 @@ public class BoundaryController {
                     clientController.startTimer();
                 }
 
-                // UAVスケジューリングを更新
-                UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+                // UAVスケジューリングは自動的に更新される
 
                 String dirPath = "src/result/client";
                 String filePath = dirPath + "/client.txt";
@@ -294,8 +300,8 @@ public class BoundaryController {
             }
 
             System.out.println("すべてのクライアント生成と処理が完了しました。");
-            if(flyingUavQueue.isEmpty() && uavQueue.isEmpty()){
-                UAVFlyScheduler.stopFlyUAVUpdates(clientController);
+            if(server.getFlyingUavQueue().isEmpty() && server.getUavQueue().isEmpty()){
+                flyScheduler.stopSimulation();
             }
 
         } catch (IOException e) {
