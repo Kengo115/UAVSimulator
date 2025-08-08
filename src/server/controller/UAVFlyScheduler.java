@@ -1,4 +1,4 @@
-package server;
+package server.controller;
 
 import client.Client;
 import client.ClientController;

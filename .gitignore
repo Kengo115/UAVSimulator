@@ -28,7 +28,7 @@ bin/
 ### Mac OS ###
 .DS_Store
 
-result/
+output/
 
 # Compiled Java class files
 *.class

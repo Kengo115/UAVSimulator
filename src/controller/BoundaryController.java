@@ -6,8 +6,8 @@ import item.Beacon;
 import item.BeaconCluster;
 import item.Flow;
 import item.Uav;
-import server.ServerController;
-import server.UAVFlyScheduler;
+import server.controller.ServerController;
+import server.controller.UAVFlyScheduler;
 
 import java.io.*;
 import java.util.LinkedList;
@@ -28,7 +28,7 @@ public class BoundaryController {
     static Queue<Client> passedClient = new LinkedList<>();
     Flow flow;
 
-    String filePath = "output/practice.net";
+    String filePath = "src/output/practice.net";
 
     private static int trial = 5;
 
@@ -292,7 +292,7 @@ public class BoundaryController {
 
                 // UAVスケジューリングは自動的に更新される
 
-                String dirPath = "src/result/client";
+                String dirPath = "src/output/client";
                 String filePath = dirPath + "/client.txt";
 
                 // ディレクトリが存在しない場合は作成

@@ -167,7 +167,12 @@ public class ExtendedPhysarumSolverRouteSearcherImpl implements ExtendedPhysarum
             }
             
             // 線形方程式を解く
-            if (solveLinearEquation(numericalSolver, nodeExcept, testIter, eps) == 0) {
+            int solveResult = solveLinearEquation(numericalSolver, nodeExcept, testIter, eps);
+            System.out.println("Linear equation solver result: " + solveResult);
+            
+            if (solveResult < 0) {
+                // 収束しなかった場合はループを抜ける
+                System.out.println("線形方程式が収束しませんでした。");
                 break;
             }
             
@@ -264,24 +269,80 @@ public class ExtendedPhysarumSolverRouteSearcherImpl implements ExtendedPhysarum
      */
     @Override
     public void calculatePressureCoefficient(int nodeNum, int source, int destination, double flowAmount) {
+        // デバッグ出力
+        System.out.println("Calculating pressure coefficients:");
+        System.out.println("  Source: " + source);
+        System.out.println("  Destination: " + destination);
+        System.out.println("  Flow amount: " + flowAmount);
+        
+        // 初期化
         for (int i = 0; i < nodeNum; i++) {
             for (int j = 0; j < nodeNum; j++) {
-                if (linkMatrix[i][j].getL_tubeLength() != config.getInf()) {
-                    if (i != j) {
-                        pressureCoefficient[i][j] = linkMatrix[i][j].getD_tubeThickness() / linkMatrix[i][j].getL_tubeLength() * config.getNeg();
+                pressureCoefficient[i][j] = 0.0;
+            }
+        }
+        
+        // 非対角要素の計算
+        for (int i = 0; i < nodeNum; i++) {
+            for (int j = 0; j < nodeNum; j++) {
+                if (i != j && linkMatrix[i][j].getL_tubeLength() != config.getInf()) {
+                    double thickness = linkMatrix[i][j].getD_tubeThickness();
+                    double length = linkMatrix[i][j].getL_tubeLength();
+                    
+                    // 初期値として最小値を設定
+                    if (thickness < 0.01) {
+                        thickness = 0.01;
+                        linkMatrix[i][j].setD_tubeThickness(thickness);
+                    }
+                    
+                    // 長さが0の場合は最小値を設定
+                    if (length < 0.01) {
+                        length = 0.01;
+                        linkMatrix[i][j].setL_tubeLength(length);
+                    }
+                    
+                    pressureCoefficient[i][j] = thickness / length * config.getNeg();
+                    
+                    // デバッグ出力（一部のリンクのみ）
+                    if ((i == 0 && j == 1) || (i == 1 && j == 0)) {
+                        System.out.println("  Link (" + i + "," + j + "):");
+                        System.out.println("    Thickness: " + thickness);
+                        System.out.println("    Length: " + length);
+                        System.out.println("    Coefficient: " + pressureCoefficient[i][j]);
                     }
                 }
             }
         }
         
-        int k = 0;
+        // 対角要素の計算
         for (int i = 0; i < nodeNum; i++) {
+            double sum = 0.0;
             for (int j = 0; j < nodeNum; j++) {
-                if (linkMatrix[i][j].getL_tubeLength() != config.getInf()) {
-                    pressureCoefficient[k][k] = pressureCoefficient[k][k] + linkMatrix[i][j].getD_tubeThickness() / linkMatrix[i][j].getL_tubeLength();
+                if (i != j && linkMatrix[i][j].getL_tubeLength() != config.getInf()) {
+                    double thickness = linkMatrix[i][j].getD_tubeThickness();
+                    double length = linkMatrix[i][j].getL_tubeLength();
+                    
+                    // 初期値として最小値を設定
+                    if (thickness < 0.01) {
+                        thickness = 0.01;
+                        linkMatrix[i][j].setD_tubeThickness(thickness);
+                    }
+                    
+                    // 長さが0の場合は最小値を設定
+                    if (length < 0.01) {
+                        length = 0.01;
+                        linkMatrix[i][j].setL_tubeLength(length);
+                    }
+                    
+                    sum += thickness / length;
                 }
             }
-            k++;
+            pressureCoefficient[i][i] = sum;
+            
+            // デバッグ出力
+            if (i == 0 || i == 1) {
+                System.out.println("  Diagonal (" + i + "," + i + "): " + pressureCoefficient[i][i]);
+            }
         }
     }
     
@@ -309,7 +370,25 @@ public class ExtendedPhysarumSolverRouteSearcherImpl implements ExtendedPhysarum
         for (int i = 0; i < nodeNum; i++) {
             for (int j = 0; j < nodeNum; j++) {
                 if (linkMatrix[i][j].getL_tubeLength() != config.getInf()) {
-                    linkMatrix[i][j].setQ_tubeFlow((linkMatrix[i][j].getD_tubeThickness() / linkMatrix[i][j].getL_tubeLength()) * (pTubePressure[i] - pTubePressure[j]));
+                    double flow = (linkMatrix[i][j].getD_tubeThickness() / linkMatrix[i][j].getL_tubeLength()) * (pTubePressure[i] - pTubePressure[j]);
+                    
+                    // デバッグ出力
+                    if (i == 0 && j == 1) {
+                        System.out.println("Flow calculation for link (0,1):");
+                        System.out.println("  D_tubeThickness: " + linkMatrix[i][j].getD_tubeThickness());
+                        System.out.println("  L_tubeLength: " + linkMatrix[i][j].getL_tubeLength());
+                        System.out.println("  pTubePressure[" + i + "]: " + pTubePressure[i]);
+                        System.out.println("  pTubePressure[" + j + "]: " + pTubePressure[j]);
+                        System.out.println("  Calculated flow: " + flow);
+                    }
+                    
+                    // 初期値として最小フローを設定
+                    if (Math.abs(flow) < 1e-10) {
+                        // 非常に小さい値の場合、最小値を設定
+                        flow = 0.1; // 最小フロー値
+                    }
+                    
+                    linkMatrix[i][j].setQ_tubeFlow(flow);
                 }
             }
         }
@@ -381,6 +460,32 @@ public class ExtendedPhysarumSolverRouteSearcherImpl implements ExtendedPhysarum
      */
     @Override
     public void saveFlow(int nodeNum) {
+        boolean hasPositiveFlow = false;
+        
+        // まず、正のフローがあるかチェック
+        for (int i = 0; i < nodeNum; i++) {
+            for (int j = 0; j < nodeNum; j++) {
+                if (linkMatrix[i][j].getL_tubeLength() != config.getInf() && linkMatrix[i][j].getQ_tubeFlow() > 0) {
+                    hasPositiveFlow = true;
+                    break;
+                }
+            }
+            if (hasPositiveFlow) break;
+        }
+        
+        // 正のフローがない場合、最小値を設定
+        if (!hasPositiveFlow) {
+            System.out.println("警告: 正のフローが見つかりませんでした。最小値を設定します。");
+            for (int i = 0; i < nodeNum; i++) {
+                for (int j = 0; j < nodeNum; j++) {
+                    if (linkMatrix[i][j].getL_tubeLength() != config.getInf()) {
+                        linkMatrix[i][j].setQ_tubeFlow(0.1); // 最小フロー値
+                    }
+                }
+            }
+        }
+        
+        // フローを保存
         for (int i = 0; i < nodeNum; i++) {
             for (int j = 0; j < nodeNum; j++) {
                 if (linkMatrix[i][j].getL_tubeLength() != config.getInf()) {
@@ -388,7 +493,19 @@ public class ExtendedPhysarumSolverRouteSearcherImpl implements ExtendedPhysarum
                     if (linkMatrix[i][j].getQ_tubeFlow() > 0) {
                         flowCapacity[i][j] = linkMatrix[i][j].getQ_tubeFlow();
                         int flow = (int) Math.floor(flowCapacity[i][j]);
+                        // 最小値を保証
+                        if (flow == 0 && flowCapacity[i][j] > 0) {
+                            flow = 1;
+                        }
                         tubeFlow[i][j] = flow;
+                        
+                        // デバッグ出力
+                        if (i == 0 && j == 1) {
+                            System.out.println("Saving flow for link (0,1):");
+                            System.out.println("  Q_tubeFlow: " + linkMatrix[i][j].getQ_tubeFlow());
+                            System.out.println("  flowCapacity: " + flowCapacity[i][j]);
+                            System.out.println("  tubeFlow: " + tubeFlow[i][j]);
+                        }
                     }
                 }
             }

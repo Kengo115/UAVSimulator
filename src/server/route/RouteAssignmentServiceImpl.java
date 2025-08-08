@@ -165,7 +165,7 @@ public class RouteAssignmentServiceImpl implements RouteAssignmentService {
             int previousUAVCount = uavCount;
             minFlow = 100;
             
-            int[] path = new int[20];
+            int[] path = new int[100]; // より大きなサイズに変更（20から100へ）
             int pathIndex = 0;
             path[pathIndex++] = startNode;
             
@@ -254,7 +254,7 @@ public class RouteAssignmentServiceImpl implements RouteAssignmentService {
     @Override
     public void adjustRemainingFlow(int needUAV, int startNode, int goalNode, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
         int countOfUAV = 0;
-        int[] path = new int[20]; // path を再利用
+        int[] path = new int[100]; // より大きなサイズに変更（20から100へ）
         int pathIndex;
         
         while (countOfUAV < needUAV) {

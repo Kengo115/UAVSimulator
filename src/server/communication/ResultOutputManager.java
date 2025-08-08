@@ -93,4 +93,11 @@ public interface ResultOutputManager {
      * @param nodeNum ノード数
      */
     void setNodeNum(int nodeNum);
+    
+    /**
+     * 基本ディレクトリパスを設定する
+     * 
+     * @param baseDirectoryPath 基本ディレクトリパス
+     */
+    void setBaseDirectoryPath(String baseDirectoryPath);
 }

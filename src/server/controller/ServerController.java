@@ -1,4 +1,4 @@
-package server;
+package server.controller;
 
 import client.Client;
 import client.ClientController;
@@ -349,7 +349,7 @@ public class ServerController {
         
         // 各コンポーネントの出力先ディレクトリを更新
         if (outputManager != null) {
-            outputManager.setBaseDirectoryPath(directoryPath);
+            ((ResultOutputManagerImpl) outputManager).setBaseDirectoryPath(directoryPath);
         }
         
         if (dataRecorder != null) {
