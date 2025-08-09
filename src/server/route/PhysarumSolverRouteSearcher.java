@@ -28,25 +28,23 @@ public class PhysarumSolverRouteSearcher extends AbstractPhysarumSolverRouteSear
 
     /**
      * チューブ厚を更新する
+     * PSでは容量制約を考慮せず、シグモイド関数の出力を使用
      * @param ct 現在の反復回数
      */
     @Override
     protected void updateTubeThickness(int ct) {
-        // チューブ厚の更新
+        // チューブ厚の更新 - PSでは容量制約を考慮せず
+        double degeneracyEffect = 1.0;
+        
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF) {
-                    double deltaThickness = (Math.abs(link[i][j].getQ_tubeFlow()) - link[i][j].getD_tubeThickness()) * DELTA_TIME;
+                    // シグモイド関数の出力を使用
+                    double deltaThickness = (Q_tubeFlow_sigmoidOutput[i][j] - (degeneracyEffect * link[i][j].getD_tubeThickness())) * DELTA_TIME;
                     D_tubeThickness_deltaT[i][j] = deltaThickness;
-                }
-            }
-        }
-
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    link[i][j].setD_tubeThickness(link[i][j].getD_tubeThickness() + 
-                        (D_tubeThickness_deltaT[i][j]) * Math.tanh((link[i][j].getCapacity() - Math.abs(link[i][j].getQ_tubeFlow())) * coefficient_tanh));
+                    // 容量制約を考慮せずに直接更新
+                    double newThickness = link[i][j].getD_tubeThickness() + deltaThickness;
+                    link[i][j].setD_tubeThickness(newThickness);
                 }
             }
         }

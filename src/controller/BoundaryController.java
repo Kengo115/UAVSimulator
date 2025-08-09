@@ -159,14 +159,74 @@ public class BoundaryController {
         }
     }
 
+    // 経路探索手法の列挙型
+    public enum RouteSearchMethod {
+        DIJKSTRA(1, "Dijkstra"),
+        PS(2, "PS"),
+        EPS(3, "EPS");
+        
+        private final int id;
+        private final String name;
+        
+        RouteSearchMethod(int id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+        
+        public int getId() {
+            return id;
+        }
+        
+        public String getName() {
+            return name;
+        }
+        
+        public static RouteSearchMethod fromId(int id) {
+            for (RouteSearchMethod method : values()) {
+                if (method.getId() == id) {
+                    return method;
+                }
+            }
+            return EPS; // デフォルトはEPS
+        }
+    }
+    
+    // 現在選択されている経路探索手法
+    private static RouteSearchMethod currentMethod = RouteSearchMethod.EPS;
+    
+    /**
+     * 経路探索手法を設定する
+     * @param method 経路探索手法
+     */
+    public static void setRouteSearchMethod(RouteSearchMethod method) {
+        currentMethod = method;
+    }
+    
+    /**
+     * 現在の経路探索手法を取得する
+     * @return 経路探索手法
+     */
+    public static RouteSearchMethod getCurrentMethod() {
+        return currentMethod;
+    }
+
     public void routeRequest(Client client) throws IOException {
         // Pajekファイルにネットワークトポロジーを出力
         server.nodeConfigureToPajek(filePath, client, beaconCluster);
         
-        // 経路探索方法を選択
-        server.run_EPS(client, clientController, flyingUavQueue, uavQueue, num_loop);
-        // server.run_PS(client, clientController, flyingUavQueue, uavQueue, num_loop);
-        // server.run_Dijkstra(client, clientController, flyingUavQueue, uavQueue);
+        // 選択された経路探索手法に基づいて実行
+        switch (currentMethod) {
+            case DIJKSTRA:
+                server.run_Dijkstra(client, clientController, flyingUavQueue, uavQueue);
+                break;
+            case PS:
+                server.run_PS(client, clientController, flyingUavQueue, uavQueue, num_loop);
+                break;
+            case EPS:
+            default:
+                server.run_EPS(client, clientController, flyingUavQueue, uavQueue, num_loop);
+                break;
+        }
     }
 
     public static void main(String[] args) {
@@ -182,10 +242,43 @@ public class BoundaryController {
         try {
             boundaryController.setNetworkTopology(); // ネットワークの初期化
             
+            // 経路探索手法を選択
+            System.out.println("経路探索手法を選択してください:");
+            System.out.println("1: Dijkstra法");
+            System.out.println("2: PhysarumSolver法 (PS)");
+            System.out.println("3: ExtendedPhysarumSolver法 (EPS)");
+            
+            BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+            int methodChoice = 3; // デフォルトはEPS
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    methodChoice = Integer.parseInt(input);
+                    if (methodChoice < 1 || methodChoice > 3) {
+                        System.out.println("無効な選択です。ExtendedPhysarumSolver法 (EPS) を使用します。");
+                        methodChoice = 3;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。ExtendedPhysarumSolver法 (EPS) を使用します。");
+            }
+            
+            // 選択された経路探索手法を設定
+            RouteSearchMethod selectedMethod = RouteSearchMethod.fromId(methodChoice);
+            setRouteSearchMethod(selectedMethod);
+            System.out.println(selectedMethod.getName() + " を使用します。");
+            
             // 標準入力からクライアントの生成回数を取得
             System.out.println("生成するクライアントの数を入力してください:");
-            BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
-            int clientCount = Integer.parseInt(reader.readLine());
+            int clientCount = 1; // デフォルトは1
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    clientCount = Integer.parseInt(input);
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。クライアント数を1に設定します。");
+            }
 
             // 指定された回数だけクライアントを生成して処理
             for (int i = 0; i < clientCount; i++) {

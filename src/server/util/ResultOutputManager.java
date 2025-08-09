@@ -1,6 +1,7 @@
 package server.util;
 
 import client.Client;
+import controller.BoundaryController;
 import item.Beacon;
 import item.BeaconCluster;
 import item.Link;
@@ -13,6 +14,17 @@ import java.io.IOException;
  * 結果出力を管理するクラス
  */
 public class ResultOutputManager {
+
+    /**
+     * 現在の経路探索手法に基づいてディレクトリパスを取得する
+     * @param baseDir ベースディレクトリ
+     * @param runCounter 実行カウンター
+     * @return ディレクトリパス
+     */
+    private static String getDirectoryPath(String baseDir, int runCounter) {
+        BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
+        return "src/result/" + method.getName() + "/" + baseDir + "/result" + runCounter;
+    }
 
     /**
      * Pajekファイルに出力する
@@ -30,10 +42,8 @@ public class ResultOutputManager {
         Beacon source = client.getFlow().getSource();
         Beacon dist = client.getFlow().getDestination();
 
-        // ディレクトリパスを作成
-        String dirPath = "src/result/EPS/pajek/result" + runCounter;
-        //String dirPath = "src/result/PS/pajek/result" + runCounter;
-        //String dirPath = "src/result/Dijkstra/pajek/result" + runCounter;
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("pajek", runCounter);
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".net";
 
@@ -85,10 +95,8 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
-        // ディレクトリパスを作成
-        String dirPath = "src/result/EPS/excel/result" + runCounter;
-        //String dirPath = "src/result/PS/excel/result" + runCounter;
-        //String dirPath = "src/result/Dijkstra/excel/result" + runCounter;
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("excel", runCounter);
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
 
@@ -120,10 +128,8 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
-        // ディレクトリパスを作成
-        String dirPath = "src/result/EPS/txt/result" + runCounter;
-        //String dirPath = "src/result/PS/txt/result" + runCounter;
-        //String dirPath = "src/result/Dijkstra/txt/result" + runCounter;
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("txt", runCounter);
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
 
@@ -156,10 +162,8 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputRouteToExcel(Client client, int ct, Link[][] link, int runCounter) throws IOException {
-        // ディレクトリパスを作成
-        String dirPath = "src/result/EPS/rute/result" + runCounter;
-        //String dirPath = "src/result/PS/rute/result" + runCounter;
-        //String dirPath = "src/result/Dijkstra/rute/result" + runCounter;
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("rute", runCounter);
         // ファイル名を作成
         String filename = dirPath + "/test_topology_routes.txt";
 

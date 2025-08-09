@@ -1,6 +1,7 @@
 package server.uav;
 
 import client.ClientController;
+import controller.BoundaryController;
 import item.Uav;
 
 import java.io.File;
@@ -15,14 +16,22 @@ import java.util.stream.Collectors;
 public class FlightDataRecorder {
 
     /**
+     * 現在の経路探索手法に基づいてディレクトリパスを取得する
+     * @param baseDir ベースディレクトリ
+     * @return ディレクトリパス
+     */
+    private static String getDirectoryPath(String baseDir) {
+        BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
+        return "src/result/" + method.getName() + "/" + baseDir;
+    }
+
+    /**
      * UAVの飛行経路を記録する
      * @param currentUAV UAV
      * @param method メソッド名
      */
     public static void recordRoute(Uav currentUAV, String method) {
-        String dirPath = "src/result/EPS/path";
-        //String dirPath = "src/result/PS/path";
-        //String dirPath = "src/result/Dijkstra/path";
+        String dirPath = getDirectoryPath("path");
         String filePath = dirPath + "/flight_path.txt";
 
         // ディレクトリが存在しない場合は作成
@@ -53,9 +62,7 @@ public class FlightDataRecorder {
      * @param totalPathDistance 総経路距離
      */
     public static void saveFlightData(ClientController clientController, Uav uav, double totalPathDistance) {
-        String dirPath = "src/result/EPS/time";
-        //String dirPath = "src/result/PS/time";
-        //String dirPath = "src/result/Dijkstra/time";
+        String dirPath = getDirectoryPath("time");
         String filePath = dirPath + "/flight_times.csv";
 
         File dir1 = new File(dirPath);
