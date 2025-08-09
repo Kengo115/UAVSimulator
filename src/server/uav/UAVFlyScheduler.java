@@ -2,7 +2,7 @@ package server.uav;
 
 import client.ClientController;
 import item.Uav;
-import server.uav.UAVFlightController;
+import server.util.LogManager;
 
 import java.util.Queue;
 import java.util.concurrent.Executors;
@@ -25,9 +25,9 @@ public class UAVFlyScheduler {
     public static synchronized void startFlyUAVUpdates(Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, ClientController clientController) {
         if (scheduler == null || scheduler.isShutdown()) {
             scheduler = Executors.newScheduledThreadPool(1);
-            System.out.println("UAV位置更新スケジューラーを開始します...");
+            LogManager.getInstance().log("UAV位置更新スケジューラーを開始します...");
         } else {
-            System.out.println("スケジューラーは既に稼働中です。");
+            LogManager.getInstance().log("スケジューラーは既に稼働中です。");
             return; // 既にスケジュール済みなら何もしない
         }
 
@@ -35,7 +35,7 @@ public class UAVFlyScheduler {
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 if (flyingUavQueue.isEmpty() && uavQueue.isEmpty()) {
-                    System.out.println("飛行中UAV, 待機中UAVが存在しません。");
+                    LogManager.getInstance().log("飛行中UAV, 待機中UAVが存在しません");
                     /**
                     clientController.stopTimer();
                     stopFlyUAVUpdates(clientController);
@@ -45,8 +45,7 @@ public class UAVFlyScheduler {
                     server.controller.ServerController.flyUAV(clientController, flyingUavQueue, uavQueue);
                 }
             } catch (Exception e) {
-                e.printStackTrace();
-                System.err.println("スケジューラー内で例外が発生しましたが、タスクは継続します。");
+                LogManager.getInstance().error("スケジューラー内で例外が発生しましたが, タスクは継続します", e);
             }
         }, 0, UPDATE_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
@@ -59,9 +58,9 @@ public class UAVFlyScheduler {
         if (scheduler != null && !scheduler.isShutdown()) {
             //clientController.showFlightTime();
             scheduler.shutdown();
-            System.out.println("UAV位置更新スケジューラーが停止しました。");
+            LogManager.getInstance().log("UAV位置更新スケジューラーが停止しました");
         } else {
-            System.out.println("スケジューラーは既に停止しています。");
+            LogManager.getInstance().log("スケジューラーは既に停止しています");
         }
     }
 

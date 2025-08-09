@@ -8,6 +8,7 @@ import item.Flow;
 import item.Uav;
 import server.controller.ServerController;
 import server.uav.UAVFlyScheduler;
+import server.util.LogManager;
 
 import java.io.*;
 import java.util.LinkedList;
@@ -191,8 +192,42 @@ public class BoundaryController {
         }
     }
     
+    // ログモードの列挙型
+    public enum LoggingMode {
+        DISABLED(1, "無効"),
+        ENABLED(2, "有効");
+        
+        private final int id;
+        private final String name;
+        
+        LoggingMode(int id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+        
+        public int getId() {
+            return id;
+        }
+        
+        public String getName() {
+            return name;
+        }
+        
+        public static LoggingMode fromId(int id) {
+            for (LoggingMode mode : values()) {
+                if (mode.getId() == id) {
+                    return mode;
+                }
+            }
+            return DISABLED; // デフォルトは無効
+        }
+    }
+    
     // 現在選択されている経路探索手法
     private static RouteSearchMethod currentMethod = RouteSearchMethod.EPS;
+    
+    // 現在選択されているログモード
+    private static LoggingMode currentLoggingMode = LoggingMode.DISABLED;
     
     /**
      * 経路探索手法を設定する
@@ -208,6 +243,23 @@ public class BoundaryController {
      */
     public static RouteSearchMethod getCurrentMethod() {
         return currentMethod;
+    }
+    
+    /**
+     * ログモードを設定する
+     * @param mode ログモード
+     */
+    public static void setLoggingMode(LoggingMode mode) {
+        currentLoggingMode = mode;
+        LogManager.getInstance().setLoggingEnabled(mode == LoggingMode.ENABLED);
+    }
+    
+    /**
+     * 現在のログモードを取得する
+     * @return ログモード
+     */
+    public static LoggingMode getCurrentLoggingMode() {
+        return currentLoggingMode;
     }
 
     public void routeRequest(Client client) throws IOException {
@@ -267,6 +319,35 @@ public class BoundaryController {
             RouteSearchMethod selectedMethod = RouteSearchMethod.fromId(methodChoice);
             setRouteSearchMethod(selectedMethod);
             System.out.println(selectedMethod.getName() + " を使用します。");
+            
+            // ログモードを選択
+            System.out.println("ログをファイルに記録しますか？");
+            System.out.println("1: 記録しない");
+            System.out.println("2: 記録する (log/simulator.logに記録)");
+            
+            int loggingChoice = 1; // デフォルトは記録しない
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    loggingChoice = Integer.parseInt(input);
+                    if (loggingChoice < 1 || loggingChoice > 2) {
+                        System.out.println("無効な選択です。ログは記録しません。");
+                        loggingChoice = 1;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。ログは記録しません。");
+            }
+            
+            // 選択されたログモードを設定
+            LoggingMode selectedLoggingMode = LoggingMode.fromId(loggingChoice);
+            setLoggingMode(selectedLoggingMode);
+            System.out.println("ログ記録: " + selectedLoggingMode.getName());
+            
+            if (selectedLoggingMode == LoggingMode.ENABLED) {
+                System.out.println("ログは log/simulator.log に記録されます。");
+                System.out.println("別のターミナルで 'tail -f log/simulator.log' を実行すると、リアルタイムでログを確認できます。");
+            }
             
             // 標準入力からクライアントの生成回数を取得
             System.out.println("生成するクライアントの数を入力してください:");
@@ -329,12 +410,15 @@ public class BoundaryController {
             if (flyingUavQueue.isEmpty() && uavQueue.isEmpty()) {
                 UAVFlyScheduler.stopFlyUAVUpdates(clientController);
             }
+            
+            // ログマネージャーを閉じる
+            LogManager.getInstance().close();
 
         } catch (IOException e) {
-            e.printStackTrace();
+            LogManager.getInstance().error("IOエラーが発生しました", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            System.err.println("メインスレッドが中断されました。");
+            LogManager.getInstance().error("メインスレッドが中断されました", e);
         }
     }
 }

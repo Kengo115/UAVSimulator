@@ -4,6 +4,7 @@ import client.ClientController;
 import item.BeaconCluster;
 import item.Link;
 import item.Uav;
+import server.util.LogManager;
 
 import java.util.Queue;
 
@@ -42,7 +43,7 @@ public class UAVFlightController {
                 if (uav.isFlying()) {
                     uav.cancelTimer();
                 } else {
-                    System.out.println("要修正0");
+                    LogManager.getInstance().error("要修正0: UAVが飛行中でないのにcancelTimerが呼ばれました");
                 }
                 clientController.getClient(uav.getClientId() - 1).incrementFinishFlyingCounter();
 
@@ -83,18 +84,18 @@ public class UAVFlightController {
                     if (link[startNode][endNode].getCapacity() > 0) {
                         uav.setFlyingLink(link[startNode][endNode]);
                         flyingUAV[startNode][endNode]++;
-                        System.out.println("client" + uav.getClientId() + " " +  "UAV" + uav.getId() + " " + startNode + " → " + endNode + " 移動");
+                        LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " " + startNode + " → " + endNode + " へ移動");
                         flyingUavQueue.add(uav);
                     } else {
                         if (uav.isFlying()) {
                             uav.stopTimer();
                         } else {
-                            System.out.println("要修正1: client" + uav.getClientId() + " の " + "UAV" + uav.getId() + " が飛行中でないのに stopTimer() が呼ばれました");
+                            LogManager.getInstance().error("要修正1: client" + uav.getClientId() + " UAV" + uav.getId() + " が飛行中でないのに stopTimer() が呼ばれました");
                         }
                         if (!uav.isWaiting()) {
                             uav.startWaitingTimer();
                         } else {
-                            System.out.println("要修正2: client" + uav.getClientId() + " の " + "UAV" + uav.getId() + " がすでに待機状態");
+                            LogManager.getInstance().error("要修正2: client" + uav.getClientId() + " UAV" + uav.getId() + " がすでに待機状態");
                         }
                         uav.setStayedBeaconId(startNode);
                         beaconCluster.getBeacon(startNode).addUav(uav);
@@ -138,7 +139,7 @@ public class UAVFlightController {
                     }
                 }
             } else {
-                System.out.println("要修正4: client" + uav.getClientId() + " の " + "UAV" + uav.getId() + " が待機中のビーコンIDを取得できませんでした");
+                LogManager.getInstance().error("要修正4: client" + uav.getClientId() + " UAV" + uav.getId() + " が待機中のビーコンIDを取得できませんでした");
             }
 
             if (nextNode != -1) {
@@ -147,7 +148,7 @@ public class UAVFlightController {
                     if (uav.isWaiting()) {
                         uav.stopWaitingTimer();
                     } else {
-                        System.out.println("要修正3: client" + uav.getClientId() + " の " + "UAV" + uav.getId() + " は待機していないのに stopWaitingTimer() が呼ばれました");
+                        LogManager.getInstance().error("要修正3: client" + uav.getClientId() + " UAV" + uav.getId() + " は待機していないのに stopWaitingTimer() が呼ばれました");
                     }
                     beaconCluster.getBeacon(startNode).removeUav(uav);
                     beaconCluster.getBeacon(startNode).decrementWaitingUavCount();
@@ -157,10 +158,10 @@ public class UAVFlightController {
                     flyingUavQueue.add(uav);
                 } else {
                     uavQueue.add(uav);
-                    System.out.println("client" + uav.getClientId() + " " + "UAV" + uav.getId() + " 容量不足のため待機継続 (" + startNode + " -> " + nextNode + ")");
+                    LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " 容量不足のため待機継続 (" + startNode + " -> " + nextNode + ")");
                 }
             } else {
-                System.out.println("client" + uav.getClientId() + " " + "UAV" + uav.getId() + " 移動できるリンクがないため待機継続");
+                LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " 移動できるリンクがないため待機継続");
                 uavQueue.add(uav);
             }
         }
