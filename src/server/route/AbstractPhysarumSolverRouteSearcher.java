@@ -351,14 +351,14 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                             flyingUavQueue.add(currentUAV);
                             link[u][v].decrementCapacity();
                             flowCounter[0]++;
-                            System.out.println("UAV " + currentUAV.getId() + " is flying from " + u + " to " + v);
+                            System.out.println("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v);
                         } else {
                             currentUAV.startWaitingTimer();
                             currentUAV.setStayedBeaconId(u);
                             beaconCluster.getBeacon(u).addUav(currentUAV);
                             beaconCluster.getBeacon(u).incrementWaitingUavCount();
                             uavQueue.add(currentUAV);
-                            System.out.println("UAV " + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ")");
+                            System.out.println("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ")");
                         }
 
                         latch.countDown();
@@ -531,14 +531,14 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                             currentUAV.setPassedLink(link[u][v]);
                             flyingUavQueue.add(currentUAV);
                             link[u][v].decrementCapacity();
-                            System.out.println("UAV " + currentUAV.getId() + " is flying from " + u + " to " + v + " adjustRemainingFlow");
+                            System.out.println("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v + " adjustRemainingFlow");
                         } else {
                             currentUAV.startWaitingTimer();
                             currentUAV.setStayedBeaconId(u);
                             beaconCluster.getBeacon(u).addUav(currentUAV);
                             beaconCluster.getBeacon(u).incrementWaitingUavCount();
                             uavQueue.add(currentUAV);
-                            System.out.println("UAV " + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ") adjustRemainingFlow");
+                            System.out.println("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ") adjustRemainingFlow");
                         }
                         countOfUAV++;
                     }

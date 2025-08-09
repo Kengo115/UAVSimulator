@@ -172,7 +172,7 @@ public class DijkstraRouteSearcher implements RouteSearcher {
                     flyingUavQueue.add(currentUAV);
                     link[u][v].decrementCapacity();
                 }, finalF * 2, TimeUnit.SECONDS);
-                System.out.println("UAV " + currentUAV.getId() + " is flying from " + u + " to " + v);
+                System.out.println("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v);
 
                 flow_count++;
             } else {
@@ -183,7 +183,7 @@ public class DijkstraRouteSearcher implements RouteSearcher {
                 beaconCluster.getBeacon(u).addUav(currentUAV);
                 beaconCluster.getBeacon(u).incrementWaitingUavCount();
                 uavQueue.add(currentUAV);
-                System.out.println("UAV " + currentUAV.getId() + " is waiting at " + u);
+                System.out.println("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u);
             }
         }
     }

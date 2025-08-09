@@ -35,7 +35,7 @@ public class UAVFlyScheduler {
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 if (flyingUavQueue.isEmpty() && uavQueue.isEmpty()) {
-                    System.out.println("飛行中UAV，待機中UAVが存在しません。");
+                    System.out.println("飛行中UAV, 待機中UAVが存在しません。");
                     /**
                     clientController.stopTimer();
                     stopFlyUAVUpdates(clientController);
