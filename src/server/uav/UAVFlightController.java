@@ -1,0 +1,171 @@
+package server.uav;
+
+import client.ClientController;
+import item.BeaconCluster;
+import item.Link;
+import item.Uav;
+
+import java.util.Queue;
+
+/**
+ * UAVの飛行制御を行うクラス
+ */
+public class UAVFlightController {
+
+    /**
+     * UAVを移動させる
+     * @param clientController クライアントコントローラー
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param link リンク情報
+     * @param beaconCluster ビーコンクラスター
+     * @param node ノード数
+     */
+    public static void flyUAV(ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, Link[][] link, BeaconCluster beaconCluster, int node) {
+        int[][] flyingUAV = new int[node][node];
+
+        // 飛行中のUAVを移動させる
+        int queueSize = flyingUavQueue.size();
+        for (int i = 0; i < queueSize; i++) {
+            Uav uav = flyingUavQueue.poll();
+            double flightDistance = uav.getFlightTime() * uav.getSpeed();
+            int[] path = uav.getPath();
+
+            double totalPathDistance = 0.0;
+            for (int k = 0; k < path.length - 1; k++) {
+                int startNode = path[k];
+                int endNode = path[k + 1];
+                totalPathDistance += link[startNode][endNode].getDistance();
+            }
+
+            if (flightDistance >= totalPathDistance) {
+                if (uav.isFlying()) {
+                    uav.cancelTimer();
+                } else {
+                    System.out.println("要修正0");
+                }
+                clientController.getClient(uav.getClientId() - 1).incrementFinishFlyingCounter();
+
+                // ログの保存
+                FlightDataRecorder.saveFlightData(clientController, uav, totalPathDistance);
+            } else {
+                processUavMovement(uav, flightDistance, path, flyingUAV, flyingUavQueue, uavQueue, link, beaconCluster);
+            }
+        }
+
+        // 容量の更新
+        CapacityManager.updateCapacity(flyingUAV, link, node);
+
+        // 待機中のUAVを処理
+        processWaitingUAVs(uavQueue, flyingUavQueue, flyingUAV, link, beaconCluster, node);
+    }
+
+    /**
+     * UAVの移動を処理する
+     * @param uav UAV
+     * @param flightDistance 飛行距離
+     * @param path 経路
+     * @param flyingUAV 飛行中のUAV配列
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param link リンク情報
+     * @param beaconCluster ビーコンクラスター
+     */
+    private static void processUavMovement(Uav uav, double flightDistance, int[] path, int[][] flyingUAV, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, Link[][] link, BeaconCluster beaconCluster) {
+        double traveledDistance = 0.0;
+        for (int k = 0; k < path.length - 1; k++) {
+            int startNode = path[k];
+            int endNode = path[k + 1];
+            double linkLength = link[startNode][endNode].getDistance();
+
+            if (traveledDistance + linkLength >= flightDistance) {
+                if (link[startNode][endNode] != uav.getFlyingLink()) {
+                    if (link[startNode][endNode].getCapacity() > 0) {
+                        uav.setFlyingLink(link[startNode][endNode]);
+                        flyingUAV[startNode][endNode]++;
+                        System.out.println("client " + uav.getClientId() + " :UAV " + uav.getId() + " が " + startNode + " → " + endNode + " へ移動");
+                        flyingUavQueue.add(uav);
+                    } else {
+                        if (uav.isFlying()) {
+                            uav.stopTimer();
+                        } else {
+                            System.out.println("要修正1: client " + uav.getClientId() + " :UAV " + uav.getId() + " が飛行中でないのに stopTimer() が呼ばれました");
+                        }
+                        if (!uav.isWaiting()) {
+                            uav.startWaitingTimer();
+                        } else {
+                            System.out.println("要修正2: client " + uav.getClientId() + " :UAV " + uav.getId() + " がすでに待機状態");
+                        }
+                        uav.setStayedBeaconId(startNode);
+                        beaconCluster.getBeacon(startNode).addUav(uav);
+                        beaconCluster.getBeacon(startNode).incrementWaitingUavCount();
+                        uavQueue.add(uav);
+                    }
+                } else {
+                    flyingUAV[startNode][endNode]++;
+                    flyingUavQueue.add(uav);
+                }
+                break;
+            } else {
+                traveledDistance += linkLength;
+            }
+        }
+    }
+
+    /**
+     * 待機中のUAVを処理する
+     * @param uavQueue 待機中のUAVキュー
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param flyingUAV 飛行中のUAV配列
+     * @param link リンク情報
+     * @param beaconCluster ビーコンクラスター
+     * @param node ノード数
+     */
+    private static void processWaitingUAVs(Queue<Uav> uavQueue, Queue<Uav> flyingUavQueue, int[][] flyingUAV, Link[][] link, BeaconCluster beaconCluster, int node) {
+        int waitQueueSize = uavQueue.size();
+        for (int i = 0; i < waitQueueSize; i++) {
+            Uav uav = uavQueue.poll();
+            int[] path = uav.getPath();
+
+            int startNode = uav.getStayedBeaconId();
+
+            int nextNode = -1;
+            if (startNode != -1) {
+                for (int j = 0; j < path.length - 1; j++) {
+                    if (path[j] == startNode) {
+                        nextNode = path[j + 1];
+                        break;
+                    }
+                }
+            } else {
+                System.out.println("要修正4: client " + uav.getClientId() + " :UAV " + uav.getId() + " が待機中のビーコンIDを取得できませんでした");
+            }
+
+            if (nextNode != -1) {
+                if (flyingUAV[startNode][nextNode] < link[startNode][nextNode].getCapacity()) {
+                    flyingUAV[startNode][nextNode]++;
+                    if (uav.isWaiting()) {
+                        uav.stopWaitingTimer();
+                    } else {
+                        System.out.println("要修正3: client " + uav.getClientId() + " :UAV " + uav.getId() + " は待機していないのに stopWaitingTimer() が呼ばれました");
+                    }
+                    beaconCluster.getBeacon(startNode).removeUav(uav);
+                    beaconCluster.getBeacon(startNode).decrementWaitingUavCount();
+                    uav.startTimer();
+                    uav.setFlyingLink(link[startNode][nextNode]);
+                    uav.setStayedBeaconId(-1);
+                    flyingUavQueue.add(uav);
+                } else {
+                    uavQueue.add(uav);
+                    System.out.println("client " + uav.getClientId() + " :UAV " + uav.getId() + " は容量不足のため待機継続 (" + startNode + " -> " + nextNode + ")");
+                }
+            } else {
+                System.out.println("client " + uav.getClientId() + " :UAV " + uav.getId() + " は移動できるリンクがないため待機継続");
+                uavQueue.add(uav);
+            }
+        }
+        
+        // 容量の更新
+        CapacityManager.updateCapacity(flyingUAV, link, node);
+    }
+}

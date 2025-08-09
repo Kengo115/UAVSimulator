@@ -1,10 +1,18 @@
+package server.util;
 
-package server;
 import java.util.Arrays;
 
-public class BiCGSTAB {
+/**
+ * BiCGSTAB法による線形方程式ソルバー
+ */
+public class BiCGSTABSolver {
 
-    // dotメソッドの変更：ArrayList -> 配列
+    /**
+     * ベクトルの内積を計算する
+     * @param A 1つ目のベクトル
+     * @param B 2つ目のベクトル
+     * @return 内積
+     */
     public static double dot(double[] A, double[] B) {
         double result = 0.0;
         for (int i = 0; i < A.length; i++) {
@@ -13,7 +21,12 @@ public class BiCGSTAB {
         return result;
     }
 
-    // matVecMultメソッドの変更：ArrayList -> 配列
+    /**
+     * 行列とベクトルの積を計算する
+     * @param A 行列
+     * @param x ベクトル
+     * @param result 結果を格納するベクトル
+     */
     public static void matVecMult(double[][] A, double[] x, double[] result) {
         int n = A.length;
         for (int i = 0; i < n; i++) {
@@ -21,8 +34,17 @@ public class BiCGSTAB {
         }
     }
 
-    // BiCGSTABメソッドの変更：ArrayList -> 配列
-    public static int BiCGSTAB(double[][] pressCoeff, double[] dataAll, double[] output, int node, int maxIter, double eps) {
+    /**
+     * BiCGSTAB法で線形方程式を解く
+     * @param pressCoeff 係数行列
+     * @param dataAll 右辺ベクトル
+     * @param output 解ベクトル
+     * @param node 次元数
+     * @param maxIter 最大反復回数
+     * @param eps 収束判定閾値
+     * @return 反復回数（収束しなかった場合は-1）
+     */
+    public static int solve(double[][] pressCoeff, double[] dataAll, double[] output, int node, int maxIter, double eps) {
         int n = node;
         double[] r = new double[n];
         double[] p = new double[n];
@@ -32,7 +54,7 @@ public class BiCGSTAB {
 
         Arrays.fill(output, 0.0);
 
-        BiCGSTABRes(pressCoeff, output, dataAll, r, n);
+        computeResidual(pressCoeff, output, dataAll, r, n);
         double[] r0 = Arrays.copyOf(r, r.length);
 
         double rho = 1.0;
@@ -85,38 +107,19 @@ public class BiCGSTAB {
         return -1;  // 収束しなかった場合
     }
 
-    // BiCGSTABResメソッドの変更：ArrayList -> 配列
-    public static void BiCGSTABRes(double[][] A, double[] x, double[] b, double[] r, int n) {
+    /**
+     * 残差ベクトルを計算する
+     * @param A 係数行列
+     * @param x 解ベクトル
+     * @param b 右辺ベクトル
+     * @param r 残差ベクトル
+     * @param n 次元数
+     */
+    public static void computeResidual(double[][] A, double[] x, double[] b, double[] r, int n) {
         double[] Ax = new double[n];
         matVecMult(A, x, Ax);
         for (int i = 0; i < n; i++) {
             r[i] = b[i] - Ax[i];
-        }
-    }
-
-    // テスト用のmainメソッド
-    public static void main(String[] args) {
-        // 2次元配列の初期化
-        double[][] pressCoeff = {
-                {4.0, 1.0, 0.0},
-                {1.0, 3.0, 1.0},
-                {0.0, 1.0, 2.0}
-        };
-
-        double[] dataAll = {1.0, 2.0, 3.0};
-        double[] output = new double[dataAll.length];
-
-        int maxIter = 100;
-        double eps = 1e-6;
-
-        int result = BiCGSTAB(pressCoeff, dataAll, output, 3, maxIter, eps);
-
-        if (result >= 0) {
-            System.out.println("BiCGSTAB成功:");
-            System.out.println("出力: " + Arrays.toString(output));
-            System.out.println("反復回数: " + result);
-        } else {
-            System.out.println("BiCGSTAB失敗");
         }
     }
 }

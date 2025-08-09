@@ -1,0 +1,107 @@
+package server.route;
+
+import client.Client;
+import item.BeaconCluster;
+import item.Link;
+import server.controller.ServerController;
+import server.util.BiCGSTABSolver;
+import server.util.ResultOutputManager;
+
+import java.io.IOException;
+
+/**
+ * ExtendedPhysarumSolverアルゴリズムによる経路探索を行うクラス
+ * 容量制約を考慮した経路探索を行う
+ */
+public class ExtendedPhysarumSolverRouteSearcher extends AbstractPhysarumSolverRouteSearcher {
+
+    /**
+     * コンストラクタ
+     * @param serverController サーバーコントローラー
+     * @param adjMatrix 隣接行列
+     * @param link リンク情報
+     * @param beaconCluster ビーコンクラスター
+     * @param node ノード数
+     */
+    public ExtendedPhysarumSolverRouteSearcher(ServerController serverController, int[][] adjMatrix, Link[][] link, BeaconCluster beaconCluster, int node) {
+        super(serverController, adjMatrix, link, beaconCluster, node);
+    }
+
+    /**
+     * チューブ厚を更新する
+     * ExtendedPhysarumSolverでは容量制約を考慮
+     * @param ct 現在の反復回数
+     */
+    @Override
+    protected void updateTubeThickness(int ct) {
+        // チューブ厚の更新 - ExtendedPhysarumSolverでは容量制約を考慮
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                if (link[i][j].getL_tubeLength() != INF) {
+                    // 容量制約を考慮した更新式
+                    double deltaThickness = (Math.abs(link[i][j].getQ_tubeFlow()) - link[i][j].getD_tubeThickness()) * DELTA_TIME;
+                    D_tubeThickness_deltaT[i][j] = deltaThickness;
+                }
+            }
+        }
+
+        // ExtendedPhysarumSolverの特徴: 容量制約を考慮したチューブ厚の更新
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                if (link[i][j].getL_tubeLength() != INF) {
+                    // tanhを使用して容量制約を考慮
+                    link[i][j].setD_tubeThickness(link[i][j].getD_tubeThickness() + 
+                        (D_tubeThickness_deltaT[i][j]) * Math.tanh((link[i][j].getCapacity() - Math.abs(link[i][j].getQ_tubeFlow())) * coefficient_tanh));
+                }
+            }
+        }
+    }
+
+    /**
+     * 追加のプロット処理を行う
+     * @param client クライアント
+     * @param ct 現在の反復回数
+     * @throws IOException 入出力例外
+     */
+    @Override
+    protected void additionalPlotting(Client client, int ct) throws IOException {
+        if (ct % PLOT_2 == 0 || ct == 999) { // 999は最後のループの前
+            ResultOutputManager.outputRouteToExcel(client, ct, link, serverController.getRunCounter());
+        }
+    }
+
+    /**
+     * 線形方程式を解く
+     * ExtendedPhysarumSolverではBiCGSTABを使用
+     * @param pressCoeff 係数行列
+     * @param dataAll 右辺ベクトル
+     * @param output 解ベクトル
+     * @param n 次元数
+     * @param maxIter 最大反復回数
+     * @param eps 収束判定閾値
+     * @return 反復回数（収束しなかった場合は-1）
+     */
+    @Override
+    protected int solvePressureEquation(double[][] pressCoeff, double[] dataAll, double[] output, int n, int maxIter, double eps) {
+        // BiCGSTAB法で圧力を解く
+        return BiCGSTABSolver.solve(pressCoeff, dataAll, output, n, maxIter, eps);
+    }
+
+    /**
+     * 経路記録のタグを取得する
+     * @return 経路記録のタグ
+     */
+    @Override
+    protected String getRouteRecordTag() {
+        return "runUAVFlow_EPS";
+    }
+
+    /**
+     * 残りの経路記録のタグを取得する
+     * @return 残りの経路記録のタグ
+     */
+    @Override
+    protected String getRemainingRouteRecordTag() {
+        return "remainingFlow_EPS";
+    }
+}
