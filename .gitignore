@@ -32,3 +32,4 @@ result/
 
 # Compiled Java class files
 *.class
+src/log/simulator.log
