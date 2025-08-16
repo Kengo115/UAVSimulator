@@ -155,37 +155,37 @@ public class DijkstraRouteSearcher implements RouteSearcher {
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
         double minCapacity = link[u][v].getCapacity();
-        int flow_count = 0;
+        final int[] flowCounter = {0}; // PS法と同様にカウンターを配列で管理
 
         // UAVがrequiredUAVsより少ない場合はすべてのUAVに経路を割り当て
         for (int f = 0; f < requiredUAVs; f++) {
             int currentUAVIndex = f;
             Uav currentUAV = client.getFlow().getUav(currentUAVIndex);
 
-            if (flow_count < minCapacity) {
-                // 2秒ごとに飛行開始
-                final int finalF = f;
-                scheduler.schedule(() -> {
-                    currentUAV.setPath(path);
+            final int finalF = f;
+            scheduler.schedule(() -> {
+                currentUAV.setPath(path);
+                
+                // PS法と同様に、スケジュール実行時に容量を確認
+                if (flowCounter[0] < minCapacity) {
                     currentUAV.startTimer();
                     currentUAV.setFlyingLink(link[u][v]);
                     currentUAV.setPassedLink(link[u][v]);
                     flyingUavQueue.add(currentUAV);
                     link[u][v].decrementCapacity();
-                }, finalF * 2, TimeUnit.SECONDS);
-                LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v);
-
-                flow_count++;
-            } else {
-                // UAVを待機させる処理
-                currentUAV.setPath(path);
-                currentUAV.startWaitingTimer();
-                currentUAV.setStayedBeaconId(u);
-                beaconCluster.getBeacon(u).addUav(currentUAV);
-                beaconCluster.getBeacon(u).incrementWaitingUavCount();
-                uavQueue.add(currentUAV);
-                LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u);
-            }
+                    flowCounter[0]++;
+                    LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v);
+                } else {
+                    // 容量が足りない場合は待機
+                    currentUAV.startWaitingTimer();
+                    currentUAV.setStayedBeaconId(u);
+                    beaconCluster.getBeacon(u).addUav(currentUAV);
+                    beaconCluster.getBeacon(u).incrementWaitingUavCount();
+                    uavQueue.add(currentUAV);
+                    LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ")");
+                }
+            }, finalF * 2, TimeUnit.SECONDS);
+            // 削除：else節は不要になりました
         }
     }
 }
