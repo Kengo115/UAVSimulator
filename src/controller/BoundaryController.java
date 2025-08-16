@@ -406,13 +406,16 @@ public class BoundaryController {
                 }
             }
 
-            System.out.println("すべてのクライアント生成と処理が完了しました。");
+            LogManager.getInstance().log("すべてのクライアント生成と処理が完了しました。");
             if (flyingUavQueue.isEmpty() && uavQueue.isEmpty()) {
                 UAVFlyScheduler.stopFlyUAVUpdates(clientController);
             }
             
-            // ログマネージャーを閉じる
-            LogManager.getInstance().close();
+            // プログラム終了時にログマネージャーを閉じるようにシャットダウンフックを追加
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                LogManager.getInstance().log("プログラムを終了します。ログを閉じます。");
+                LogManager.getInstance().close();
+            }));
 
         } catch (IOException e) {
             LogManager.getInstance().error("IOエラーが発生しました", e);
