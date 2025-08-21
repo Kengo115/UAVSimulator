@@ -36,10 +36,8 @@ public class UAVFlyScheduler {
             try {
                 if (flyingUavQueue.isEmpty() && uavQueue.isEmpty()) {
                     LogManager.getInstance().log("飛行中UAV, 待機中UAVが存在しません");
-                    /**
                     clientController.stopTimer();
                     stopFlyUAVUpdates(clientController);
-                     */
                 } else {
                     //クライアントタイマー動作中
                     server.controller.ServerController.flyUAV(clientController, flyingUavQueue, uavQueue);
