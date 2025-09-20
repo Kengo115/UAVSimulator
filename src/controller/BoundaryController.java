@@ -115,7 +115,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 15; // + (int)(Math.random() * 20);
+            int uavNum = 10; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -132,7 +132,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 15; // + (int)(Math.random() * 20);
+            int uavNum = 10; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -149,7 +149,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 15; // + (int)(Math.random() * 20);
+            int uavNum = 10; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
