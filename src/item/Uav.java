@@ -58,6 +58,13 @@ public class Uav {
             flightTimer.cancel(this);
         }
     }
+    
+    public void cancelTimer(Link[][] link, double totalPathDistance) {
+        if (isFlying) {
+            stopTimer();
+            flightTimer.cancel(this, link, totalPathDistance);
+        }
+    }
 
     public long getFlightTime() {
         return flightTimer.getFlightTime();

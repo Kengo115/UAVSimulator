@@ -49,7 +49,25 @@ public class UAVFlightTimer {
         if (isTiming) {
             stop(uav);
         }
+        
         String message = "client" + uav.getClientId() + " No" + uav.getId() + " が目的地に到着しました。";
+        LogManager.getInstance().log(message);
+    }
+    
+    public void cancel(Uav uav, Link[][] link, double totalPathDistance) {
+        if (isTiming) {
+            stop(uav);
+        }
+        
+        // 実際の飛行距離（飛行時間×速度）を計算
+        double actualFlightDistance = (totalElapsedTime / 1000.0) * uav.getSpeed();
+        
+        // 正確な飛行距離は引数から取得
+        double accurateFlightDistance = totalPathDistance;
+        
+        String message = "client" + uav.getClientId() + " No" + uav.getId() + " が目的地に到着しました。" + 
+                        "（実際の飛行距離：" + String.format("%.2f", actualFlightDistance) + 
+                        "，正確な飛行距離：" + String.format("%.2f", accurateFlightDistance) + "）";
         LogManager.getInstance().log(message);
     }
 }
