@@ -9,6 +9,7 @@ import item.Uav;
 import server.network.NetworkTopologyManager;
 import server.route.DijkstraRouteSearcher;
 import server.route.ExtendedPhysarumSolverRouteSearcher;
+import server.route.HybridPhysarumSolverRouteSearcher;
 import server.route.PhysarumSolverRouteSearcher;
 import server.route.RouteSearcher;
 import server.uav.CapacityManager;
@@ -55,6 +56,7 @@ public class ServerController {
     private RouteSearcher dijkstraRouteSearcher;
     private RouteSearcher physarumSolverRouteSearcher;
     private RouteSearcher extendedPhysarumSolverRouteSearcher;
+    private RouteSearcher hybridPhysarumSolverRouteSearcher;
     
     // ネットワークトポロジーマネージャー
     private NetworkTopologyManager networkTopologyManager;
@@ -104,6 +106,7 @@ public class ServerController {
         this.dijkstraRouteSearcher = new DijkstraRouteSearcher(this, adjMatrix, link, beaconCluster, node);
         this.physarumSolverRouteSearcher = new PhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
         this.extendedPhysarumSolverRouteSearcher = new ExtendedPhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
+        this.hybridPhysarumSolverRouteSearcher = new HybridPhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
     }
 
     /**
@@ -242,6 +245,36 @@ public class ServerController {
 
         // ExtendedPhysarumSolver法による経路探索
         extendedPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
+
+        if (runCounter != 0) {
+            // UAVFlySchedulerを開始
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+        }
+
+        runCounter++;
+    }
+    
+    /**
+     * ハイブリッドPhysarumSolver法による経路探索を実行する
+     * @param client クライアント
+     * @param clientController クライアントコントローラー
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param numLoop 反復回数
+     * @throws IOException 入出力例外
+     */
+    public void run_Hybrid(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+        if (runCounter != 0) {
+            reset();
+        }
+
+        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
+        if (!flyingUavQueue.isEmpty()) {
+            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
+        }
+
+        // ハイブリッドPhysarumSolver法による経路探索
+        hybridPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
             // UAVFlySchedulerを開始

@@ -32,7 +32,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     protected static final int PLOT_2 = 20;
     protected static final double THRESHOLD_1 = 0.5;
     protected static final double THRESHOLD_2 = 2.0;
-    protected static final double coefficient_tanh = 1;
+    protected static final double coefficient_tanh = 0.05;
 
     // サーバーコントローラー
     protected final ServerController serverController;

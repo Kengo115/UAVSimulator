@@ -115,7 +115,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 10; // + (int)(Math.random() * 20);
+            int uavNum = 30; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -164,7 +164,8 @@ public class BoundaryController {
     public enum RouteSearchMethod {
         DIJKSTRA(1, "Dijkstra"),
         PS(2, "PS"),
-        EPS(3, "EPS");
+        EPS(3, "EPS"),
+        HYBRID(4, "HYBRID");
         
         private final int id;
         private final String name;
@@ -274,6 +275,9 @@ public class BoundaryController {
             case PS:
                 server.run_PS(client, clientController, flyingUavQueue, uavQueue, num_loop);
                 break;
+            case HYBRID:
+                server.run_Hybrid(client, clientController, flyingUavQueue, uavQueue, num_loop);
+                break;
             case EPS:
             default:
                 server.run_EPS(client, clientController, flyingUavQueue, uavQueue, num_loop);
@@ -299,6 +303,7 @@ public class BoundaryController {
             System.out.println("1: Dijkstra法");
             System.out.println("2: PhysarumSolver法 (PS)");
             System.out.println("3: ExtendedPhysarumSolver法 (EPS)");
+            System.out.println("4: ハイブリッド法 (HYBRID: EPS+PS)");
             
             BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
             int methodChoice = 3; // デフォルトはEPS
@@ -306,7 +311,7 @@ public class BoundaryController {
                 String input = reader.readLine();
                 if (!input.trim().isEmpty()) {
                     methodChoice = Integer.parseInt(input);
-                    if (methodChoice < 1 || methodChoice > 3) {
+                    if (methodChoice < 1 || methodChoice > 4) {
                         System.out.println("無効な選択です。ExtendedPhysarumSolver法 (EPS) を使用します。");
                         methodChoice = 3;
                     }
