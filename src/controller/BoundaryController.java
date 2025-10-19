@@ -16,7 +16,7 @@ import java.util.Queue;
 
 
 public class BoundaryController {
-    private static int num_loop = 1000;
+    private static int num_loop = 500;
     private static int nodeNum;
     // ビーコンクラスタークラスを生成
     static BeaconCluster beaconCluster;

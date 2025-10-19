@@ -21,7 +21,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
 
     // 定数
     private static final int ITERATIONS_PER_FLOW = 50; // 各フロー値ごとのイテレーション数
-    private static final int STABILIZATION_ITERATIONS = 1000; // 異常検知後の安定化イテレーション数
+    private static final int STABILIZATION_ITERATIONS = 500; // 異常検知後の安定化イテレーション数
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
 
