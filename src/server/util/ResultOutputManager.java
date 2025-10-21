@@ -86,7 +86,7 @@ public class ResultOutputManager {
     }
 
     /**
-     * Excelファイルに各リンクの流量を出力する
+     * flowファイルに各リンクの流量を出力する
      * @param client クライアント
      * @param ct カウンター
      * @param link リンク情報
@@ -96,7 +96,7 @@ public class ResultOutputManager {
      */
     public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
-        String dirPath = getDirectoryPath("excel", runCounter);
+        String dirPath = getDirectoryPath("flow", runCounter);
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
 
@@ -119,7 +119,7 @@ public class ResultOutputManager {
     }
 
     /**
-     * txtファイルに管の長さ，管の太さ，管の容量を出力する
+     * statusファイルに管の長さ，管の太さ，管の容量を出力する（後方互換性用）
      * @param client クライアント
      * @param ct カウンター
      * @param link リンク情報
@@ -128,8 +128,22 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
+        outputToTxt(client, ct, link, node, runCounter, null);
+    }
+
+    /**
+     * statusファイルに管の長さ，管の太さ，管の容量，圧力係数を出力する
+     * @param client クライアント
+     * @param ct カウンター
+     * @param link リンク情報
+     * @param node ノード数
+     * @param runCounter 実行カウンター
+     * @param pressureCoefficient 圧力係数行列
+     * @throws IOException 入出力例外
+     */
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
-        String dirPath = getDirectoryPath("txt", runCounter);
+        String dirPath = getDirectoryPath("status", runCounter);
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
 
@@ -142,11 +156,16 @@ public class ResultOutputManager {
         try (FileWriter writer = new FileWriter(filename)) {
             //要求uav台数，出発ノード，到着ノードを１行目に出力
             writer.write(String.format("%.1f,%d,%d\n", client.getFlow().getTheNumberOfUAV(), client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
-            writer.write("source,destination,length,thickness,capacity\n");
+            writer.write("source,destination,length,thickness,capacity,pressureCoefficient\n");
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
                     if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY) {
-                        writer.write(String.format("%d,%d,%.4f,%.4f,%.4f\n", i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), link[i][j].getCapacity()));
+                        // 圧力係数を取得（非対角要素は負の値になっているので絶対値を取る）
+                        double pressureCoeff = 0.0;
+                        if (pressureCoefficient != null && i != j) {
+                            pressureCoeff = Math.abs(pressureCoefficient[i][j]);
+                        }
+                        writer.write(String.format("%d,%d,%.4f,%.4f,%.4f,%.4f\n", i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), link[i][j].getCapacity(), pressureCoeff));
                     }
                 }
             }
@@ -154,7 +173,7 @@ public class ResultOutputManager {
     }
 
     /**
-     * 経路ごとのUAV数をExcel形式で出力する
+     * 経路ごとのUAV数をflow形式で出力する
      * @param client クライアント
      * @param ct カウンター
      * @param link リンク情報
