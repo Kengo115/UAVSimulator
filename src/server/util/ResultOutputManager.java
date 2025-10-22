@@ -94,7 +94,7 @@ public class ResultOutputManager {
      * @param runCounter 実行カウンター
      * @throws IOException 入出力例外
      */
-    public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
+    public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter, double inflow) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("flow", runCounter);
         // ファイル名を作成
@@ -107,6 +107,8 @@ public class ResultOutputManager {
             dir.mkdirs();
         }
         try (FileWriter writer = new FileWriter(filename)) {
+            // 1行目: 流入フロー,ソース,シンク
+            writer.write(String.format("%.1f,%d,%d\n", inflow, client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
             writer.write("source,destination,flow\n");
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
@@ -127,8 +129,8 @@ public class ResultOutputManager {
      * @param runCounter 実行カウンター
      * @throws IOException 入出力例外
      */
-    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
-        outputToTxt(client, ct, link, node, runCounter, null);
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double inflow) throws IOException {
+        outputToTxt(client, ct, link, node, runCounter, null, inflow);
     }
 
     /**
@@ -141,7 +143,7 @@ public class ResultOutputManager {
      * @param pressureCoefficient 圧力係数行列
      * @throws IOException 入出力例外
      */
-    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient) throws IOException {
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient, double inflow) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("status", runCounter);
         // ファイル名を作成
@@ -154,8 +156,8 @@ public class ResultOutputManager {
             dir.mkdirs();
         }
         try (FileWriter writer = new FileWriter(filename)) {
-            //要求uav台数，出発ノード，到着ノードを１行目に出力
-            writer.write(String.format("%.1f,%d,%d\n", client.getFlow().getTheNumberOfUAV(), client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
+            // 1行目: 流入フロー，出発ノード，到着ノード（要求UAV数→流入フローへ変更）
+            writer.write(String.format("%.1f,%d,%d\n", inflow, client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
             writer.write("source,destination,length,thickness,capacity,pressureCoefficient\n");
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
