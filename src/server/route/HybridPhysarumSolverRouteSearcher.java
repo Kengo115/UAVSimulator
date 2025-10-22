@@ -27,6 +27,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
 
     // 現在のフロー値
     private double currentFlow = 1.0; // 1から開始
+    private int outputIterationCursor = 0;
 
     /**
      * コンストラクタ
@@ -235,7 +236,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                     initializeEPS();
                     
                     // 1000回の安定化イテレーション実行
-                    boolean stabilized = performStabilizationIterations(client, sourceNode, destNode, eps);
+                    boolean stabilized = performStabilizationIterations(client, sourceNode, destNode, ct, eps);
                     
                     if (stabilized) {
                         LogManager.getInstance().log("HybridPhysarumSolver: Stabilization successful with flow " + currentFlow + ". Proceeding to UAV assignment.");
@@ -249,8 +250,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 if ((ct + 1) % PLOT == 0) {
                     LogManager.getInstance().log("Iteration: " + (ct + 1) + " with flow " + currentFlow);
                     ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
-                    ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter());
-                    ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient);
+                    ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
+                    ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, currentFlow);
                 }
                 
                 // 50イテレーションごとのフロー増加判定（異常がない場合のみ）
@@ -283,8 +284,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             
             // 最終結果を出力
             ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
-            ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter());
-            ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient);
+            ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
+            ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, currentFlow);
             
             // 親クラスのUAV割り当て処理を実行
             LogManager.getInstance().log("breakout point");
@@ -314,7 +315,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 LogManager.getInstance().log("HybridPhysarumSolver: Starting PS computation for " + remainingUAVs + " remaining UAVs");
                 
                 // PS計算実行
-                ct = performPSComputation(client, remainingUAVs, sourceNode, destNode, ct, eps);
+                ct = performPSComputation(client, remainingUAVs, sourceNode, destNode, outputIterationCursor, eps);
                 
                 LogManager.getInstance().log("HybridPhysarumSolver: PS computation completed. Results integrated.");
             }
@@ -408,10 +409,14 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
      * @param eps イプシロン
      * @return 安定化に成功した場合true、失敗した場合false
      */
-    private boolean performStabilizationIterations(Client client, int sourceNode, int destNode, double eps) {
+    private boolean performStabilizationIterations(Client client, int sourceNode, int destNode, int startIteration, double eps) {
         LogManager.getInstance().log("HybridPhysarumSolver: Starting " + STABILIZATION_ITERATIONS + " stabilization iterations with flow " + currentFlow);
+        if (this.outputIterationCursor < startIteration) {
+            this.outputIterationCursor = startIteration;
+        }
         
         for (int stabIter = 0; stabIter < STABILIZATION_ITERATIONS; stabIter++) {
+            int currentIteration = ++outputIterationCursor;
             // フロー値を設定
             Q_Kirchhoff[sourceNode] = currentFlow;
             Q_Kirchhoff[destNode] = currentFlow * NEG;
@@ -447,6 +452,13 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             int testIter = 10;
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
                 LogManager.getInstance().log("HybridPhysarumSolver: Pressure equation solving failed during stabilization iteration " + (stabIter + 1));
+                // 出力を残す（連番イテレーション番号）
+                try {
+                    ResultOutputManager.outputToExcel(client, currentIteration - 1, link, node, serverController.getRunCounter(), currentFlow);
+                    ResultOutputManager.outputToTxt(client, currentIteration - 1, link, node, serverController.getRunCounter(), pressureCoefficient, currentFlow);
+                } catch (IOException ioe) {
+                    LogManager.getInstance().error("HybridPhysarumSolver: Failed to write stabilization outputs on solver failure", ioe);
+                }
                 return false;
             }
             
@@ -470,6 +482,14 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             
             // チューブ厚の更新
             updateTubeThickness(stabIter);
+
+            // 安定化イテレーションごとにflow/statusを出力（連番）
+            try {
+                ResultOutputManager.outputToExcel(client, currentIteration - 1, link, node, serverController.getRunCounter(), currentFlow);
+                ResultOutputManager.outputToTxt(client, currentIteration - 1, link, node, serverController.getRunCounter(), pressureCoefficient, currentFlow);
+            } catch (IOException ioe) {
+                LogManager.getInstance().error("HybridPhysarumSolver: Failed to write stabilization outputs", ioe);
+            }
             
             // 各安定化イテレーション後にチューブ厚をチェック
             if (checkTubeThicknessAnomaly()) {
@@ -740,8 +760,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             if (currentIteration % PLOT == 0) {
                 LogManager.getInstance().log("Iteration: " + currentIteration + " with PS flow " + remainingUAVs);
                 ResultOutputManager.outputToPajek(client, eps, (double)remainingUAVs, currentIteration - 1, psLink, beaconCluster, node, serverController.getRunCounter());
-                ResultOutputManager.outputToExcel(client, currentIteration - 1, psLink, node, serverController.getRunCounter());
-                ResultOutputManager.outputToTxt(client, currentIteration - 1, psLink, node, serverController.getRunCounter());
+                ResultOutputManager.outputToExcel(client, currentIteration - 1, psLink, node, serverController.getRunCounter(), remainingUAVs);
+                ResultOutputManager.outputToTxt(client, currentIteration - 1, psLink, node, serverController.getRunCounter(), remainingUAVs);
             }
         }
 
