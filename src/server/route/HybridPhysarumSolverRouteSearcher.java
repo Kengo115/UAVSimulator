@@ -282,10 +282,10 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                                           " after " + ct + " iterations");
             }
             
-            // 最終結果を出力
-            ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
-            ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
-            ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, currentFlow);
+            // 最終結果を出力（安定化出力と連番が衝突しないよう outputIterationCursor を使用）
+            ResultOutputManager.outputToPajek(client, eps, requestedFlow, outputIterationCursor, link, beaconCluster, node, serverController.getRunCounter());
+            ResultOutputManager.outputToExcel(client, outputIterationCursor, link, node, serverController.getRunCounter(), currentFlow);
+            ResultOutputManager.outputToTxt(client, outputIterationCursor, link, node, serverController.getRunCounter(), pressureCoefficient, currentFlow);
             
             // 親クラスのUAV割り当て処理を実行
             LogManager.getInstance().log("breakout point");
@@ -314,8 +314,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             if (remainingUAVs > 0) {
                 LogManager.getInstance().log("HybridPhysarumSolver: Starting PS computation for " + remainingUAVs + " remaining UAVs");
                 
-                // PS計算実行
-                ct = performPSComputation(client, remainingUAVs, sourceNode, destNode, outputIterationCursor, eps);
+                // PS計算実行（最終EPS出力の直後番号から開始）
+                ct = performPSComputation(client, remainingUAVs, sourceNode, destNode, outputIterationCursor + 1, eps);
                 
                 LogManager.getInstance().log("HybridPhysarumSolver: PS computation completed. Results integrated.");
             }
