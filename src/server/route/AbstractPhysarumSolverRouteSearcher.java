@@ -208,7 +208,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 LogManager.getInstance().log("Iteration: " + (ct + 1));
                 ResultOutputManager.outputToPajek(client, eps, client.getFlow().getTheNumberOfUAV(), ct, link, beaconCluster, node, serverController.getRunCounter());
                 ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), client.getFlow().getTheNumberOfUAV());
-                ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), client.getFlow().getTheNumberOfUAV());
+                ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, client.getFlow().getTheNumberOfUAV());
             }
 
             // 追加のプロット（サブクラスでオーバーライド可能）
