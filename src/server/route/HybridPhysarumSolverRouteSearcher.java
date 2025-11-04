@@ -33,14 +33,23 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     private static final double PRESSURE_ABSOLUTE_EMERGENCY = 300.0; // 圧力絶対値緊急対応
     private static final double THICKNESS_CHANGE_WARNING = 0.05; // チューブ厚変化率早期警告
     private static final double THICKNESS_CHANGE_EMERGENCY = 0.10; // チューブ厚変化率緊急対応
+
+    // ソースノード圧力専用閾値（実データ分析：正常時51~54、異常時87以上）
+    private static final double SOURCE_PRESSURE_WARNING = 70.0; // 正常時の約1.3倍で早期警告
+    private static final double SOURCE_PRESSURE_EMERGENCY = 85.0; // 正常時の約1.6倍で緊急対応
+
+    // ソースノード圧力変化率の段階的閾値
+    private static final double SOURCE_PRESSURE_CHANGE_LEVEL1 = 0.03;  // 3%: 1UAV減少
+    private static final double SOURCE_PRESSURE_CHANGE_LEVEL2 = 0.05;  // 5%: 3UAV減少
+    private static final double SOURCE_PRESSURE_CHANGE_LEVEL3 = 0.10;  // 10%: 5UAV減少
     
     // 統合スコアの閾値（UAV用に緩和）
     private static final double EARLY_WARNING_THRESHOLD = 3.0; // 1.0→3.0に緩和
     private static final double EMERGENCY_THRESHOLD = 5.0; // 2.0→5.0に緩和
     
     // フロー減少（UAV整数値対応）
-    private static final double EMERGENCY_FLOW_REDUCTION_UAV = 2.0; // 2UAV減少
-    private static final double WARNING_FLOW_REDUCTION_UAV = 1.0; // 1UAV減少
+    private static final double EMERGENCY_FLOW_REDUCTION_UAV = 4.0; // 4UAV減少
+    private static final double WARNING_FLOW_REDUCTION_UAV = 2.0; // 2UAV減少
     private static final double MINIMUM_FLOW_RATIO = 0.8; // 最小安全フロー（要求フローの80%に緩和）
 
     // 現在のフロー値と制御状態
@@ -51,6 +60,11 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     private double[] previousThickness;
     private int flowReductionCount = 0;
     private static final int MAX_FLOW_REDUCTIONS = 5; // 振動防止用
+    private int iterationsSinceFlowChange = 0; // フロー変更後の経過イテレーション数
+    private static final int STABILIZATION_GRACE_PERIOD = 50; // 安定化猶予期間（イテレーション数）
+    private int sourceNode = -1; // ソースノードID
+    private int destNode = -1; // デスティネーションノードID
+    private double previousSourcePressure = 0.0; // 前回のソース圧力値
 
     /**
      * コンストラクタ
@@ -93,18 +107,20 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
 
         // 入力パラメータの取得と初期化
         requestedFlow = client.getFlow().getTheNumberOfUAV();
-        int sourceNode = client.getFlow().getSource().getId();
-        int destNode = client.getFlow().getDestination().getId();
+        this.sourceNode = client.getFlow().getSource().getId();
+        this.destNode = client.getFlow().getDestination().getId();
         double eps = 1e-10;
         int ct = 0;
-        
+
         LogManager.getInstance().log("HybridPhysarumSolver: Starting adaptive flow control with requested flow " + requestedFlow);
-        
+
         // 適応的フロー制御：要求フロー値から開始
         currentFlow = requestedFlow;
         stableIterationCount = 0;
         flowReductionCount = 0;
-        
+        iterationsSinceFlowChange = 0; // 初期起動時は猶予期間内から開始（初期の不安定性を回避）
+        previousSourcePressure = 0.0; // 初期化
+
         // 前回チューブ厚の初期化
         initializePreviousThickness();
         
@@ -155,8 +171,10 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                         ct++;
                         continue;
                     } else {
-                        LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Terminating.");
-                        break;
+                        LogManager.getInstance().log("HybridPhysarumSolver: Solver failure but cannot reduce flow further. Continuing with current flow (may be unstable).");
+                        // Solver failureだが最小フロー制約のため継続（不安定な可能性あり）
+                        ct++;
+                        continue;
                     }
                 }
 
@@ -181,37 +199,128 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 // チューブ厚の更新
                 updateTubeThickness(ct);
 
+                // フロー変更後の経過イテレーションをカウント
+                iterationsSinceFlowChange++;
+
                 // 予防型不安定性検知
                 double instabilityScore = calculatePreventiveInstabilityScore();
-                
-                if (instabilityScore >= EMERGENCY_THRESHOLD) {
+
+                // ソース圧力の個別チェック（猶予期間に関係なく常に実行）
+                double sourcePressureScore = calculateSourcePressureScore();
+                double sourcePressureChangeScore = calculateSourcePressureChangeScore();
+
+                // ソース圧力変化率チェック（段階的なUAV減少）
+                if (sourcePressureChangeScore >= 1.0) {
+                    double currentPressure = Math.abs(P_tubePressure[sourceNode]);
+                    double changeRate = (currentPressure - previousSourcePressure) / previousSourcePressure;
+                    double reductionAmount = calculateSourcePressureReduction();
+
+                    String reductionLevel;
+                    if (changeRate >= SOURCE_PRESSURE_CHANGE_LEVEL3) {
+                        reductionLevel = "CRITICAL (≥10%)";
+                    } else if (changeRate >= SOURCE_PRESSURE_CHANGE_LEVEL2) {
+                        reductionLevel = "HIGH (5-10%)";
+                    } else {
+                        reductionLevel = "MODERATE (3-5%)";
+                    }
+
+                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure change detected [" + reductionLevel + "] at iteration " + (ct + 1) +
+                                              " (changeRate=" + String.format("%.1f%%", changeRate * 100) +
+                                              ", " + String.format("%.2f", previousSourcePressure) + " → " + String.format("%.2f", currentPressure) +
+                                              ", reducing " + (int)reductionAmount + " UAVs)");
+
+                    if (!applyUAVFlowReduction(reductionAmount, "Source pressure change rate")) {
+                        LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Continuing with current flow to achieve 500 stable iterations.");
+                        // 最小フロー制約に達しても終了せず、現在のフローで500回安定を目指す
+                    }
+                } else if (sourcePressureScore >= 1.0) {
+                    // ソース圧力絶対値が緊急レベル（85以上）
+                    LogManager.getInstance().log("HybridPhysarumSolver: CRITICAL absolute source pressure detected at iteration " + (ct + 1) +
+                                              " (sourcePressure=" + String.format("%.2f", Math.abs(P_tubePressure[sourceNode])) + ")");
+                    if (!applyUAVFlowReduction(EMERGENCY_FLOW_REDUCTION_UAV, "Critical absolute source pressure")) {
+                        LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Continuing with current flow to achieve 500 stable iterations.");
+                        // 最小フロー制約に達しても終了せず、現在のフローで500回安定を目指す
+                    }
+                } else if (iterationsSinceFlowChange < STABILIZATION_GRACE_PERIOD) {
+                    // 猶予期間中：他の不安定性検知をスキップし、システムに安定化の時間を与える
+                    // 注意：猶予期間中はstableIterationCountをカウントしない
+
+                    // 定期的にログ出力（10イテレーションごと）
+                    if ((ct + 1) % 10 == 0) {
+                        LogManager.getInstance().log("Stabilization grace period: iteration " + (ct + 1) +
+                                                  " (" + iterationsSinceFlowChange + "/" + STABILIZATION_GRACE_PERIOD +
+                                                  ") with flow " + currentFlow +
+                                                  " (score: " + String.format("%.3f", instabilityScore) +
+                                                  ", sourcePressure: " + String.format("%.2f", Math.abs(P_tubePressure[sourceNode])) + ")");
+                    }
+                } else if (instabilityScore >= EMERGENCY_THRESHOLD) {
                     // 緊急対応：2UAV減少（整数単位）
                     LogManager.getInstance().log("HybridPhysarumSolver: Emergency instability detected (score=" + instabilityScore + ") at iteration " + (ct + 1));
-                    if (applyUAVFlowReduction(EMERGENCY_FLOW_REDUCTION_UAV, "Emergency instability")) {
-                        ct++;
-                        continue;
-                    } else {
-                        LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Terminating.");
-                        break;
+                    if (!applyUAVFlowReduction(EMERGENCY_FLOW_REDUCTION_UAV, "Emergency instability")) {
+                        LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Continuing with current flow to achieve 500 stable iterations.");
+                        // 最小フロー制約に達しても終了せず、現在のフローで500回安定を目指す
                     }
                 } else if (instabilityScore >= EARLY_WARNING_THRESHOLD) {
                     // 早期警告：1UAV減少（整数単位）
                     LogManager.getInstance().log("HybridPhysarumSolver: Early warning instability detected (score=" + instabilityScore + ") at iteration " + (ct + 1));
-                    if (applyUAVFlowReduction(WARNING_FLOW_REDUCTION_UAV, "Early warning")) {
-                        ct++;
-                        continue;
-                    } else {
+                    if (!applyUAVFlowReduction(WARNING_FLOW_REDUCTION_UAV, "Early warning")) {
                         LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Continuing with current flow.");
                     }
                 } else {
                     // 安定：カウンター増加
                     stableIterationCount++;
+
+                    // 500回連続安定を達成したら、整数丸め込みを実行してEPS終了
+                    if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
+                        LogManager.getInstance().log("HybridPhysarumSolver: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
+
+                        // 最終流量の整数丸め
+                        int linkCount = 0;
+                        for (int i = 0; i < node; i++) {
+                            for (int j = 0; j < node; j++) {
+                                if (link[i][j].getL_tubeLength() != INF) {
+                                    linkCount++;
+                                }
+                            }
+                        }
+
+                        double[] flows = new double[linkCount];
+                        int index = 0;
+                        for (int i = 0; i < node; i++) {
+                            for (int j = 0; j < node; j++) {
+                                if (link[i][j].getL_tubeLength() != INF) {
+                                    flows[index++] = link[i][j].getQ_tubeFlow();
+                                }
+                            }
+                        }
+
+                        MathUtils.roundWithConservation(flows);
+
+                        index = 0;
+                        for (int i = 0; i < node; i++) {
+                            for (int j = 0; j < node; j++) {
+                                if (link[i][j].getL_tubeLength() != INF) {
+                                    link[i][j].setQ_tubeFlow(flows[index++]);
+                                }
+                            }
+                        }
+
+                        LogManager.getInstance().log("HybridPhysarumSolver: Final flow rounding completed. EPS converged with flow " + currentFlow);
+
+                        // 最終結果を出力
+                        ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
+                        ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
+                        ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, currentFlow);
+
+                        // ループを抜ける
+                        break;
+                    }
                 }
 
-                // 結果のプロット
+                // 結果のプロット（500回到達前のみ）
                 if ((ct + 1) % PLOT == 0) {
-                    LogManager.getInstance().log("Iteration: " + (ct + 1) + " with flow " + currentFlow + 
-                                              " (stable count: " + stableIterationCount + "/" + REQUIRED_STABLE_ITERATIONS + 
+                    LogManager.getInstance().log("Iteration: " + (ct + 1) + " with flow " + currentFlow +
+                                              " (stable count: " + stableIterationCount + "/" + REQUIRED_STABLE_ITERATIONS +
                                               ", instability score: " + String.format("%.3f", instabilityScore) + ")");
                     ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
                     ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
@@ -220,44 +329,19 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 
                 // 前回チューブ厚を更新（次回の変化率計算用）
                 updatePreviousThickness();
-                
+
+                // 前回のソース圧力を更新（次回の変化率計算用）
+                if (sourceNode >= 0) {
+                    previousSourcePressure = Math.abs(P_tubePressure[sourceNode]);
+                }
+
                 ct++;
             }
-            
-            // 収束時の最終処理：流量を整数に丸める
+
+            // 収束時の処理
             if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
-                LogManager.getInstance().log("HybridPhysarumSolver: Converged after " + ct + " iterations with " + stableIterationCount + " stable iterations. Final flow: " + currentFlow);
-                
-                // 最終流量の整数丸め
-                int linkCount = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (link[i][j].getL_tubeLength() != INF) {
-                            linkCount++;
-                        }
-                    }
-                }
-
-                double[] flows = new double[linkCount];
-                int index = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (link[i][j].getL_tubeLength() != INF) {
-                            flows[index++] = link[i][j].getQ_tubeFlow();
-                        }
-                    }
-                }
-
-                MathUtils.roundWithConservation(flows);
-
-                index = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (link[i][j].getL_tubeLength() != INF) {
-                            link[i][j].setQ_tubeFlow(flows[index++]);
-                        }
-                    }
-                }
+                // 既にループ内で整数丸め込みと出力が完了しているので、PSはスキップ
+                LogManager.getInstance().log("HybridPhysarumSolver: EPS solution finalized with flow " + currentFlow + ". Skipping PS computation.");
             } else if (ct >= MAX_ITERATIONS) {
                 LogManager.getInstance().log("HybridPhysarumSolver: Reached maximum iterations (" + MAX_ITERATIONS + 
                                           ") with flow " + currentFlow + " of " + requestedFlow + " requested (stable count: " + stableIterationCount + ")");
@@ -265,12 +349,15 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 LogManager.getInstance().log("HybridPhysarumSolver: Terminated with final flow " + currentFlow + 
                                           " after " + ct + " iterations (stable count: " + stableIterationCount + ")");
             }
-            
-            // 最終結果を出力
-            ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
-            ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
-            ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, currentFlow);
-            
+
+            // 500回安定収束していない場合のみ、最終結果を出力
+            if (stableIterationCount < REQUIRED_STABLE_ITERATIONS) {
+                LogManager.getInstance().log("HybridPhysarumSolver: Outputting final results after early termination");
+                ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
+                ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
+                ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, currentFlow);
+            }
+
             // 親クラスのUAV割り当て処理を実行
             LogManager.getInstance().log("breakout point");
             for (int i = 0; i < node; i++) {
@@ -285,25 +372,33 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                     }
                 }
             }
-            
+
             // EPSフロー値から残りUAV数を計算
             int requiredUAVs = (int) requestedFlow;
             double epsAssignedFlow = currentFlow;
             int remainingUAVs = requiredUAVs - (int)epsAssignedFlow;
-            
+
             LogManager.getInstance().log("HybridPhysarumSolver: EPS assigned flow " + epsAssignedFlow + " out of " + requiredUAVs + " required UAVs");
-            LogManager.getInstance().log("HybridPhysarumSolver: Remaining UAVs to be assigned by PS: " + remainingUAVs);
-            
+
+            // 500回安定収束した場合は、PSを実行せずにEPSの解をそのまま使用
+            if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
+                LogManager.getInstance().log("HybridPhysarumSolver: EPS converged with 500 stable iterations. Using EPS solution without PS computation.");
+                remainingUAVs = 0; // PSをスキップするためにremainingUAVsを0に設定
+                requiredUAVs = (int)epsAssignedFlow; // 実際に割り当てられたフロー値を使用
+            } else {
+                LogManager.getInstance().log("HybridPhysarumSolver: Remaining UAVs to be assigned by PS: " + remainingUAVs);
+            }
+
             // 残りUAVがある場合はPSで追加計算
             if (remainingUAVs > 0) {
                 LogManager.getInstance().log("HybridPhysarumSolver: Starting PS computation for " + remainingUAVs + " remaining UAVs");
-                
+
                 // PS計算実行
                 ct = performPSComputation(client, remainingUAVs, sourceNode, destNode, ct + 1, eps);
-                
+
                 LogManager.getInstance().log("HybridPhysarumSolver: PS computation completed. Results integrated.");
             }
-            
+
             // 全UAV割り当て実行前に流量の最終確認
             LogManager.getInstance().log("HybridPhysarumSolver: Starting UAV flight assignment for all " + requiredUAVs + " UAVs");
             
@@ -382,12 +477,16 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         double pressureGradientScore = calculatePressureGradientScore();
         double pressureAbsoluteScore = calculatePressureAbsoluteScore();
         double thicknessChangeScore = calculateThicknessChangeScore();
-        
+        double sourcePressureScore = calculateSourcePressureScore();           // 新規：ソース圧力絶対値
+        double sourcePressureChangeScore = calculateSourcePressureChangeScore(); // 新規：ソース圧力変化率
+
         // 統合スコア計算（重み付き合計）
-        double totalScore = (pressureGradientScore * 2.5) + 
-                           (pressureAbsoluteScore * 2.0) + 
-                           (thicknessChangeScore * 1.5);
-        
+        double totalScore = (pressureGradientScore * 2.5) +
+                           (pressureAbsoluteScore * 2.0) +
+                           (thicknessChangeScore * 1.5) +
+                           (sourcePressureScore * 3.0) +           // 最高優先度
+                           (sourcePressureChangeScore * 3.0);      // 最高優先度
+
         return totalScore;
     }
 
@@ -476,6 +575,73 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     }
 
     /**
+     * ソースノード圧力スコアを計算する（絶対値）
+     * @return ソース圧力絶対値スコア (0.0-1.0)
+     */
+    private double calculateSourcePressureScore() {
+        if (sourceNode < 0) {
+            return 0.0; // ソースノードが設定されていない場合
+        }
+
+        double sourcePressure = Math.abs(P_tubePressure[sourceNode]);
+
+        // 段階的スコア計算
+        if (sourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
+            return 1.0; // 緊急レベル
+        } else if (sourcePressure >= SOURCE_PRESSURE_WARNING) {
+            return 0.5 + 0.5 * (sourcePressure - SOURCE_PRESSURE_WARNING)
+                       / (SOURCE_PRESSURE_EMERGENCY - SOURCE_PRESSURE_WARNING);
+        } else {
+            return 0.5 * sourcePressure / SOURCE_PRESSURE_WARNING;
+        }
+    }
+
+    /**
+     * ソースノード圧力変化率スコアを計算する
+     * @return ソース圧力変化率スコア (0.0-1.0)
+     */
+    private double calculateSourcePressureChangeScore() {
+        if (sourceNode < 0 || previousSourcePressure == 0.0) {
+            return 0.0; // 初回または前回値なしの場合は変化なし
+        }
+
+        double currentPressure = Math.abs(P_tubePressure[sourceNode]);
+        double changeRate = Math.abs(currentPressure - previousSourcePressure) / previousSourcePressure;
+
+        // 変化率3%を超えたら1.0を返す（検知トリガー）
+        if (changeRate > SOURCE_PRESSURE_CHANGE_LEVEL1) {
+            return 1.0;
+        } else {
+            // 3%以下は線形スコア
+            return changeRate / SOURCE_PRESSURE_CHANGE_LEVEL1;
+        }
+    }
+
+    /**
+     * ソースノード圧力変化率に基づくUAV減少量を計算する
+     * @return UAV減少量（0の場合は減少不要）
+     */
+    private double calculateSourcePressureReduction() {
+        if (sourceNode < 0 || previousSourcePressure == 0.0) {
+            return 0.0; // 初回または前回値なしの場合は減少なし
+        }
+
+        double currentPressure = Math.abs(P_tubePressure[sourceNode]);
+        double changeRate = Math.abs(currentPressure - previousSourcePressure) / previousSourcePressure;
+
+        // 段階的なUAV減少量の決定
+        if (changeRate >= SOURCE_PRESSURE_CHANGE_LEVEL3) {
+            return 5.0; // 10%以上: 5UAV減少
+        } else if (changeRate >= SOURCE_PRESSURE_CHANGE_LEVEL2) {
+            return 3.0; // 5%~10%: 3UAV減少
+        } else if (changeRate > SOURCE_PRESSURE_CHANGE_LEVEL1) {
+            return 1.0; // 3%~5%: 1UAV減少
+        } else {
+            return 0.0; // 3%以下: 減少なし
+        }
+    }
+
+    /**
      * UAV用フロー減少を適用する（整数単位での減少）
      * @param reductionAmount 減少UAV数（整数）
      * @param reason 減少理由
@@ -498,8 +664,9 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         currentFlow = newFlow;
         flowReductionCount++;
         stableIterationCount = 0; // リセット
-        
-        LogManager.getInstance().log("HybridPhysarumSolver: Flow reduced by " + reductionAmount + " UAVs due to " + reason + 
+        iterationsSinceFlowChange = 0; // 安定化猶予期間をリセット
+
+        LogManager.getInstance().log("HybridPhysarumSolver: Flow reduced by " + reductionAmount + " UAVs due to " + reason +
                                   ". New flow: " + currentFlow + " (reduction count: " + flowReductionCount + "/" + MAX_FLOW_REDUCTIONS + ")");
         
         return true;
