@@ -50,7 +50,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     // フロー減少（UAV整数値対応）
     private static final double EMERGENCY_FLOW_REDUCTION_UAV = 4.0; // 4UAV減少
     private static final double WARNING_FLOW_REDUCTION_UAV = 2.0; // 2UAV減少
-    private static final double MINIMUM_FLOW_RATIO = 0.7; // 最小安全フロー（要求フローの70%）
+    private static final double MINIMUM_FLOW_RATIO = 0.5; // 最小安全フロー（要求フローの70%）
 
     // 現在のフロー値と制御状態
     private double currentFlow;
@@ -58,8 +58,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     private int stableIterationCount = 0;
     private int outputIterationCursor = 0;
     private double[] previousThickness;
-    private int flowReductionCount = 0;
-    private static final int MAX_FLOW_REDUCTIONS = 5; // 振動防止用
+    private int flowReductionCount = 0; // 統計目的のカウンター（制限なし）
     private int iterationsSinceFlowChange = 0; // フロー変更後の経過イテレーション数
     private static final int STABILIZATION_GRACE_PERIOD = 50; // 安定化猶予期間（イテレーション数）
     private int sourceNode = -1; // ソースノードID
@@ -541,8 +540,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
 
             // 収束時の処理
             if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
-                // 既にループ内で整数丸め込みと出力が完了しているので、PSはスキップ
-                LogManager.getInstance().log("HybridPhysarumSolver: EPS solution finalized with flow " + currentFlow + ". Skipping PS computation.");
+                // 既にループ内で整数丸め込みと出力が完了している
+                LogManager.getInstance().log("HybridPhysarumSolver: EPS converged successfully with flow " + currentFlow + ". Integer rounding completed.");
             } else if (ct >= MAX_ITERATIONS) {
                 LogManager.getInstance().log("HybridPhysarumSolver: Reached maximum iterations (" + MAX_ITERATIONS + 
                                           ") with flow " + currentFlow + " of " + requestedFlow + " requested (stable count: " + stableIterationCount + ")");
@@ -581,13 +580,11 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
 
             LogManager.getInstance().log("HybridPhysarumSolver: EPS assigned flow " + epsAssignedFlow + " out of " + requiredUAVs + " required UAVs");
 
-            // 500回安定収束した場合は、PSを実行せずにEPSの解をそのまま使用
-            if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
-                LogManager.getInstance().log("HybridPhysarumSolver: EPS converged with 500 stable iterations. Using EPS solution without PS computation.");
-                remainingUAVs = 0; // PSをスキップするためにremainingUAVsを0に設定
-                requiredUAVs = (int)epsAssignedFlow; // 実際に割り当てられたフロー値を使用
-            } else {
+            // 残りUAVがある場合はPSで割り当て、ない場合はEPSのみで完了
+            if (remainingUAVs > 0) {
                 LogManager.getInstance().log("HybridPhysarumSolver: Remaining UAVs to be assigned by PS: " + remainingUAVs);
+            } else {
+                LogManager.getInstance().log("HybridPhysarumSolver: EPS satisfied all required UAVs (" + requiredUAVs + "). No PS computation needed.");
             }
 
             // 残りUAVがある場合はPSで追加計算
@@ -857,27 +854,22 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
      * @return フロー減少が適用された場合true、最小フロー以下の場合false
      */
     private boolean applyUAVFlowReduction(double reductionAmount, String reason) {
-        if (flowReductionCount >= MAX_FLOW_REDUCTIONS) {
-            LogManager.getInstance().log("HybridPhysarumSolver: Maximum flow reductions (" + MAX_FLOW_REDUCTIONS + ") reached. Cannot reduce further.");
-            return false;
-        }
-        
         double minFlow = Math.max(1.0, requestedFlow * MINIMUM_FLOW_RATIO);
         double newFlow = currentFlow - reductionAmount; // 整数単位での減少
-        
+
         if (newFlow < minFlow) {
             LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow below minimum safety level (" + minFlow + "). Current flow: " + currentFlow);
             return false;
         }
-        
+
         currentFlow = newFlow;
-        flowReductionCount++;
+        flowReductionCount++; // 統計目的でカウント保持
         stableIterationCount = 0; // リセット
         iterationsSinceFlowChange = 0; // 安定化猶予期間をリセット
 
         LogManager.getInstance().log("HybridPhysarumSolver: Flow reduced by " + reductionAmount + " UAVs due to " + reason +
-                                  ". New flow: " + currentFlow + " (reduction count: " + flowReductionCount + "/" + MAX_FLOW_REDUCTIONS + ")");
-        
+                                  ". New flow: " + currentFlow + " (reduction count: " + flowReductionCount + ")");
+
         return true;
     }
 
