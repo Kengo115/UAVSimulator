@@ -65,6 +65,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     private int sourceNode = -1; // ソースノードID
     private int destNode = -1; // デスティネーションノードID
     private double previousSourcePressure = 0.0; // 前回のソース圧力値
+    private double initialSourcePressure = 0.0; // 初期ソース圧力値（フロー増加判定用）
+    private boolean initialSourcePressureCaptured = false; // 初期圧力がキャプチャ済みかどうか
 
     /**
      * コンストラクタ
@@ -205,9 +207,19 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 // 予防型不安定性検知
                 double instabilityScore = calculatePreventiveInstabilityScore();
 
+                // 初期ソース圧力をキャプチャ（最初のループのみ）
+                if (!initialSourcePressureCaptured && sourceNode >= 0) {
+                    initialSourcePressure = Math.abs(P_tubePressure[sourceNode]);
+                    initialSourcePressureCaptured = true;
+                    LogManager.getInstance().log("HybridPhysarumSolver: Initial source pressure captured: " + String.format("%.4f", initialSourcePressure));
+                }
+
                 // ソース圧力の個別チェック（猶予期間に関係なく常に実行）
                 double sourcePressureScore = calculateSourcePressureScore();
                 double sourcePressureChangeScore = calculateSourcePressureChangeScore();
+                
+                // ソース圧力半減検知とフロー増加ロジック
+                boolean shouldIncreaseFlow = checkSourcePressureHalvingAndIncreaseFlow();
 
                 // ソース圧力変化率チェック（段階的なUAV減少）
                 if (sourcePressureChangeScore >= 1.0) {
@@ -867,6 +879,56 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                                   ". New flow: " + currentFlow + " (reduction count: " + flowReductionCount + "/" + MAX_FLOW_REDUCTIONS + ")");
         
         return true;
+    }
+
+    /**
+     * ソース圧力半減検知とフロー増加ロジック
+     * @return フロー増加を適用した場合true、それ以外はfalse
+     */
+    private boolean checkSourcePressureHalvingAndIncreaseFlow() {
+        // 初期ソース圧力がキャプチャされていない場合は何もしない
+        if (!initialSourcePressureCaptured || sourceNode < 0 || initialSourcePressure == 0.0) {
+            return false;
+        }
+
+        double currentPressure = Math.abs(P_tubePressure[sourceNode]);
+        
+        // 初期圧力の半分を下回ったかをチェック
+        double halfOfInitial = initialSourcePressure / 2.0;
+        
+        if (currentPressure < halfOfInitial) {
+            // 現在のフローが要求フローより少ない場合のみ増加を適用
+            if (currentFlow < requestedFlow) {
+                double increaseAmount = 1.0; // とりあえずお試しで1UAV増加
+                double newFlow = currentFlow + increaseAmount;
+                
+                // 要求フローを超えないように制限
+                if (newFlow > requestedFlow) {
+                    newFlow = requestedFlow;
+                    increaseAmount = newFlow - currentFlow;
+                }
+                
+                // フロー増加を適用
+                if (increaseAmount > 0) {
+                    currentFlow = newFlow;
+                    stableIterationCount = 0; // リセット
+                    iterationsSinceFlowChange = 0; // 安定化猶予期間をリセット
+                    
+                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure halving detected " +
+                                              " (initialPressure=" + String.format("%.4f", initialSourcePressure) +
+                                              ", currentPressure=" + String.format("%.4f", currentPressure) +
+                                              ", threshold=" + String.format("%.4f", halfOfInitial) +
+                                              "). Increasing flow by " + (int)increaseAmount + " UAVs to " + currentFlow);
+                    
+                    return true;
+                }
+            } else {
+                LogManager.getInstance().log("HybridPhysarumSolver: Source pressure halving detected but flow already at requested level " +
+                                          " (currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ")");
+            }
+        }
+        
+        return false;
     }
 
     /**
