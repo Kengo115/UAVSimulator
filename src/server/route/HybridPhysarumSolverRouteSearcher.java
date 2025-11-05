@@ -39,10 +39,10 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     private static final double SOURCE_PRESSURE_EMERGENCY = 85.0; // 正常時の約1.6倍で緊急対応
 
     // ソースノード圧力変化率の段階的閾値
-    private static final double SOURCE_PRESSURE_CHANGE_LEVEL1 = 0.03;  // 3%: 1UAV減少
-    private static final double SOURCE_PRESSURE_CHANGE_LEVEL2 = 0.05;  // 5%: 3UAV減少
-    private static final double SOURCE_PRESSURE_CHANGE_LEVEL3 = 0.10;  // 10%: 5UAV減少
-    
+    private static final double SOURCE_PRESSURE_CHANGE_LEVEL1 = 0.07;  // 7%: 1UAV減少
+    private static final double SOURCE_PRESSURE_CHANGE_LEVEL2 = 0.12;  // 12%: 3UAV減少
+    private static final double SOURCE_PRESSURE_CHANGE_LEVEL3 = 0.15;  // 15%: 5UAV減少
+
     // 統合スコアの閾値（UAV用に緩和）
     private static final double EARLY_WARNING_THRESHOLD = 3.0; // 1.0→3.0に緩和
     private static final double EMERGENCY_THRESHOLD = 5.0; // 2.0→5.0に緩和
@@ -795,7 +795,14 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         }
 
         double currentPressure = Math.abs(P_tubePressure[sourceNode]);
-        double changeRate = Math.abs(currentPressure - previousSourcePressure) / previousSourcePressure;
+        double delta = currentPressure - previousSourcePressure;
+
+        // 低下または不変ならスコア0（減少判定しない）
+        if (delta <= 0.0) {
+            return 0.0;
+        }
+
+        double changeRate = delta / previousSourcePressure;
 
         // 変化率3%を超えたら1.0を返す（検知トリガー）
         if (changeRate > SOURCE_PRESSURE_CHANGE_LEVEL1) {
@@ -805,6 +812,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             return changeRate / SOURCE_PRESSURE_CHANGE_LEVEL1;
         }
     }
+
 
     /**
      * ソースノード圧力変化率に基づくUAV減少量を計算する
