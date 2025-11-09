@@ -211,6 +211,70 @@ public class ResultOutputManager {
     }
 
     /**
+     * イテレーション毎のソース圧力を記録する
+     * @param iteration イテレーション番号
+     * @param sourcePressure ソース圧力値
+     * @param runCounter 実行カウンター
+     * @throws IOException 入出力例外
+     */
+    public static void outputIterationSourcePressure(int iteration, double sourcePressure, int runCounter) throws IOException {
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("iteration/sourcePressure", runCounter);
+        // ファイル名を作成（手法ごとに1つのファイル）
+        String filename = dirPath + "/iteration_source_pressure.txt";
+
+        // Fileオブジェクトでディレクトリの存在を確認・作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            // ディレクトリが存在しない場合は作成
+            dir.mkdirs();
+        }
+
+        // ファイルが新規作成の場合はヘッダーを書き込み、既存の場合は追記
+        File file = new File(filename);
+        try (FileWriter writer = new FileWriter(filename, true)) { // 追記モード
+            // ファイルが空の場合のみヘッダーを書き込む
+            if (file.length() == 0) {
+                writer.write("iteration,sourcePressure\n");
+            }
+            // イテレーション番号とソース圧力を追記
+            writer.write(String.format("%d,%.6f\n", iteration, sourcePressure));
+        }
+    }
+
+    /**
+     * イテレーション毎のフロー値を記録する
+     * @param iteration イテレーション番号
+     * @param flowValue フロー値（要求台数/流入フロー）
+     * @param runCounter 実行カウンター
+     * @throws IOException 入出力例外
+     */
+    public static void outputIterationFlow(int iteration, double flowValue, int runCounter) throws IOException {
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("iteration/flow", runCounter);
+        // ファイル名を作成（手法ごとに1つのファイル）
+        String filename = dirPath + "/iteration_flow.txt";
+
+        // Fileオブジェクトでディレクトリの存在を確認・作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            // ディレクトリが存在しない場合は作成
+            dir.mkdirs();
+        }
+
+        // ファイルが新規作成の場合はヘッダーを書き込み、既存の場合は追記
+        File file = new File(filename);
+        try (FileWriter writer = new FileWriter(filename, true)) { // 追記モード
+            // ファイルが空の場合のみヘッダーを書き込む
+            if (file.length() == 0) {
+                writer.write("iteration,flow\n");
+            }
+            // イテレーション番号とフロー値を追記
+            writer.write(String.format("%d,%.6f\n", iteration, flowValue));
+        }
+    }
+
+    /**
      * 経路ごとのUAV数をflow形式で出力する
      * @param client クライアント
      * @param ct カウンター
