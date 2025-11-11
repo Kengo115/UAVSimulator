@@ -36,7 +36,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
 
     // ソースノード圧力専用閾値（実データ分析：正常時51~54、異常時87以上）
     private static final double SOURCE_PRESSURE_WARNING = 70.0; // 正常時の約1.3倍で早期警告
-    private static final double SOURCE_PRESSURE_EMERGENCY = 85.0; // 正常時の約1.6倍で緊急対応
+    private static final double SOURCE_PRESSURE_EMERGENCY = 100.0; // フロー半分に減少する閾値
 
     // ソースノード圧力変化率の段階的閾値
     private static final double SOURCE_PRESSURE_CHANGE_LEVEL1 = 0.07;  // 7%: 1UAV減少
@@ -64,8 +64,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     private int sourceNode = -1; // ソースノードID
     private int destNode = -1; // デスティネーションノードID
     private double previousSourcePressure = 0.0; // 前回のソース圧力値
-    private double initialSourcePressure = 0.0; // 初期ソース圧力値（フロー増加判定用）
-    private boolean initialSourcePressureCaptured = false; // 初期圧力がキャプチャ済みかどうか
+    private double currentFlowBaselinePressure = 0.0; // 現在の要求フローでの基準圧力値（フロー増加判定用）
+    private boolean currentFlowBaselineCaptured = false; // 現在フロー基準圧力がキャプチャ済みかどうか
 
     /**
      * コンストラクタ
@@ -206,41 +206,32 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 // 予防型不安定性検知
                 double instabilityScore = calculatePreventiveInstabilityScore();
 
-                // 初期ソース圧力をキャプチャ（最初のループのみ）
-                if (!initialSourcePressureCaptured && sourceNode >= 0) {
-                    initialSourcePressure = Math.abs(P_tubePressure[sourceNode]);
-                    initialSourcePressureCaptured = true;
-                    LogManager.getInstance().log("HybridPhysarumSolver: Initial source pressure captured: " + String.format("%.4f", initialSourcePressure));
+                // 現在フロー基準圧力をキャプチャ（フロー変更後の最初のループのみ）
+                if (!currentFlowBaselineCaptured && sourceNode >= 0) {
+                    currentFlowBaselinePressure = Math.abs(P_tubePressure[sourceNode]);
+                    currentFlowBaselineCaptured = true;
+                    LogManager.getInstance().log("HybridPhysarumSolver: Current flow baseline pressure captured: " + String.format("%.4f", currentFlowBaselinePressure));
                 }
 
                 // ソース圧力の個別チェック（猶予期間に関係なく常に実行）
                 double sourcePressureScore = calculateSourcePressureScore();
                 double sourcePressureChangeScore = calculateSourcePressureChangeScore();
                 
-                // ソース圧力半減検知とフロー増加ロジック
-                boolean shouldIncreaseFlow = checkSourcePressureHalvingAndIncreaseFlow();
+                // ソース圧力10%減少検知とフロー増加ロジック
+                boolean shouldIncreaseFlow = checkSourcePressureReductionAndIncreaseFlow();
 
-                // ソース圧力変化率チェック（段階的なUAV減少）
-                if (sourcePressureChangeScore >= 1.0) {
+                // ソース圧力絶対値チェック（最優先 - フロー半減）
+                if (sourcePressureScore >= 1.0) {
+                    // ソース圧力絶対値が緊急レベル（100以上）- フローを半分にする（整数値）
                     double currentPressure = Math.abs(P_tubePressure[sourceNode]);
-                    double changeRate = (currentPressure - previousSourcePressure) / previousSourcePressure;
-                    double reductionAmount = calculateSourcePressureReduction();
-
-                    String reductionLevel;
-                    if (changeRate >= SOURCE_PRESSURE_CHANGE_LEVEL3) {
-                        reductionLevel = "CRITICAL (≥10%)";
-                    } else if (changeRate >= SOURCE_PRESSURE_CHANGE_LEVEL2) {
-                        reductionLevel = "HIGH (5-10%)";
-                    } else {
-                        reductionLevel = "MODERATE (3-5%)";
-                    }
-
-                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure change detected [" + reductionLevel + "] at iteration " + (ct + 1) +
-                                              " (changeRate=" + String.format("%.1f%%", changeRate * 100) +
-                                              ", " + String.format("%.2f", previousSourcePressure) + " → " + String.format("%.2f", currentPressure) +
-                                              ", reducing " + (int)reductionAmount + " UAVs)");
-
-                    if (!applyUAVFlowReduction(reductionAmount, "Source pressure change rate")) {
+                    double targetHalfFlow = currentFlow / 2.0;
+                    double halvingReductionAmount = currentFlow - Math.ceil(targetHalfFlow); // 半分値を繰り上げして減少量を計算
+                    
+                    LogManager.getInstance().log("HybridPhysarumSolver: CRITICAL absolute source pressure detected at iteration " + (ct + 1) +
+                                              " (sourcePressure=" + String.format("%.2f", currentPressure) + 
+                                              "). Halving flow from " + currentFlow + " to " + Math.ceil(targetHalfFlow) + " (reduction: " + halvingReductionAmount + " UAVs)");
+                    
+                    if (!applyUAVFlowReduction(halvingReductionAmount, "Critical absolute source pressure - halving flow")) {
                         LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Treating as stable iteration.");
                         // 最小フロー制約に達した場合、これ以上改善できないため安定とみなす
                         stableIterationCount++;
@@ -291,11 +282,27 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                             break;
                         }
                     }
-                } else if (sourcePressureScore >= 1.0) {
-                    // ソース圧力絶対値が緊急レベル（85以上）
-                    LogManager.getInstance().log("HybridPhysarumSolver: CRITICAL absolute source pressure detected at iteration " + (ct + 1) +
-                                              " (sourcePressure=" + String.format("%.2f", Math.abs(P_tubePressure[sourceNode])) + ")");
-                    if (!applyUAVFlowReduction(EMERGENCY_FLOW_REDUCTION_UAV, "Critical absolute source pressure")) {
+                } else if (sourcePressureChangeScore >= 1.0) {
+                    // ソース圧力変化率チェック（段階的なUAV減少）
+                    double currentPressure = Math.abs(P_tubePressure[sourceNode]);
+                    double changeRate = (currentPressure - previousSourcePressure) / previousSourcePressure;
+                    double reductionAmount = calculateSourcePressureReduction();
+
+                    String reductionLevel;
+                    if (changeRate >= SOURCE_PRESSURE_CHANGE_LEVEL3) {
+                        reductionLevel = "CRITICAL (≥10%)";
+                    } else if (changeRate >= SOURCE_PRESSURE_CHANGE_LEVEL2) {
+                        reductionLevel = "HIGH (5-10%)";
+                    } else {
+                        reductionLevel = "MODERATE (3-5%)";
+                    }
+
+                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure change detected [" + reductionLevel + "] at iteration " + (ct + 1) +
+                                              " (changeRate=" + String.format("%.1f%%", changeRate * 100) +
+                                              ", " + String.format("%.2f", previousSourcePressure) + " → " + String.format("%.2f", currentPressure) +
+                                              ", reducing " + (int)reductionAmount + " UAVs)");
+
+                    if (!applyUAVFlowReduction(reductionAmount, "Source pressure change rate")) {
                         LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Treating as stable iteration.");
                         // 最小フロー制約に達した場合、これ以上改善できないため安定とみなす
                         stableIterationCount++;
@@ -877,6 +884,12 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         flowReductionCount++; // 統計目的でカウント保持
         stableIterationCount = 0; // リセット
         iterationsSinceFlowChange = 0; // 安定化猶予期間をリセット
+        
+        // 圧力変化率計算のための前回圧力をリセット（フロー変更後の過度な変化率検知を回避）
+        previousSourcePressure = 0.0;
+        
+        // 基準圧力をリセット（新しいフロー値での基準を次回キャプチャ）
+        currentFlowBaselineCaptured = false;
 
         LogManager.getInstance().log("HybridPhysarumSolver: Flow reduced by " + reductionAmount + " UAVs due to " + reason +
                                   ". New flow: " + currentFlow + " (reduction count: " + flowReductionCount + ")");
@@ -885,24 +898,24 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     }
 
     /**
-     * ソース圧力半減検知とフロー増加ロジック
+     * ソース圧力10%減少検知とフロー増加ロジック
      * @return フロー増加を適用した場合true、それ以外はfalse
      */
-    private boolean checkSourcePressureHalvingAndIncreaseFlow() {
-        // 初期ソース圧力がキャプチャされていない場合は何もしない
-        if (!initialSourcePressureCaptured || sourceNode < 0 || initialSourcePressure == 0.0) {
+    private boolean checkSourcePressureReductionAndIncreaseFlow() {
+        // 現在フロー基準圧力がキャプチャされていない場合は何もしない
+        if (!currentFlowBaselineCaptured || sourceNode < 0 || currentFlowBaselinePressure == 0.0) {
             return false;
         }
 
         double currentPressure = Math.abs(P_tubePressure[sourceNode]);
         
-        // 初期圧力の半分を下回ったかをチェック
-        double halfOfInitial = initialSourcePressure / 2.0;
+        // 現在の要求フローでの基準圧力から10%減少したかをチェック
+        double tenPercentReduction = currentFlowBaselinePressure * 0.9; // 90%になった場合（10%減少）
         
-        if (currentPressure < halfOfInitial) {
+        if (currentPressure < tenPercentReduction) {
             // 現在のフローが要求フローより少ない場合のみ増加を適用
             if (currentFlow < requestedFlow) {
-                double increaseAmount = 1.0; // とりあえずお試しで1UAV増加
+                double increaseAmount = 1.0; // 1UAV増加
                 double newFlow = currentFlow + increaseAmount;
                 
                 // 要求フローを超えないように制限
@@ -917,16 +930,19 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                     stableIterationCount = 0; // リセット
                     iterationsSinceFlowChange = 0; // 安定化猶予期間をリセット
                     
-                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure halving detected " +
-                                              " (initialPressure=" + String.format("%.4f", initialSourcePressure) +
+                    // 基準圧力をリセット（新しいフロー値での基準を次回キャプチャ）
+                    currentFlowBaselineCaptured = false;
+                    
+                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure 10% reduction detected " +
+                                              " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
                                               ", currentPressure=" + String.format("%.4f", currentPressure) +
-                                              ", threshold=" + String.format("%.4f", halfOfInitial) +
+                                              ", threshold=" + String.format("%.4f", tenPercentReduction) +
                                               "). Increasing flow by " + (int)increaseAmount + " UAVs to " + currentFlow);
                     
                     return true;
                 }
             } else {
-                LogManager.getInstance().log("HybridPhysarumSolver: Source pressure halving detected but flow already at requested level " +
+                LogManager.getInstance().log("HybridPhysarumSolver: Source pressure 10% reduction detected but flow already at requested level " +
                                           " (currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ")");
             }
         }
