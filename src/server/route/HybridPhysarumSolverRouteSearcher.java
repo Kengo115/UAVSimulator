@@ -50,7 +50,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     // フロー減少（UAV整数値対応）
     private static final double EMERGENCY_FLOW_REDUCTION_UAV = 4.0; // 4UAV減少
     private static final double WARNING_FLOW_REDUCTION_UAV = 2.0; // 2UAV減少
-    private static final double MINIMUM_FLOW_RATIO = 0.5; // 最小安全フロー（要求フローの70%）
+    private static final double MINIMUM_FLOW_RATIO = 0.1; // 最小安全フロー（要求フローの10%）
 
     // 現在のフロー値と制御状態
     private double currentFlow;
@@ -529,6 +529,17 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 
                 // 前回チューブ厚を更新（次回の変化率計算用）
                 updatePreviousThickness();
+
+                // イテレーション毎の結果を記録
+                try {
+                    if (sourceNode >= 0) {
+                        double currentSourcePressure = P_tubePressure[sourceNode];
+                        ResultOutputManager.outputIterationSourcePressure(ct + 1, currentSourcePressure, serverController.getRunCounter());
+                    }
+                    ResultOutputManager.outputIterationFlow(ct + 1, currentFlow, serverController.getRunCounter());
+                } catch (IOException e) {
+                    LogManager.getInstance().error("Failed to output iteration data", e);
+                }
 
                 // 前回のソース圧力を更新（次回の変化率計算用）
                 if (sourceNode >= 0) {

@@ -214,6 +214,18 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             // 追加のプロット（サブクラスでオーバーライド可能）
             additionalPlotting(client, ct);
 
+            // イテレーション毎の結果を記録
+            try {
+                int sourceNodeId = client.getFlow().getSource().getId();
+                if (sourceNodeId >= 0 && sourceNodeId < P_tubePressure.length) {
+                    double currentSourcePressure = P_tubePressure[sourceNodeId];
+                    ResultOutputManager.outputIterationSourcePressure(ct + 1, currentSourcePressure, serverController.getRunCounter());
+                }
+                ResultOutputManager.outputIterationFlow(ct + 1, client.getFlow().getTheNumberOfUAV(), serverController.getRunCounter());
+            } catch (IOException e) {
+                LogManager.getInstance().error("Failed to output iteration data", e);
+            }
+
             ct++;
             
             // 最後のループの場合に実行する処理
