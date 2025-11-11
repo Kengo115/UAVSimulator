@@ -94,7 +94,7 @@ public class ResultOutputManager {
      * @param runCounter 実行カウンター
      * @throws IOException 入出力例外
      */
-    public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
+    public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter, double inflow) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("flow", runCounter);
         // ファイル名を作成
@@ -107,6 +107,8 @@ public class ResultOutputManager {
             dir.mkdirs();
         }
         try (FileWriter writer = new FileWriter(filename)) {
+            // 1行目: 流入フロー,ソース,シンク
+            writer.write(String.format("%.1f,%d,%d\n", inflow, client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
             writer.write("source,destination,flow\n");
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
@@ -127,8 +129,8 @@ public class ResultOutputManager {
      * @param runCounter 実行カウンター
      * @throws IOException 入出力例外
      */
-    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
-        outputToTxt(client, ct, link, node, runCounter, null);
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double inflow) throws IOException {
+        outputToTxt(client, ct, link, node, runCounter, null, inflow);
     }
 
     /**
@@ -139,9 +141,26 @@ public class ResultOutputManager {
      * @param node ノード数
      * @param runCounter 実行カウンター
      * @param pressureCoefficient 圧力係数行列
+     * @param inflow 流入フロー
      * @throws IOException 入出力例外
      */
-    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient) throws IOException {
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient, double inflow) throws IOException {
+        outputToTxt(client, ct, link, node, runCounter, pressureCoefficient, null, inflow);
+    }
+
+    /**
+     * statusファイルに管の長さ，管の太さ，管の容量，圧力係数，チューブ圧力を出力する
+     * @param client クライアント
+     * @param ct カウンター
+     * @param link リンク情報
+     * @param node ノード数
+     * @param runCounter 実行カウンター
+     * @param pressureCoefficient 圧力係数行列
+     * @param tubePressure チューブ圧力配列
+     * @param inflow 流入フロー
+     * @throws IOException 入出力例外
+     */
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient, double[] tubePressure, double inflow) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("status", runCounter);
         // ファイル名を作成
@@ -154,9 +173,16 @@ public class ResultOutputManager {
             dir.mkdirs();
         }
         try (FileWriter writer = new FileWriter(filename)) {
-            //要求uav台数，出発ノード，到着ノードを１行目に出力
-            writer.write(String.format("%.1f,%d,%d\n", client.getFlow().getTheNumberOfUAV(), client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
-            writer.write("source,destination,length,thickness,capacity,pressureCoefficient\n");
+            // 1行目: 流入フロー，出発ノード，到着ノード（要求UAV数→流入フローへ変更）
+            writer.write(String.format("%.1f,%d,%d\n", inflow, client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
+            
+            // ヘッダー行（P_tubePressureを追加）
+            if (tubePressure != null) {
+                writer.write("source,destination,length,thickness,capacity,pressureCoefficient,sourcePressure,destPressure\n");
+            } else {
+                writer.write("source,destination,length,thickness,capacity,pressureCoefficient\n");
+            }
+            
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
                     if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY) {
@@ -165,7 +191,19 @@ public class ResultOutputManager {
                         if (pressureCoefficient != null && i != j) {
                             pressureCoeff = Math.abs(pressureCoefficient[i][j]);
                         }
-                        writer.write(String.format("%d,%d,%.4f,%.4f,%.4f,%.4f\n", i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), link[i][j].getCapacity(), pressureCoeff));
+                        
+                        if (tubePressure != null) {
+                            // P_tubePressureも出力
+                            double sourcePressure = tubePressure[i];
+                            double destPressure = tubePressure[j];
+                            writer.write(String.format("%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n", 
+                                i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), 
+                                link[i][j].getCapacity(), pressureCoeff, sourcePressure, destPressure));
+                        } else {
+                            writer.write(String.format("%d,%d,%.4f,%.4f,%.4f,%.4f\n", 
+                                i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), 
+                                link[i][j].getCapacity(), pressureCoeff));
+                        }
                     }
                 }
             }
