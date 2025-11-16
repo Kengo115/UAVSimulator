@@ -996,50 +996,49 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     }
                 }
             }
-            // 【優先度3】圧力減少率チェック（現在フロー基準圧力から10%減少でフロー増加）
-            else {
-                if (shouldIncrease && currentFlow < requestedFlow) {
-                    // デバッグログ
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase conditions - shouldIncrease=" + shouldIncrease + 
-                                               ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
-                                               ", lowerBound=" + lowerBound + ", upperBound=" + upperBound);
-                    
-                    // 下限を現在のフロー値に更新
-                    lowerBound = currentFlow;
-                    double newFlow = Math.ceil((lowerBound + Math.min(upperBound, requestedFlow)) / 2.0);
-                    
-                    // 要求フローを超えないように制限
-                    if (newFlow > requestedFlow) {
-                        newFlow = requestedFlow;
-                    }
-                    
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Calculated newFlow=" + newFlow + 
-                                               " (newFlow != currentFlow: " + (newFlow != currentFlow) + 
-                                               ", newFlow <= upperBound: " + (newFlow <= upperBound) + ")");
-                    
-                    if (newFlow != currentFlow && newFlow <= upperBound) {
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3] Source pressure 10% reduction detected at iteration " + (ct + 1) + 
-                                                   " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
-                                                   ", currentPressure=" + String.format("%.4f", currentSourcePressure) +
-                                                   "). Binary search flow increase: " + currentFlow + " → " + newFlow +
-                                                   " (new bounds: " + lowerBound + " - " + Math.min(upperBound, requestedFlow) + ")");
-                        
-                        currentFlow = newFlow;
-                        stableIterationCount = 0; // リセット
-                        currentFlowBaselineCaptured = false; // 基準圧力をリセット
-                        flowChanged = true;
-                        // EPSは初期化せず、フロー値のみ変更してEPS継続
-                    } else {
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase skipped - newFlow=" + newFlow + 
-                                                   ", currentFlow=" + currentFlow + ", upperBound=" + upperBound);
-                    }
-                } else {
-                    // 100回に1回だけログ出力（フロー増加しない理由）
-                    if ((ct + 1) % 100 == 0) {
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase not triggered - shouldIncrease=" + shouldIncrease + 
-                                                   ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow);
-                    }
+            
+            // 【優先度3】圧力減少率チェック（現在フロー基準圧力から10%減少でフロー増加）- 独立して実行
+            if (!flowChanged && shouldIncrease && currentFlow < requestedFlow) {
+                // デバッグログ
+                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase conditions - shouldIncrease=" + shouldIncrease + 
+                                           ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
+                                           ", lowerBound=" + lowerBound + ", upperBound=" + upperBound);
+                
+                // 下限を現在のフロー値に更新
+                lowerBound = currentFlow;
+                double newFlow = Math.ceil((lowerBound + Math.min(upperBound, requestedFlow)) / 2.0);
+                
+                // 要求フローを超えないように制限
+                if (newFlow > requestedFlow) {
+                    newFlow = requestedFlow;
                 }
+                
+                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Calculated newFlow=" + newFlow + 
+                                           " (newFlow != currentFlow: " + (newFlow != currentFlow) + 
+                                           ", newFlow <= requestedFlow: " + (newFlow <= requestedFlow) + ")");
+                
+                if (newFlow != currentFlow && newFlow <= requestedFlow) {
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3] Source pressure 10% reduction detected at iteration " + (ct + 1) + 
+                                               " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
+                                               ", currentPressure=" + String.format("%.4f", currentSourcePressure) +
+                                               "). Binary search flow increase: " + currentFlow + " → " + newFlow +
+                                               " (new bounds: " + lowerBound + " - " + Math.min(upperBound, requestedFlow) + ")");
+                    
+                    currentFlow = newFlow;
+                    stableIterationCount = 0; // リセット
+                    currentFlowBaselineCaptured = false; // 基準圧力をリセット
+                    flowChanged = true;
+                    // EPSは初期化せず、フロー値のみ変更してEPS継続
+                } else {
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase skipped - newFlow=" + newFlow + 
+                                               ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
+                                               ", condition check: newFlow != currentFlow=" + (newFlow != currentFlow) +
+                                               ", newFlow <= requestedFlow=" + (newFlow <= requestedFlow));
+                }
+            } else if (!flowChanged && (ct + 1) % 100 == 0) {
+                // 100回に1回だけログ出力（フロー増加しない理由）
+                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase not triggered - shouldIncrease=" + shouldIncrease + 
+                                           ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ", flowChanged=" + flowChanged);
             }
 
             // 安定カウンター増加（フロー変更されなかった場合のみ）
