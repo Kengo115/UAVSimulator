@@ -27,8 +27,9 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 30; // 二分探索の最大回数
 
     // ソースノード圧力専用閾値
-    private static final double SOURCE_PRESSURE_EMERGENCY = 100.0; // 圧力絶対値閾値
-    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.10; // 10%変化率閾値
+    private static final double SOURCE_PRESSURE_EMERGENCY = 80; // 圧力絶対値閾値
+    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.20; // 20%変化率閾値（フロー減少用）
+    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.30; // 20%減少閾値（フロー増加用）
 
     // フロー減少（UAV整数値対応）
     private static final double MINIMUM_FLOW_RATIO = 0.1; // 最小安全フロー（要求フローの10%）
@@ -335,10 +336,10 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
         double currentPressure = Math.abs(P_tubePressure[sourceNode]);
         
-        // 現在の要求フローでの基準圧力から10%減少したかをチェック
-        double tenPercentReduction = currentFlowBaselinePressure * 0.9; // 90%になった場合（10%減少）
+        // 現在の要求フローでの基準圧力から指定%減少したかをチェック
+        double reductionThreshold = currentFlowBaselinePressure * (1.0 - SOURCE_PRESSURE_REDUCTION_THRESHOLD); // 閾値計算
         
-        return currentPressure < tenPercentReduction;
+        return currentPressure < reductionThreshold;
     }
 
     /**
@@ -353,8 +354,8 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             return false;
         }
 
-        double tenPercentReduction = baselinePressure * 0.9;
-        return currentPressure < tenPercentReduction;
+        double reductionThreshold = baselinePressure * (1.0 - SOURCE_PRESSURE_REDUCTION_THRESHOLD);
+        return currentPressure < reductionThreshold;
     }
 
     /**
