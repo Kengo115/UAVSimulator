@@ -993,12 +993,15 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
                     }
                 }
-                // 【優先度2】圧力増加率チェック（直前との比較で30%増加でフロー減少）
-                else if (previousSourcePressure > 0.0) {
-                    double changeRate = (currentSourcePressure - previousSourcePressure) / previousSourcePressure;
-                    if (changeRate >= SOURCE_PRESSURE_CHANGE_THRESHOLD) {
+                // 【優先度2】圧力増加率チェック（現在フロー基準圧力からの30%増加でフロー減少）
+                else if (currentFlowBaselineCaptured && currentFlowBaselinePressure > 0.0) {
+                    double increaseThreshold = currentFlowBaselinePressure * (1.0 + SOURCE_PRESSURE_CHANGE_THRESHOLD);
+                    if (currentSourcePressure >= increaseThreshold) {
+                        double increaseRate = (currentSourcePressure - currentFlowBaselinePressure) / currentFlowBaselinePressure;
                         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 2] Pressure increase detected at iteration " + (ct + 1) + 
-                                                   " (change rate: " + String.format("%.2f%%", changeRate * 100) + "). Applying binary search flow reduction.");
+                                                   " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) + 
+                                                   ", currentPressure=" + String.format("%.4f", currentSourcePressure) + 
+                                                   ", increase rate: " + String.format("%.2f%%", increaseRate * 100) + "). Applying binary search flow reduction.");
                         
                         // 上限を現在のフロー値に更新
                         upperBound = currentFlow;
@@ -1023,29 +1026,54 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             } else {
                 // 安定化フェーズ中の処理
                 stabilizationIterationCount++;
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Stabilization phase iteration " + stabilizationIterationCount + "/" + STABILIZATION_PHASE_ITERATIONS + " (no anomaly detection)");
+                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Stabilization phase iteration " + stabilizationIterationCount + "/" + STABILIZATION_PHASE_ITERATIONS + " (pressure emergency detection only)");
                 
-                // 安定化フェーズ完了チェック
-                if (stabilizationIterationCount >= STABILIZATION_PHASE_ITERATIONS) {
-                    inStabilizationPhase = false;
-                    stabilizationIterationCount = 0;
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Stabilization phase completed. Resuming anomaly detection.");
+                // 安定化フェーズ中でも圧力絶対値100の異常検知のみ作動
+                if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 1 - Stabilization Phase] Pressure emergency detected during stabilization at iteration " + (ct + 1) + 
+                                               " (pressure: " + String.format("%.2f", currentSourcePressure) + "). Applying binary search flow reduction.");
                     
-                    // 安定化フェーズ後の安全性チェック
-                    if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
-                        LogManager.getInstance().error("BinaryExtendedPhysarumSolver: CRITICAL ERROR - Pressure still >= 100 after stabilization phase (pressure: " + String.format("%.2f", currentSourcePressure) + "). System termination required.");
-                        throw new RuntimeException("System termination: Pressure emergency persists after stabilization phase");
+                    // 上限を現在のフロー値に更新
+                    upperBound = currentFlow;
+                    double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
+                    
+                    if (newFlow != currentFlow && newFlow > lowerBound) {
+                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Binary search flow reduction during stabilization: " + currentFlow + " → " + newFlow +
+                                                   " (new bounds: " + lowerBound + " - " + upperBound + ")");
+                        
+                        double oldFlow = currentFlow;
+                        currentFlow = newFlow;
+                        stableIterationCount = 0; // リセット
+                        currentFlowBaselineCaptured = false; // 基準圧力をリセット
+                        flowChanged = true;
+                        
+                        // 安定化フェーズをリセット（新しいフロー値で再開始）
+                        stabilizationIterationCount = 0;
+                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow reduced from " + oldFlow + " to " + currentFlow + " during stabilization. Restarting stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state preserved)");
                     }
-                    
-                    if (P_tubePressure[sourceNode] < 0.0) {
-                        LogManager.getInstance().error("BinaryExtendedPhysarumSolver: CRITICAL ERROR - Negative pressure detected after stabilization phase (pressure: " + P_tubePressure[sourceNode] + "). System termination required.");
-                        throw new RuntimeException("System termination: Negative pressure detected after stabilization phase");
+                } else {
+                    // 安定化フェーズ完了チェック
+                    if (stabilizationIterationCount >= STABILIZATION_PHASE_ITERATIONS) {
+                        inStabilizationPhase = false;
+                        stabilizationIterationCount = 0;
+                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Stabilization phase completed. Resuming full anomaly detection.");
+                        
+                        // 安定化フェーズ後の安全性チェック
+                        if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
+                            LogManager.getInstance().error("BinaryExtendedPhysarumSolver: CRITICAL ERROR - Pressure still >= 100 after stabilization phase (pressure: " + String.format("%.2f", currentSourcePressure) + "). System termination required.");
+                            throw new RuntimeException("System termination: Pressure emergency persists after stabilization phase");
+                        }
+                        
+                        if (P_tubePressure[sourceNode] < 0.0) {
+                            LogManager.getInstance().error("BinaryExtendedPhysarumSolver: CRITICAL ERROR - Negative pressure detected after stabilization phase (pressure: " + P_tubePressure[sourceNode] + "). System termination required.");
+                            throw new RuntimeException("System termination: Negative pressure detected after stabilization phase");
+                        }
                     }
                 }
             }
             
-            // 【優先度3】圧力減少率チェック（現在フロー基準圧力から10%減少でフロー増加）- 独立して実行
-            if (!flowChanged && shouldIncrease && currentFlow < requestedFlow) {
+            // 【優先度3】圧力減少率チェック（現在フロー基準圧力から30%減少でフロー増加）- 安定化フェーズ中はスキップ
+            if (!inStabilizationPhase && !flowChanged && shouldIncrease && currentFlow < requestedFlow) {
                 // デバッグログ
                 LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase conditions - shouldIncrease=" + shouldIncrease + 
                                            ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
@@ -1065,7 +1093,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                                            ", newFlow <= requestedFlow: " + (newFlow <= requestedFlow) + ")");
                 
                 if (newFlow != currentFlow && newFlow <= requestedFlow) {
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3] Source pressure 10% reduction detected at iteration " + (ct + 1) + 
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3] Source pressure 30% reduction detected at iteration " + (ct + 1) + 
                                                " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
                                                ", currentPressure=" + String.format("%.4f", currentSourcePressure) +
                                                "). Binary search flow increase: " + currentFlow + " → " + newFlow +
@@ -1075,7 +1103,11 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     stableIterationCount = 0; // リセット
                     currentFlowBaselineCaptured = false; // 基準圧力をリセット
                     flowChanged = true;
-                    // EPSは初期化せず、フロー値のみ変更してEPS継続
+                    
+                    // フロー増加後に安定化フェーズを開始（EPSは初期化しない）
+                    inStabilizationPhase = true;
+                    stabilizationIterationCount = 0;
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow increased to " + currentFlow + ". Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state preserved)");
                 } else {
                     LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase skipped - newFlow=" + newFlow + 
                                                ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
@@ -1084,8 +1116,8 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                 }
             } else if (!flowChanged && (ct + 1) % 100 == 0) {
                 // 100回に1回だけログ出力（フロー増加しない理由）
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase not triggered - shouldIncrease=" + shouldIncrease + 
-                                           ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ", flowChanged=" + flowChanged);
+                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase not triggered - inStabilizationPhase=" + inStabilizationPhase + 
+                                           ", shouldIncrease=" + shouldIncrease + ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ", flowChanged=" + flowChanged);
             }
 
             // 安定カウンター増加（フロー変更されなかった場合のみ）
