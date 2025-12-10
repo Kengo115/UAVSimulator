@@ -5,6 +5,7 @@ import item.BeaconCluster;
 import item.Link;
 import item.Uav;
 import server.controller.ServerController;
+import server.util.EPSSavePoint;
 import server.util.ICCGSolver;
 import server.util.LogManager;
 import server.util.MathUtils;
@@ -57,6 +58,9 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
     private double lowerBound = 0.0; // 下限
     private double upperBound; // 上限（要求フロー）
     private int binarySearchIteration = 0; // 二分探索回数
+
+    // EPSセーブポイント機能
+    private EPSSavePoint epsSavePoint = null; // EPSセーブポイント
 
     /**
      * コンストラクタ
@@ -116,8 +120,12 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         initializePreviousThickness();
         
         try {
-            // 動的二分探索EPS実行
-            performDynamicBinarySearchEPS(client, eps);
+        // EPSセーブポイントの初期化
+        epsSavePoint = new EPSSavePoint(node);
+        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPSSavePoint initialized");
+        
+        // 動的二分探索EPS実行
+        performDynamicBinarySearchEPS(client, eps);
 
             // 親クラスのUAV割り当て処理を実行
             LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Setting up flow capacity arrays");
@@ -376,6 +384,10 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         
         // EPSの初期化
         initializeEPS();
+        
+        // *** 初期セーブポイントの作成 ***
+        epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Initial EPS savepoint created. " + epsSavePoint.getStatistics());
         
         stableIterationCount = 0;
         previousSourcePressure = 0.0;
@@ -870,6 +882,10 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         // EPSの初期化
         initializeEPS();
         
+        // *** 初期セーブポイントの作成 ***
+        epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Initial EPS savepoint created. " + epsSavePoint.getStatistics());
+        
         stableIterationCount = 0;
         previousSourcePressure = 0.0;
         currentFlowBaselinePressure = 0.0;
@@ -987,10 +1003,37 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                         currentFlowBaselineCaptured = false; // 基準圧力をリセット
                         flowChanged = true;
                         
+                        // *** フロー減少後のEPS状態復元 ***
+                        if (epsSavePoint.isAvailable()) {
+                            epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS state restored from savepoint after flow reduction due to pressure emergency. " + epsSavePoint.getStatistics());
+                        } else {
+                            // セーブポイントがない場合（流入フロー初回等）は初期状態に戻す
+                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: No savepoint available, restoring EPS to initial state after flow reduction");
+                            initializeEPS();
+                        }
+                        
                         // フロー減少後に安定化フェーズを開始
                         inStabilizationPhase = true;
                         stabilizationIterationCount = 0;
                         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
+                    } else {
+                        // フロー変更がない場合はEPS復元のみ実行
+                        if (epsSavePoint.isAvailable()) {
+                            epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS state restored from savepoint (no flow change required). " + epsSavePoint.getStatistics());
+                        } else {
+                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: No savepoint available, restoring EPS to initial state (no flow change required)");
+                            initializeEPS();
+                        }
+                        
+                        // EPS復元後は安定化フェーズに入る
+                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS state restored but no flow change required. Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
+                        inStabilizationPhase = true;
+                        stabilizationIterationCount = 0;
+                        stableIterationCount = 0; // リセット
+                        currentFlowBaselineCaptured = false; // 基準圧力をリセット
+                        flowChanged = true; // 復元により状態が変化したことを示す
                     }
                 }
                 // 【優先度2】圧力増加率チェック（現在フロー基準圧力からの30%増加でフロー減少）
@@ -1047,9 +1090,18 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                         currentFlowBaselineCaptured = false; // 基準圧力をリセット
                         flowChanged = true;
                         
+                        // *** フロー減少後のEPS状態復元（安定化フェーズ中も同様） ***
+                        if (epsSavePoint.isAvailable()) {
+                            epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS state restored from savepoint after flow reduction during stabilization. " + epsSavePoint.getStatistics());
+                        } else {
+                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: No savepoint available, restoring EPS to initial state after flow reduction during stabilization");
+                            initializeEPS();
+                        }
+                        
                         // 安定化フェーズをリセット（新しいフロー値で再開始）
                         stabilizationIterationCount = 0;
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow reduced from " + oldFlow + " to " + currentFlow + " during stabilization. Restarting stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state preserved)");
+                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow reduced from " + oldFlow + " to " + currentFlow + " during stabilization. Restarting stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state restored)");
                     }
                 } else {
                     // 安定化フェーズ完了チェック
@@ -1098,6 +1150,10 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                                                ", currentPressure=" + String.format("%.4f", currentSourcePressure) +
                                                "). Binary search flow increase: " + currentFlow + " → " + newFlow +
                                                " (new bounds: " + lowerBound + " - " + Math.min(upperBound, requestedFlow) + ")");
+                    
+                    // *** フロー増加直前のEPSセーブポイント保存 ***
+                    epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS savepoint created before flow increase from " + currentFlow + " to " + newFlow + ". " + epsSavePoint.getStatistics());
                     
                     currentFlow = newFlow;
                     stableIterationCount = 0; // リセット
