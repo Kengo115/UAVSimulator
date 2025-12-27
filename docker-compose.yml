@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Redis service for UAV state management and job queue
+  redis:
+    image: redis:7.2-alpine
+    container_name: uav-simulator-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    volumes:
+      - redis-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - uav-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Redis Commander: Web UI for Redis management (optional, for development)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: uav-redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - uav-network
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+networks:
+  uav-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local
