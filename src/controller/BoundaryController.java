@@ -8,6 +8,7 @@ import item.Flow;
 import item.Uav;
 import server.controller.ServerController;
 import server.network.TopologyFileReader;
+import server.redis.RedisConnectionManager;
 import server.uav.UAVFlyScheduler;
 import server.util.LogManager;
 
@@ -294,6 +295,16 @@ public class BoundaryController {
         BoundaryController boundaryController = new BoundaryController();
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
 
+        // Phase 1: Redis接続を確立
+        try {
+            RedisConnectionManager redisManager = RedisConnectionManager.getInstance();
+            redisManager.connect();
+            System.out.println("✓ Redisに接続しました: " + redisManager.getConnectionInfo());
+        } catch (IOException e) {
+            System.err.println("⚠ Redis接続に失敗しました。メモリベースで動作します。");
+            LogManager.getInstance().error("Redis接続失敗", e);
+        }
+
         // ランダムクライアント生成実験
         try {
             // トポロジファイルのパスを入力
@@ -451,7 +462,16 @@ public class BoundaryController {
             
             // プログラム終了時にログマネージャーを閉じるようにシャットダウンフックを追加
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                LogManager.getInstance().log("プログラムを終了します。ログを閉じます。");
+                LogManager.getInstance().log("プログラムを終了します。");
+
+                // Phase 1: Redis接続を切断
+                try {
+                    RedisConnectionManager.getInstance().disconnect();
+                } catch (Exception e) {
+                    System.err.println("Redis切断中にエラーが発生しました: " + e.getMessage());
+                }
+
+                LogManager.getInstance().log("ログを閉じます。");
                 LogManager.getInstance().close();
             }));
 
