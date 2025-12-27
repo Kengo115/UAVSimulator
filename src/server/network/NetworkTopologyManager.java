@@ -3,6 +3,8 @@ package server.network;
 import item.BeaconCluster;
 import item.Link;
 
+import java.util.List;
+
 /**
  * ネットワークトポロジーを管理するクラス
  */
@@ -15,18 +17,21 @@ public class NetworkTopologyManager {
 
     // ノード数
     private int node;
-    
+
     // リンク情報
     private Link[][] link;
-    
+
     // ビーコンクラスター
     private BeaconCluster beaconCluster;
-    
+
     // 隣接行列
     private int[][] adjMatrix;
 
+    // トポロジデータ（外部ファイルから読み込んだ場合）
+    private TopologyFileReader.TopologyData topologyData;
+
     /**
-     * コンストラクタ
+     * コンストラクタ（デフォルト：ハードコードされたトポロジ）
      * @param node ノード数
      * @param link リンク情報
      * @param beaconCluster ビーコンクラスター
@@ -37,12 +42,35 @@ public class NetworkTopologyManager {
         this.link = link;
         this.beaconCluster = beaconCluster;
         this.adjMatrix = adjMatrix;
+        this.topologyData = null;
+    }
+
+    /**
+     * コンストラクタ（外部ファイルから読み込んだトポロジデータを使用）
+     * @param link リンク情報
+     * @param beaconCluster ビーコンクラスター
+     * @param adjMatrix 隣接行列
+     * @param topologyData トポロジデータ
+     */
+    public NetworkTopologyManager(Link[][] link, BeaconCluster beaconCluster, int[][] adjMatrix, TopologyFileReader.TopologyData topologyData) {
+        this.node = topologyData.nodeCount;
+        this.link = link;
+        this.beaconCluster = beaconCluster;
+        this.adjMatrix = adjMatrix;
+        this.topologyData = topologyData;
     }
 
     /**
      * 基本的なリンクを設定する
      */
     public void setupBasicLinks() {
+        // 外部ファイルから読み込んだ場合
+        if (topologyData != null) {
+            setupBasicLinksFromTopologyData();
+            return;
+        }
+
+        // デフォルト（ハードコード）
         link[0][1].setD_tubeThickness(INIT_THICKNESS);
         link[0][1].setL_tubeLength(1);
         adjMatrix[0][1] = 1;
@@ -112,6 +140,13 @@ public class NetworkTopologyManager {
      * 詳細なリンクを設定する
      */
     public void setupDetailedLinks() {
+        // 外部ファイルから読み込んだ場合
+        if (topologyData != null) {
+            setupDetailedLinksFromTopologyData();
+            return;
+        }
+
+        // デフォルト（ハードコード）
         link[0][1].setLink(beaconCluster.getBeacon(0), beaconCluster.getBeacon(1), 5);
         link[0][1].setD_tubeThickness(INIT_THICKNESS);
         link[0][1].setL_tubeLength(1);
@@ -223,5 +258,55 @@ public class NetworkTopologyManager {
         link[5][4].setDistance(850);
         link[5][4].setCongestionRate(INIT_RATE);
         adjMatrix[5][4] = 1;
+    }
+
+    /**
+     * 外部ファイルから読み込んだトポロジデータを使って基本リンクを設定する
+     */
+    private void setupBasicLinksFromTopologyData() {
+        List<TopologyFileReader.LinkInfo> links = topologyData.links;
+
+        for (TopologyFileReader.LinkInfo linkInfo : links) {
+            int i = linkInfo.source;
+            int j = linkInfo.dest;
+
+            // i -> j
+            link[i][j].setD_tubeThickness(INIT_THICKNESS);
+            link[i][j].setL_tubeLength(linkInfo.lTubeLength);
+            adjMatrix[i][j] = 1;
+
+            // j -> i（双方向）
+            link[j][i].setD_tubeThickness(INIT_THICKNESS);
+            link[j][i].setL_tubeLength(linkInfo.lTubeLength);
+            adjMatrix[j][i] = 1;
+        }
+    }
+
+    /**
+     * 外部ファイルから読み込んだトポロジデータを使って詳細リンクを設定する
+     */
+    private void setupDetailedLinksFromTopologyData() {
+        List<TopologyFileReader.LinkInfo> links = topologyData.links;
+
+        for (TopologyFileReader.LinkInfo linkInfo : links) {
+            int i = linkInfo.source;
+            int j = linkInfo.dest;
+
+            // i -> j
+            link[i][j].setLink(beaconCluster.getBeacon(i), beaconCluster.getBeacon(j), linkInfo.capacity);
+            link[i][j].setD_tubeThickness(INIT_THICKNESS);
+            link[i][j].setL_tubeLength(linkInfo.lTubeLength);
+            link[i][j].setDistance(linkInfo.distance);
+            link[i][j].setCongestionRate(INIT_RATE);
+            adjMatrix[i][j] = 1;
+
+            // j -> i（双方向）
+            link[j][i].setLink(beaconCluster.getBeacon(j), beaconCluster.getBeacon(i), linkInfo.capacity);
+            link[j][i].setD_tubeThickness(INIT_THICKNESS);
+            link[j][i].setL_tubeLength(linkInfo.lTubeLength);
+            link[j][i].setDistance(linkInfo.distance);
+            link[j][i].setCongestionRate(INIT_RATE);
+            adjMatrix[j][i] = 1;
+        }
     }
 }

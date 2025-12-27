@@ -7,6 +7,7 @@ import item.BeaconCluster;
 import item.Flow;
 import item.Uav;
 import server.controller.ServerController;
+import server.network.TopologyFileReader;
 import server.uav.UAVFlyScheduler;
 import server.util.LogManager;
 
@@ -291,17 +292,45 @@ public class BoundaryController {
 
     public static void main(String[] args) {
         BoundaryController boundaryController = new BoundaryController();
-        boundaryController.setNodeNum(6);
-        beaconCluster = new BeaconCluster(nodeNum);
-        server = new ServerController(nodeNum, beaconCluster);
-        
-        // 経路探索アルゴリズムを初期化
-        server.initializeRouteSearchers();
+        BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
 
         // ランダムクライアント生成実験
         try {
+            // トポロジファイルのパスを入力
+            System.out.println("=== UAVシミュレーター ===");
+            System.out.println("ネットワークトポロジファイルのパスを入力してください:");
+            System.out.println("（Enterキーのみを押すとデフォルトトポロジを使用します）");
+            System.out.print("> ");
+
+            String topologyFilePath = reader.readLine().trim();
+
+            // トポロジの初期化
+            if (topologyFilePath.isEmpty()) {
+                // デフォルト（ハードコード）
+                System.out.println("デフォルトトポロジを使用します。");
+                boundaryController.setNodeNum(6);
+                beaconCluster = new BeaconCluster(nodeNum);
+                server = new ServerController(nodeNum, beaconCluster);
+            } else {
+                // 外部ファイルから読み込み
+                System.out.println("トポロジファイルを読み込んでいます: " + topologyFilePath);
+                TopologyFileReader.TopologyData topologyData =
+                    TopologyFileReader.readTopologyFile(topologyFilePath);
+
+                // トポロジ情報を表示
+                TopologyFileReader.printTopologyInfo(topologyData);
+
+                // ビーコンとサーバーを初期化
+                boundaryController.setNodeNum(topologyData.nodeCount);
+                beaconCluster = new BeaconCluster(topologyData);
+                server = new ServerController(beaconCluster, topologyData);
+            }
+
+            // 経路探索アルゴリズムを初期化
+            server.initializeRouteSearchers();
+
             boundaryController.setNetworkTopology(); // ネットワークの初期化
-            
+
             // 経路探索手法を選択
             System.out.println("経路探索手法を選択してください:");
             System.out.println("1: Dijkstra法");
@@ -309,8 +338,7 @@ public class BoundaryController {
             System.out.println("3: ExtendedPhysarumSolver法 (EPS)");
             System.out.println("4: ハイブリッド法 (HYBRID: EPS+PS)");
             System.out.println("5: バイナリサーチ法 (BINARY: Binary Search EPS+PS)");
-            
-            BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+
             int methodChoice = 3; // デフォルトはEPS
             try {
                 String input = reader.readLine();
