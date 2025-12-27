@@ -7,6 +7,7 @@ import item.BeaconCluster;
 import item.Link;
 import item.Uav;
 import server.network.NetworkTopologyManager;
+import server.network.TopologyFileReader;
 import server.route.BinaryExtendedPhysarumSolverRouteSearcher;
 import server.route.DijkstraRouteSearcher;
 import server.route.ExtendedPhysarumSolverRouteSearcher;
@@ -80,6 +81,17 @@ public class ServerController {
         initialize(node);
         ServerController.beaconCluster = beaconCluster;
         this.networkTopologyManager = new NetworkTopologyManager(node, link, beaconCluster, adjMatrix);
+    }
+
+    /**
+     * コンストラクタ（外部ファイルから読み込んだトポロジデータを使用）
+     * @param beaconCluster ビーコンクラスター
+     * @param topologyData トポロジデータ
+     */
+    public ServerController(BeaconCluster beaconCluster, TopologyFileReader.TopologyData topologyData) {
+        initialize(topologyData.nodeCount);
+        ServerController.beaconCluster = beaconCluster;
+        this.networkTopologyManager = new NetworkTopologyManager(link, beaconCluster, adjMatrix, topologyData);
     }
 
     /**
