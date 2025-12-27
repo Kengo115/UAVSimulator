@@ -36,7 +36,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
     private static final double MINIMUM_FLOW_RATIO = 0.1; // 最小安全フロー（要求フローの10%）
 
     // 安定化フェーズ設定
-    private static final int STABILIZATION_PHASE_ITERATIONS = 10; // 安定化フェーズのイテレーション数
+    private static final int STABILIZATION_PHASE_ITERATIONS = 5; // 安定化フェーズのイテレーション数
 
     // 現在のフロー値と制御状態
     private double currentFlow;
