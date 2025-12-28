@@ -17,6 +17,11 @@ public class UAVFlightController {
     // Phase 1: UAV状態管理用のRedisマネージャー
     private static UAVStateManager uavStateManager = new UAVStateManager();
 
+    // Phase 3a: リンク容量整合性チェック用
+    private static server.redis.LinkCapacityReader linkCapacityReader = new server.redis.LinkCapacityReader();
+    private static int capacityValidationCounter = 0;
+    private static final int CAPACITY_VALIDATION_INTERVAL = 5;  // 5回に1回チェック
+
     /**
      * UAVを移動させる
      * @param clientController クライアントコントローラー
@@ -86,6 +91,12 @@ public class UAVFlightController {
 
         // 容量の更新
         CapacityManager.updateCapacity(flyingUAV, link, node);
+
+        // Phase 3a: リンク容量の整合性チェック（5回に1回）
+        capacityValidationCounter++;
+        if (capacityValidationCounter % CAPACITY_VALIDATION_INTERVAL == 0) {
+            linkCapacityReader.validateCapacity(link, flyingUAV, node);
+        }
 
         // 待機中のUAVを処理
         processWaitingUAVs(uavQueue, flyingUavQueue, flyingUAV, link, beaconCluster, node);
