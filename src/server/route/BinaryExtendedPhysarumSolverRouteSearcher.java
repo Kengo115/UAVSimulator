@@ -764,6 +764,76 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                         }
                     }
                 }
+
+                // PS流量制約の適用（全ネットワークの流量バランスを保持）
+                double sourceOutflowSum = 0.0;
+                for (int j = 0; j < node; j++) {
+                    if (psLink[sourceNode][j].getL_tubeLength() != INF && psLink[sourceNode][j].getQ_tubeFlow() > 0) {
+                        sourceOutflowSum += psLink[sourceNode][j].getQ_tubeFlow();
+                    }
+                }
+
+                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Before correction - PS source outflow sum = " + sourceOutflowSum + " (expected: " + remainingUAVs + ")");
+
+                if (Math.abs(sourceOutflowSum - remainingUAVs) > 0.01) { // 小さな数値誤差を許容
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: PS source outflow " + sourceOutflowSum + " != expected " + remainingUAVs + ". Applying network-wide correction.");
+
+                    // 全ネットワークの流量を比例調整
+                    double correctionFactor = (double)remainingUAVs / sourceOutflowSum;
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Correction factor = " + correctionFactor);
+
+                    // 全てのリンクの流量を同じ比率で調整（ネットワーク全体のバランスを保持）
+                    for (int i = 0; i < node; i++) {
+                        for (int j = 0; j < node; j++) {
+                            if (psLink[i][j].getL_tubeLength() != INF && psLink[i][j].getQ_tubeFlow() != 0) {
+                                double correctedFlow = psLink[i][j].getQ_tubeFlow() * correctionFactor;
+                                psLink[i][j].setQ_tubeFlow(correctedFlow);
+                            }
+                        }
+                    }
+
+                    // 修正後に再度MathUtils.roundWithConservation適用（ソース流出のみ）
+                    java.util.List<Integer> sourceOutLinks = new java.util.ArrayList<>();
+                    java.util.List<Double> sourceOutFlows = new java.util.ArrayList<>();
+                    for (int j = 0; j < node; j++) {
+                        if (psLink[sourceNode][j].getL_tubeLength() != INF && psLink[sourceNode][j].getQ_tubeFlow() > 0) {
+                            sourceOutLinks.add(j);
+                            sourceOutFlows.add(psLink[sourceNode][j].getQ_tubeFlow());
+                        }
+                    }
+
+                    if (!sourceOutFlows.isEmpty()) {
+                        double[] sourceFlowsArray = sourceOutFlows.stream().mapToDouble(Double::doubleValue).toArray();
+                        MathUtils.roundWithConservation(sourceFlowsArray);
+
+                        // 差分を計算してネットワーク全体に反映
+                        for (int i = 0; i < sourceOutLinks.size(); i++) {
+                            int linkDest = sourceOutLinks.get(i);
+                            double oldFlow = psLink[sourceNode][linkDest].getQ_tubeFlow();
+                            double newFlow = sourceFlowsArray[i];
+                            double flowDiff = newFlow - oldFlow;
+
+                            // ソースリンクを更新
+                            psLink[sourceNode][linkDest].setQ_tubeFlow(newFlow);
+
+                            // 下流のリンクも同じ比率で調整（流量バランス保持）
+                            if (flowDiff != 0 && oldFlow != 0) {
+                                double linkCorrectionFactor = newFlow / oldFlow;
+                                adjustDownstreamFlows(psLink, linkDest, destNode, linkCorrectionFactor);
+                            }
+                        }
+                    }
+
+                    // 修正後の合計を再計算して確認
+                    double finalSum = 0.0;
+                    for (int j = 0; j < node; j++) {
+                        if (psLink[sourceNode][j].getL_tubeLength() != INF && psLink[sourceNode][j].getQ_tubeFlow() > 0) {
+                            finalSum += psLink[sourceNode][j].getQ_tubeFlow();
+                        }
+                    }
+
+                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: After correction - PS source outflow sum = " + finalSum + " (target: " + remainingUAVs + ")");
+                }
             }
 
             // シグモイド関数
@@ -1244,5 +1314,28 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
         ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
         ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, currentFlow);
+    }
+
+    /**
+     * 下流のフローを再帰的に調整する
+     * @param psLink PSリンク配列
+     * @param currentNode 現在のノード
+     * @param destNode デスティネーションノード
+     * @param correctionFactor 修正係数
+     */
+    private void adjustDownstreamFlows(Link[][] psLink, int currentNode, int destNode, double correctionFactor) {
+        // 現在のノードから出るリンクを調整
+        for (int j = 0; j < node; j++) {
+            if (psLink[currentNode][j].getL_tubeLength() != INF && psLink[currentNode][j].getQ_tubeFlow() > 0) {
+                double oldFlow = psLink[currentNode][j].getQ_tubeFlow();
+                double newFlow = oldFlow * correctionFactor;
+                psLink[currentNode][j].setQ_tubeFlow(newFlow);
+
+                // 再帰的に下流も調整（デスティネーション到達まで）
+                if (j != destNode && newFlow > 0) {
+                    adjustDownstreamFlows(psLink, j, destNode, correctionFactor);
+                }
+            }
+        }
     }
 }
