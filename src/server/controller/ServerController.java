@@ -202,8 +202,8 @@ public class ServerController {
         dijkstraRouteSearcher.search(client, flyingUavQueue, uavQueue, 1);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
@@ -232,8 +232,8 @@ public class ServerController {
         physarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
@@ -262,8 +262,8 @@ public class ServerController {
         extendedPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
@@ -292,8 +292,8 @@ public class ServerController {
         hybridPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
@@ -322,8 +322,8 @@ public class ServerController {
         binaryExtendedPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;

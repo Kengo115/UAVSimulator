@@ -425,8 +425,8 @@ public class BoundaryController {
                     clientController.startTimer();
                 }
 
-                // UAVスケジューリングを更新
-                UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+                // UAVスケジューリングを更新（Phase 2: beaconClusterとnodeNumを渡す）
+                UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeNum);
 
                 String dirPath = "src/result/client";
                 String filePath = dirPath + "/client.txt";

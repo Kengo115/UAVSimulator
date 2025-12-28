@@ -106,12 +106,13 @@ public void testCurrentUAVFlightBehavior() {
 
 ---
 
-### Phase 1: 状態の可視化とRedis読み取り（3-4日）
+### Phase 1: 二重書き込みパターンによるデータ整合性検証（完了✅）
 
 #### ゴール
-- **既存機能に影響を与えず**、UAV状態をRedisに**書き込むのみ**
-- Redisを「状態モニタリング」として使用
+- **既存機能に影響を与えず**、UAV状態をメモリとRedisの**両方に書き込み**
+- 定期的な整合性チェックで二重書き込みの正確性を検証
 - 既存のメモリ状態が真実のソース（Source of Truth）
+- Redisが失敗してもシミュレータは継続動作
 
 #### アーキテクチャ
 
@@ -133,53 +134,118 @@ public void testCurrentUAVFlightBehavior() {
 
 #### 実装
 
-**1. RedisManager クラスの作成**
+**1. UAVStateManager クラスの作成**
 ```java
-// src/server/redis/RedisManager.java
-public class RedisManager {
-    private static RedissonClient redisson;
-    private static boolean enabled = false;
+// src/server/redis/UAVStateManager.java
+public class UAVStateManager {
+    private RedissonClient client;
+    private boolean redisEnabled = true;
 
-    public static void initialize(String redisUrl) {
-        Config config = new Config();
-        config.useSingleServer().setAddress(redisUrl);
-        redisson = Redisson.create(config);
-        enabled = true;
+    public UAVStateManager() {
+        // RedisConnectionManagerからクライアントを取得
+        this.client = RedisConnectionManager.getInstance().getClient();
     }
 
-    // UAV状態を非同期で書き込み（既存処理に影響なし）
-    public static void publishUAVState(Uav uav) {
-        if (!enabled) return;
+    // UAV状態を同期的に書き込み（try-catchでエラーハンドリング）
+    public void saveUAVState(Uav uav) {
+        if (!redisEnabled) return;
 
-        CompletableFuture.runAsync(() -> {
-            try {
-                RMap<String, Object> uavState = redisson.getMap("uav:" + uav.getId());
-                uavState.put("clientId", uav.getClientId());
-                uavState.put("status", uav.isFlying() ? "flying" : "waiting");
-                uavState.put("flightTime", uav.getFlightTime());
-                uavState.put("waitingTime", uav.getWaitingTime());
-                // ... その他の状態
-            } catch (Exception e) {
-                // Redisエラーでも既存処理に影響させない
-                LogManager.getInstance().error("Redis write error", e);
-            }
-        });
+        try {
+            String key = "uav:" + uav.getId();
+            RMap<String, Object> map = client.getMap(key);
+
+            map.put("uavId", uav.getId());
+            map.put("clientId", uav.getClientId());
+            map.put("status", getStatusString(uav));
+            map.put("speed", uav.getSpeed());
+            map.put("x", uav.getX());
+            map.put("y", uav.getY());
+            // ... その他の状態
+            map.put("lastUpdateTime", System.currentTimeMillis());
+        } catch (Exception e) {
+            LogManager.getInstance().error("UAV状態保存エラー", e);
+            // 例外を投げずに継続
+        }
     }
 }
 ```
 
-**2. UAVFlightController への統合**
+**2. UAVStateValidator クラスの作成（整合性検証）**
+```java
+// src/server/redis/UAVStateValidator.java
+public class UAVStateValidator {
+    private UAVStateManager stateManager;
+
+    // メモリとRedisのUAV状態を比較
+    public boolean validateUAVState(Uav uav) {
+        Map<String, Object> redisState = stateManager.getUAVState(uav.getId());
+
+        if (redisState.isEmpty()) {
+            LogManager.getInstance().log("警告: UAV " + uav.getId() + " がRedisに存在しません");
+            return false;
+        }
+
+        boolean isValid = true;
+
+        // 各フィールドを比較
+        if (!validateField(uav.getId(), "status", getStatusString(uav), redisState.get("status"))) {
+            isValid = false;
+        }
+        // ... その他のフィールド検証
+
+        return isValid;
+    }
+}
+```
+
+**3. UAVFlightController への統合（7箇所）**
 ```java
 // src/server/uav/UAVFlightController.java
 public static void flyUAV(...) {
+    // [新規] メソッド開始時に全UAVをRedisに保存（初期化）
+    for (Uav uav : flyingUavQueue) {
+        try {
+            uavStateManager.saveUAVState(uav);
+        } catch (Exception e) {
+            LogManager.getInstance().error("Redis書き込み失敗", e);
+        }
+    }
+
     // [既存] メモリ上での処理
     for (Uav uav : flyingUavQueue) {
         // ... 既存の処理 ...
 
-        // [新規] Redisに状態をコピー（非ブロッキング）
-        RedisManager.publishUAVState(uav);
+        // [新規] 重要なイベントでRedisに同期的に保存
+        // - UAV到着時
+        // - リンク移動時
+        // - 待機状態突入時
+        // - 飛行再開時
+        // - 待機継続時
+        try {
+            uavStateManager.saveUAVState(uav);
+        } catch (Exception e) {
+            LogManager.getInstance().error("Redis書き込み失敗", e);
+        }
     }
 }
+```
+
+**4. UAVFlyScheduler への整合性チェック統合**
+```java
+// src/server/uav/UAVFlyScheduler.java
+private static int updateCounter = 0;
+private static final int VALIDATION_INTERVAL = 5; // 5回に1回チェック
+private static UAVStateValidator validator = new UAVStateValidator();
+
+scheduler.scheduleAtFixedRate(() -> {
+    server.controller.ServerController.flyUAV(...);
+
+    // 5回に1回、整合性チェック
+    updateCounter++;
+    if (updateCounter % VALIDATION_INTERVAL == 0) {
+        validateAllUAVStates(flyingUavQueue, uavQueue);
+    }
+}, 0, 2, TimeUnit.SECONDS);
 ```
 
 **3. モニタリングツール**
@@ -190,157 +256,241 @@ redis-cli
 > HGETALL uav:1
 ```
 
-#### テスト
+#### テスト結果
 
-```java
-@Test
-public void testPhase1_RedisStateSync() {
-    // 1. UAVを飛ばす
-    // 2. Redisに状態が書き込まれることを確認
-    // 3. Redisが落ちても既存機能が動作することを確認
-}
+**初回テスト**: 29件の不整合を検出
+- 原因1: メソッド開始時の初期保存が不足
+- 原因2: 待機継続時のRedis保存が欠落
+
+**修正後のテスト**: 不整合0件 ✅
+```
+2025-12-28 14:01:25.135 - 整合性チェック: すべて正常 (40機)
 ```
 
 #### 成果物
-- ✅ RedisManagerクラス
-- ✅ 状態同期の実装
-- ✅ モニタリングダッシュボード（簡易）
+- ✅ UAVStateManager.java（Redis書き込み管理）
+- ✅ UAVStateValidator.java（整合性検証） ← **計画外だが追加**
+- ✅ UAVFlightController.java修正（7箇所でRedis保存）
+- ✅ BoundaryController.java修正（Redis接続管理）
+- ✅ UAVFlyScheduler.java修正（定期的整合性チェック）
+- ✅ Makefile作成（簡単な実行コマンド）
+- ✅ Redis Commander文字化け修正（JSON形式に変更）
 
 #### ロールバック
 ```java
-// RedisManager.enabled = false; で無効化
+// UAVStateManager.redisEnabled = false; で無効化可能
+// メモリベース処理は残っているので安全
 ```
+
+#### 追加で実施した内容（計画外）
+- **BinaryExtendedPhysarumSolverRouteSearcher.java修正**: PS流量制約の適用ロジック追加（UAV台数ずれ問題を解決）
+- **Redis Commander文字化け修正**: JsonJacksonCodecを設定して読みやすいJSON形式に変更
 
 ---
 
-### Phase 2: リンク容量のRedis移行（4-5日）
+### Phase 2: 読み取り切り替え（部分的）（3-4日）
+
+**注**: 当初の計画では「リンク容量のRedis移行」でしたが、段階的アプローチのため変更しました。
 
 #### ゴール
-- リンク容量管理を**Redisのアトミック操作**で実装
-- 複数プロセスからの同時アクセスに対応
-- 既存のメモリベース処理と並行稼働（ダブルライト）
+- **非クリティカルなデータの読み取りをRedisに切り替え**
+- まずは統計情報とフライトログから開始
+- UAVの位置情報など重要データはまだメモリから読み取り（Phase 3で対応）
+- パフォーマンスと正確性を検証
 
 #### アーキテクチャ
 
 ```
-┌────────────────────┐
-│ CapacityManager    │
-└─────┬──────────────┘
+┌────────────────────────┐
+│  統計情報・ログ参照     │
+│  (新しい読み取りAPI)    │
+└─────┬──────────────────┘
       │
-      ├─ [既存] メモリ配列で容量管理
+      ├─ [既存] メモリから集計（Phase 1まで）
       │
-      └─ [新規] Redisでも容量管理（同期）
+      └─ [新規] Redisから読み取り（Phase 2）
            ↓
       ┌────────────┐
       │   Redis    │
-      │ DECR/INCR  │← アトミック操作
+      │ - uav:*    │← UAV状態（Phase 1で書き込み済み）
+      │ - stats:*  │← 統計情報
+      │ - logs:*   │← フライトログ
       └────────────┘
+
+[重要] UAVのコア処理（位置更新、リンク容量）はまだメモリベース
 ```
 
 #### 実装
 
-**1. RedisCapacityManager クラス**
+**1. UAVStatisticsReader クラス（統計情報の読み取り）**
 ```java
-// src/server/redis/RedisCapacityManager.java
-public class RedisCapacityManager {
-    private static RedissonClient redisson;
+// src/server/redis/UAVStatisticsReader.java
+public class UAVStatisticsReader {
+    private RedissonClient client;
 
-    // リンク容量の初期化
-    public static void initializeLinkCapacity(int from, int to, double capacity) {
-        String key = "link:" + from + "-" + to + ":capacity";
-        RAtomicDouble atomicCapacity = redisson.getAtomicDouble(key);
-        atomicCapacity.set(capacity);
-    }
+    /**
+     * 全UAVの状態カウントを取得
+     * @return Map<状態, カウント> （例: {"flying": 25, "waiting": 10, "idle": 5}）
+     */
+    public Map<String, Integer> getUAVStatusCount() {
+        Map<String, Integer> statusCount = new HashMap<>();
+        statusCount.put("flying", 0);
+        statusCount.put("waiting", 0);
+        statusCount.put("idle", 0);
 
-    // 容量を減らす（アトミック）
-    public static boolean decrementCapacity(int from, int to) {
-        String key = "link:" + from + "-" + to + ":capacity";
-        RAtomicDouble atomicCapacity = redisson.getAtomicDouble(key);
+        // Redisから全UAV状態を取得
+        RKeys keys = client.getKeys();
+        Iterable<String> uavKeys = keys.getKeysByPattern("uav:*");
 
-        // Compare-and-Set で安全に減少
-        double current = atomicCapacity.get();
-        if (current > 0) {
-            atomicCapacity.decrementAndGet();
-            return true;
+        for (String key : uavKeys) {
+            RMap<String, Object> uavState = client.getMap(key);
+            String status = (String) uavState.get("status");
+            statusCount.put(status, statusCount.get(status) + 1);
         }
-        return false;
+
+        return statusCount;
     }
 
-    // 容量を増やす（アトミック）
-    public static void incrementCapacity(int from, int to) {
-        String key = "link:" + from + "-" + to + ":capacity";
-        RAtomicDouble atomicCapacity = redisson.getAtomicDouble(key);
-        atomicCapacity.incrementAndGet();
+    /**
+     * クライアント別のUAV数を取得
+     * @return Map<クライアントID, UAV数>
+     */
+    public Map<Integer, Integer> getUAVCountByClient() {
+        // Redisから集計
     }
 
-    // 現在の容量を取得
-    public static double getCapacity(int from, int to) {
-        String key = "link:" + from + "-" + to + ":capacity";
-        RAtomicDouble atomicCapacity = redisson.getAtomicDouble(key);
-        return atomicCapacity.get();
+    /**
+     * 平均飛行時間を取得
+     * @return 平均飛行時間（ミリ秒）
+     */
+    public double getAverageFlightTime() {
+        // Redisから全UAVのflightTimeを集計して平均
     }
 }
 ```
 
-**2. CapacityManager の修正（ダブルライト）**
+**2. FlightLogReader クラス（フライトログの読み取り）**
 ```java
-// src/server/uav/CapacityManager.java
-public static void updateCapacity(int[][] flyingUAV, Link[][] link, int node) {
-    // [既存] メモリベースの処理
-    for (int i = 0; i < node; i++) {
-        for (int j = 0; j < node; j++) {
-            if (link[i][j].getL_tubeLength() != INF) {
-                link[i][j].setCapacity(link[i][j].getInitCapacity());
-                // ... 既存処理 ...
-            }
-        }
+// src/server/redis/FlightLogReader.java
+public class FlightLogReader {
+    /**
+     * UAVのフライト履歴を取得
+     * @param uavId UAV ID
+     * @return フライト履歴のリスト
+     */
+    public List<FlightRecord> getFlightHistory(int uavId) {
+        String key = "uav:" + uavId + ":history";
+        RList<FlightRecord> history = client.getList(key);
+        return history.readAll();
     }
 
-    // [新規] Redisでも同じ操作（検証用）
-    for (int i = 0; i < node; i++) {
-        for (int j = 0; j < node; j++) {
-            if (link[i][j].getL_tubeLength() != INF) {
-                double memoryCapacity = link[i][j].getCapacity();
-                double redisCapacity = RedisCapacityManager.getCapacity(i, j);
+    /**
+     * 最新のフライトイベントを取得
+     * @param limit 取得件数
+     * @return 最新のイベントリスト
+     */
+    public List<FlightEvent> getRecentEvents(int limit) {
+        String key = "flight:events";
+        RStream<FlightEvent> stream = client.getStream(key);
+        return stream.readLast(limit);
+    }
+}
+```
 
-                // 不整合をログ出力
-                if (Math.abs(memoryCapacity - redisCapacity) > 0.01) {
-                    LogManager.getInstance().warn(
-                        "Capacity mismatch: Memory=" + memoryCapacity +
-                        ", Redis=" + redisCapacity);
-                }
-            }
+**3. PerformanceBenchmark クラス（パフォーマンス測定）**
+```java
+// src/server/redis/PerformanceBenchmark.java
+public class PerformanceBenchmark {
+    /**
+     * 単一UAV読み取りのベンチマーク
+     */
+    public void benchmarkSingleRead() {
+        // メモリから1000回読み取り → 平均時間測定
+        long memoryStartTime = System.nanoTime();
+        for (int i = 0; i < 1000; i++) {
+            // メモリから読み取り
+        }
+        long memoryTime = (System.nanoTime() - memoryStartTime) / 1000000;
+
+        // Redisから1000回読み取り → 平均時間測定
+        long redisStartTime = System.nanoTime();
+        for (int i = 0; i < 1000; i++) {
+            uavStateManager.getUAVState(i);
+        }
+        long redisTime = (System.nanoTime() - redisStartTime) / 1000000;
+
+        LogManager.getInstance().log("単一読み取り: メモリ=" + memoryTime + "ms, Redis=" + redisTime + "ms");
+    }
+
+    /**
+     * 一括読み取りのベンチマーク
+     */
+    public void benchmarkBulkRead() {
+        // 40機一括読み取りの比較
+    }
+}
+```
+
+**4. デュアルリード検証**
+```java
+// 既存の統計情報取得メソッドを修正
+public class UAVStatisticsService {
+    private boolean useRedis = false; // フラグで切り替え
+
+    public Map<String, Integer> getStatusCount() {
+        if (useRedis) {
+            // Redisから読み取り
+            return new UAVStatisticsReader().getUAVStatusCount();
+        } else {
+            // メモリから読み取り（既存）
+            return getStatusCountFromMemory();
         }
     }
 }
 ```
 
-#### テスト
+#### テスト計画
 
 ```java
 @Test
-public void testPhase2_RedisCapacityAtomic() {
-    // 複数スレッドから同時にDECRを実行
-    ExecutorService executor = Executors.newFixedThreadPool(10);
-    for (int i = 0; i < 100; i++) {
-        executor.submit(() -> {
-            RedisCapacityManager.decrementCapacity(0, 1);
-        });
-    }
+public void testPhase2_StatisticsRead() {
+    // 1. メモリから統計情報を取得
+    Map<String, Integer> memoryStats = getStatusCountFromMemory();
 
-    // 容量が正しく減少していることを確認
-    assertEquals(initialCapacity - 100,
-                 RedisCapacityManager.getCapacity(0, 1));
+    // 2. Redisから統計情報を取得
+    Map<String, Integer> redisStats = new UAVStatisticsReader().getUAVStatusCount();
+
+    // 3. 結果が一致することを確認
+    assertEquals(memoryStats, redisStats);
+}
+
+@Test
+public void testPhase2_Performance() {
+    // パフォーマンス測定
+    PerformanceBenchmark benchmark = new PerformanceBenchmark();
+    benchmark.benchmarkSingleRead();
+    benchmark.benchmarkBulkRead();
 }
 ```
 
-#### 成果物
-- ✅ RedisCapacityManager
-- ✅ アトミック操作の実装
-- ✅ 同時実行テスト
+#### 成果物（予定）
+- ⬜ UAVStatisticsReader.java
+- ⬜ FlightLogReader.java
+- ⬜ PerformanceBenchmark.java
+- ⬜ デュアルリード検証機能
+- ⬜ 読み取り切り替えフラグ実装
+
+#### 成功基準
+- ✅ 統計情報がRedisから正しく読み取れる
+- ✅ メモリとRedisの結果が一致する
+- ✅ パフォーマンスが許容範囲内（目標: 10ms以下）
+- ✅ 1週間の運用で問題が発生しない
 
 #### ロールバック
-- メモリベース処理が残っているので安全
+```java
+// useRedis = false; でメモリ読み取りに戻せる
+// Phase 1の二重書き込みは継続
+```
 
 ---
 
@@ -671,15 +821,24 @@ public class MetricsCollector {
 
 ## 📅 全体スケジュール
 
-| Phase | 期間 | 主要成果物 | リスク |
-|-------|------|-----------|--------|
-| **Phase 0** | 1-2日 | Docker環境、Redisson設定 | 低 |
-| **Phase 1** | 3-4日 | 状態同期、モニタリング | 低 |
-| **Phase 2** | 4-5日 | 容量管理のRedis化 | 中 |
-| **Phase 3** | 5-7日 | ワーカープロセス | 高 |
-| **Phase 4** | 3-4日 | 完全移行 | 中 |
-| **Phase 5** | 2-3日 | モニタリング | 低 |
-| **合計** | **18-25日** | | |
+| Phase | 期間 | 主要成果物 | リスク | ステータス |
+|-------|------|-----------|--------|-----------|
+| **Phase 0** | 1-2日 | Docker環境、Redisson設定、Redis Commander | 低 | ✅ **完了** (2025-12-27) |
+| **Phase 1** | 3-4日 | 二重書き込み、整合性検証、BinaryEPS修正 | 低 | ✅ **完了** (2025-12-28) |
+| **Phase 2** | 3-4日 | 統計情報読み取り、ログ読み取り、パフォーマンス測定 | 中 | 🔄 **準備中** |
+| **Phase 3** | 5-7日 | リンク容量Redis移行、ワーカープロセス | 高 | ⬜ 未着手 |
+| **Phase 4** | 3-4日 | 完全移行 | 中 | ⬜ 未着手 |
+| **Phase 5** | 2-3日 | モニタリング | 低 | ⬜ 未着手 |
+| **合計** | **18-25日** | | | **進捗: 2/6完了** |
+
+### 実績
+- Phase 0: 実施日数 **約0.5日**（2025-12-27）
+- Phase 1: 実施日数 **約1日**（2025-12-28）
+- 合計: **約1.5日**（計画3-6日に対して効率的に完了）
+
+### Phase 2以降の変更
+- **Phase 2**: 「リンク容量Redis移行」→「統計情報読み取り切り替え」に変更（段階的アプローチのため）
+- **Phase 3**: リンク容量Redis移行とワーカープロセス導入を統合予定
 
 ---
 

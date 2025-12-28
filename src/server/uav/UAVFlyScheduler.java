@@ -1,8 +1,11 @@
 package server.uav;
 
 import client.ClientController;
+import item.BeaconCluster;
 import item.Uav;
 import server.redis.UAVStateValidator;
+import server.redis.UAVStatisticsManager;
+import server.redis.UAVStatisticsReader;
 import server.util.LogManager;
 
 import java.util.Queue;
@@ -22,13 +25,19 @@ public class UAVFlyScheduler {
     private static final int VALIDATION_INTERVAL = 5; // 5回に1回チェック
     private static UAVStateValidator validator = new UAVStateValidator();
 
+    // Phase 2: 統計情報管理
+    private static UAVStatisticsManager statisticsManager = new UAVStatisticsManager();
+    private static UAVStatisticsReader statisticsReader = new UAVStatisticsReader();
+
     /**
      * UAV位置更新を開始する
      * @param flyingUavQueue 飛行中のUAVキュー
      * @param uavQueue 待機中のUAVキュー
      * @param clientController クライアントコントローラー
+     * @param beaconCluster ビーコンクラスター（Phase 2: 統計情報に必要）
+     * @param nodeCount ノード数（Phase 2: 統計情報に必要）
      */
-    public static synchronized void startFlyUAVUpdates(Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, ClientController clientController) {
+    public static synchronized void startFlyUAVUpdates(Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, ClientController clientController, BeaconCluster beaconCluster, int nodeCount) {
         if (scheduler == null || scheduler.isShutdown()) {
             scheduler = Executors.newScheduledThreadPool(1);
             LogManager.getInstance().log("UAV位置更新スケジューラーを開始します...");
@@ -48,10 +57,17 @@ public class UAVFlyScheduler {
                     //クライアントタイマー動作中
                     server.controller.ServerController.flyUAV(clientController, flyingUavQueue, uavQueue);
 
-                    // Phase 1: 5回に1回、整合性チェック
+                    // Phase 1 & Phase 2: 5回に1回、整合性チェックと統計情報保存
                     updateCounter++;
                     if (updateCounter % VALIDATION_INTERVAL == 0) {
+                        // Phase 1: UAV状態の整合性チェック
                         validateAllUAVStates(flyingUavQueue, uavQueue);
+
+                        // Phase 2: 統計情報をRedisに保存
+                        saveStatistics(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeCount);
+
+                        // Phase 2: 統計情報の整合性検証
+                        validateStatistics(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeCount);
                     }
                 }
             } catch (Exception e) {
@@ -120,6 +136,44 @@ public class UAVFlyScheduler {
             }
         } catch (Exception e) {
             LogManager.getInstance().error("整合性チェック中にエラーが発生しました", e);
+        }
+    }
+
+    /**
+     * Phase 2: 統計情報をRedisに保存する
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param clientController クライアントコントローラー
+     * @param beaconCluster ビーコンクラスター
+     * @param nodeCount ノード数
+     */
+    private static void saveStatistics(Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue,
+                                      ClientController clientController, BeaconCluster beaconCluster,
+                                      int nodeCount) {
+        try {
+            statisticsManager.saveAllStats(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeCount);
+        } catch (Exception e) {
+            LogManager.getInstance().error("統計情報保存中にエラーが発生しました", e);
+        }
+    }
+
+    /**
+     * Phase 2: 統計情報の整合性を検証する
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param clientController クライアントコントローラー
+     * @param beaconCluster ビーコンクラスター
+     * @param nodeCount ノード数
+     */
+    private static void validateStatistics(Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue,
+                                          ClientController clientController, BeaconCluster beaconCluster,
+                                          int nodeCount) {
+        try {
+            int flyingCount = flyingUavQueue.size();
+            int waitingCount = uavQueue.size();
+            statisticsReader.validateAllStats(flyingCount, waitingCount, clientController, beaconCluster, nodeCount);
+        } catch (Exception e) {
+            LogManager.getInstance().error("統計情報検証中にエラーが発生しました", e);
         }
     }
 }
