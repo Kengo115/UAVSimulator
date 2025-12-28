@@ -45,6 +45,7 @@ public class UAVStatisticsManager {
      */
     public void saveGlobalStats(int flyingUavCount, int waitingUavCount, long totalElapsedTime) {
         if (!redisEnabled) {
+            LogManager.getInstance().log("UAVStatisticsManager: Redis統計機能が無効なため、グローバル統計を保存しません");
             return;
         }
 
@@ -56,6 +57,8 @@ public class UAVStatisticsManager {
             map.put("waitingUavCount", waitingUavCount);
             map.put("totalElapsedTime", totalElapsedTime);
             map.put("lastUpdateTime", System.currentTimeMillis());
+
+            LogManager.getInstance().log("Phase 2: グローバル統計をRedisに保存しました (飛行:" + flyingUavCount + ", 待機:" + waitingUavCount + ")");
 
         } catch (Exception e) {
             LogManager.getInstance().error("グローバル統計保存エラー", e);
@@ -124,10 +127,13 @@ public class UAVStatisticsManager {
                             ClientController clientController, BeaconCluster beaconCluster,
                             int nodeCount) {
         if (!redisEnabled) {
+            LogManager.getInstance().log("Phase 2: Redis統計機能が無効なため、統計情報を保存しません");
             return;
         }
 
         try {
+            LogManager.getInstance().log("Phase 2: 統計情報の一括保存を開始します");
+
             // グローバル統計を保存
             int flyingCount = flyingUavQueue.size();
             int waitingCount = waitingUavQueue.size();
@@ -139,6 +145,8 @@ public class UAVStatisticsManager {
 
             // ビーコン統計を保存
             saveBeaconStats(beaconCluster, nodeCount);
+
+            LogManager.getInstance().log("Phase 2: 統計情報の一括保存が完了しました");
 
         } catch (Exception e) {
             LogManager.getInstance().error("統計情報一括保存エラー", e);

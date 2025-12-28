@@ -151,6 +151,7 @@ public class UAVFlyScheduler {
                                       ClientController clientController, BeaconCluster beaconCluster,
                                       int nodeCount) {
         try {
+            LogManager.getInstance().log("Phase 2: saveStatistics()が呼ばれました");
             statisticsManager.saveAllStats(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeCount);
         } catch (Exception e) {
             LogManager.getInstance().error("統計情報保存中にエラーが発生しました", e);
