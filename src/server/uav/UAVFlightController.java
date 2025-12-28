@@ -29,6 +29,24 @@ public class UAVFlightController {
     public static void flyUAV(ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, Link[][] link, BeaconCluster beaconCluster, int node) {
         int[][] flyingUAV = new int[node][node];
 
+        // Phase 1: 飛行中のUAVの状態をRedisに保存（更新前）
+        for (Uav uav : flyingUavQueue) {
+            try {
+                uavStateManager.saveUAVState(uav);
+            } catch (Exception e) {
+                LogManager.getInstance().error("Redis書き込み失敗（飛行中UAV更新前）", e);
+            }
+        }
+
+        // Phase 1: 待機中のUAVの状態をRedisに保存（更新前）
+        for (Uav uav : uavQueue) {
+            try {
+                uavStateManager.saveUAVState(uav);
+            } catch (Exception e) {
+                LogManager.getInstance().error("Redis書き込み失敗（待機中UAV更新前）", e);
+            }
+        }
+
         // 飛行中のUAVを移動させる
         int queueSize = flyingUavQueue.size();
         for (int i = 0; i < queueSize; i++) {
@@ -213,15 +231,29 @@ public class UAVFlightController {
 
                     flyingUavQueue.add(uav);
                 } else{
+                    // Phase 1: UAV状態をRedisに保存（待機継続時）
+                    try {
+                        uavStateManager.saveUAVState(uav);
+                    } catch (Exception e) {
+                        LogManager.getInstance().error("Redis書き込み失敗（待機継続時）", e);
+                    }
+
                     uavQueue.add(uav);
                     LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " 容量不足のため待機継続 (" + startNode + " -> " + nextNode + ")");
                 }
             } else {
+                // Phase 1: UAV状態をRedisに保存（待機継続時・リンクなし）
+                try {
+                    uavStateManager.saveUAVState(uav);
+                } catch (Exception e) {
+                    LogManager.getInstance().error("Redis書き込み失敗（待機継続時・リンクなし）", e);
+                }
+
                 LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " 移動できるリンクがないため待機継続");
                 uavQueue.add(uav);
             }
         }
-        
+
         // 容量の更新
         CapacityManager.updateCapacity(flyingUAV, link, node);
     }
