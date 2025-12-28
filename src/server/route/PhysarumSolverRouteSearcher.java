@@ -34,7 +34,7 @@ public class PhysarumSolverRouteSearcher extends AbstractPhysarumSolverRouteSear
     @Override
     protected void updateTubeThickness(int ct) {
         // チューブ厚の更新 - PSでは容量制約を考慮せず
-        double degeneracyEffect = 1.0;
+        double degeneracyEffect = 0.5;
         
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {

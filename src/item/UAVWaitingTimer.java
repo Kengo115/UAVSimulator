@@ -1,5 +1,7 @@
 package item;
 
+import server.util.LogManager;
+
 public class UAVWaitingTimer {
     private long startTime;
     private long totalElapsedTime; // 累積待機時間を保持
@@ -16,7 +18,8 @@ public class UAVWaitingTimer {
         if (!isTiming) {
             this.startTime = System.currentTimeMillis();
             this.isTiming = true;
-            System.out.println("client " + uav.getClientId() + " : No." + uav.getId() + "の待機タイマーが開始されました。");
+            String message = "client" + uav.getClientId() + " No" + uav.getId() + " 待機タイマーが開始されました";
+            LogManager.getInstance().log(message);
         }
     }
 
@@ -25,7 +28,8 @@ public class UAVWaitingTimer {
         if (isTiming) {
             totalElapsedTime += (System.currentTimeMillis() - startTime); // 経過時間を累積
             isTiming = false;
-            System.out.println("client " + uav.getClientId() + " : No." + uav.getId() + "の待機タイマーが停止されました。累積待機時間: " + totalElapsedTime / 1000 + " s");
+            String message = "client" + uav.getClientId() + " No" + uav.getId() + " 待機タイマーが停止されました 累積待機時間 " + totalElapsedTime / 1000 + " s";
+            LogManager.getInstance().log(message);
         }
     }
 
@@ -42,7 +46,7 @@ public class UAVWaitingTimer {
         this.startTime = 0;
         this.totalElapsedTime = 0; // 累積時間をリセット
         this.isTiming = false;
-        System.out.println("待機タイマーがリセットされました。");
+        LogManager.getInstance().log("待機タイマーがリセットされました");
     }
 
     // タイマーのキャンセル
@@ -50,6 +54,7 @@ public class UAVWaitingTimer {
         if (isTiming) {
             stop(uav);
         }
-        System.out.println("client " + uav.getClientId() + " : No." + uav.getId() + "の待機タイマーがキャンセルされました。");
+        String message = "client" + uav.getClientId() + " No" + uav.getId() + " 待機タイマーがキャンセルされました";
+        LogManager.getInstance().log(message);
     }
 }

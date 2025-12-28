@@ -4,6 +4,7 @@ import client.ClientController;
 import item.BeaconCluster;
 import item.Link;
 import item.Uav;
+import server.util.LogManager;
 
 import java.util.Queue;
 
@@ -40,9 +41,10 @@ public class UAVFlightController {
 
             if (flightDistance >= totalPathDistance) {
                 if (uav.isFlying()) {
-                    uav.cancelTimer();
+                    // 目的地に到着したときに正確な飛行距離を計算するためにlinkを渡す
+                    uav.cancelTimer(link, totalPathDistance);
                 } else {
-                    System.out.println("要修正0");
+                    LogManager.getInstance().error("要修正0: UAVが飛行中でないのにcancelTimerが呼ばれました");
                 }
                 clientController.getClient(uav.getClientId() - 1).incrementFinishFlyingCounter();
 
@@ -83,18 +85,32 @@ public class UAVFlightController {
                     if (link[startNode][endNode].getCapacity() > 0) {
                         uav.setFlyingLink(link[startNode][endNode]);
                         flyingUAV[startNode][endNode]++;
-                        System.out.println("client " + uav.getClientId() + " :UAV " + uav.getId() + " が " + startNode + " → " + endNode + " へ移動");
+                        
+                        // 実際の飛行距離（飛行時間×速度）と正確な飛行距離（リンク距離）を計算
+                        double actualFlightDistance = uav.getFlightTime() * uav.getSpeed();
+                        
+                        // 正確な飛行距離を計算
+                        double accurateFlightDistance = 0.0;
+                        for (int j = 0; j < k; j++) {
+                            int pathStartNode = path[j];
+                            int pathEndNode = path[j + 1];
+                            accurateFlightDistance += link[pathStartNode][pathEndNode].getDistance();
+                        }
+                        
+                        LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " " + startNode + " → " + endNode + " へ移動" + 
+                            "（実際の飛行距離：" + String.format("%.2f", actualFlightDistance) + "，正確な飛行距離：" + String.format("%.2f", accurateFlightDistance) + "）");
+                        
                         flyingUavQueue.add(uav);
                     } else {
                         if (uav.isFlying()) {
                             uav.stopTimer();
                         } else {
-                            System.out.println("要修正1: client " + uav.getClientId() + " :UAV " + uav.getId() + " が飛行中でないのに stopTimer() が呼ばれました");
+                            LogManager.getInstance().error("要修正1: client" + uav.getClientId() + " UAV" + uav.getId() + " が飛行中でないのに stopTimer() が呼ばれました");
                         }
                         if (!uav.isWaiting()) {
                             uav.startWaitingTimer();
                         } else {
-                            System.out.println("要修正2: client " + uav.getClientId() + " :UAV " + uav.getId() + " がすでに待機状態");
+                            LogManager.getInstance().error("要修正2: client" + uav.getClientId() + " UAV" + uav.getId() + " がすでに待機状態");
                         }
                         uav.setStayedBeaconId(startNode);
                         beaconCluster.getBeacon(startNode).addUav(uav);
@@ -138,7 +154,7 @@ public class UAVFlightController {
                     }
                 }
             } else {
-                System.out.println("要修正4: client " + uav.getClientId() + " :UAV " + uav.getId() + " が待機中のビーコンIDを取得できませんでした");
+                LogManager.getInstance().error("要修正4: client" + uav.getClientId() + " UAV" + uav.getId() + " が待機中のビーコンIDを取得できませんでした");
             }
 
             if (nextNode != -1) {
@@ -147,20 +163,28 @@ public class UAVFlightController {
                     if (uav.isWaiting()) {
                         uav.stopWaitingTimer();
                     } else {
-                        System.out.println("要修正3: client " + uav.getClientId() + " :UAV " + uav.getId() + " は待機していないのに stopWaitingTimer() が呼ばれました");
+                        LogManager.getInstance().error("要修正3: client" + uav.getClientId() + " UAV" + uav.getId() + " は待機していないのに stopWaitingTimer() が呼ばれました");
                     }
                     beaconCluster.getBeacon(startNode).removeUav(uav);
                     beaconCluster.getBeacon(startNode).decrementWaitingUavCount();
                     uav.startTimer();
                     uav.setFlyingLink(link[startNode][nextNode]);
                     uav.setStayedBeaconId(-1);
+                    
+                    // 実際の飛行距離（飛行時間×速度）と正確な飛行距離（リンク距離）を計算
+                    double actualFlightDistance = uav.getFlightTime() * uav.getSpeed();
+                    double accurateFlightDistance = link[startNode][nextNode].getDistance();
+                    
+                    LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " " + startNode + " → " + nextNode + " へ移動" + 
+                        "（実際の飛行距離：" + String.format("%.2f", actualFlightDistance) + "，正確な飛行距離：" + String.format("%.2f", accurateFlightDistance) + "）");
+                    
                     flyingUavQueue.add(uav);
                 } else {
                     uavQueue.add(uav);
-                    System.out.println("client " + uav.getClientId() + " :UAV " + uav.getId() + " は容量不足のため待機継続 (" + startNode + " -> " + nextNode + ")");
+                    LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " 容量不足のため待機継続 (" + startNode + " -> " + nextNode + ")");
                 }
             } else {
-                System.out.println("client " + uav.getClientId() + " :UAV " + uav.getId() + " は移動できるリンクがないため待機継続");
+                LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " 移動できるリンクがないため待機継続");
                 uavQueue.add(uav);
             }
         }

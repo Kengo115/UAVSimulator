@@ -86,7 +86,7 @@ public class ResultOutputManager {
     }
 
     /**
-     * Excelファイルに各リンクの流量を出力する
+     * flowファイルに各リンクの流量を出力する
      * @param client クライアント
      * @param ct カウンター
      * @param link リンク情報
@@ -94,9 +94,9 @@ public class ResultOutputManager {
      * @param runCounter 実行カウンター
      * @throws IOException 入出力例外
      */
-    public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
+    public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter, double inflow) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
-        String dirPath = getDirectoryPath("excel", runCounter);
+        String dirPath = getDirectoryPath("flow", runCounter);
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
 
@@ -107,6 +107,8 @@ public class ResultOutputManager {
             dir.mkdirs();
         }
         try (FileWriter writer = new FileWriter(filename)) {
+            // 1行目: 流入フロー,ソース,シンク
+            writer.write(String.format("%.1f,%d,%d\n", inflow, client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
             writer.write("source,destination,flow\n");
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
@@ -119,7 +121,7 @@ public class ResultOutputManager {
     }
 
     /**
-     * txtファイルに管の長さ，管の太さ，管の容量を出力する
+     * statusファイルに管の長さ，管の太さ，管の容量を出力する（後方互換性用）
      * @param client クライアント
      * @param ct カウンター
      * @param link リンク情報
@@ -127,9 +129,40 @@ public class ResultOutputManager {
      * @param runCounter 実行カウンター
      * @throws IOException 入出力例外
      */
-    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter) throws IOException {
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double inflow) throws IOException {
+        outputToTxt(client, ct, link, node, runCounter, null, inflow);
+    }
+
+    /**
+     * statusファイルに管の長さ，管の太さ，管の容量，圧力係数を出力する
+     * @param client クライアント
+     * @param ct カウンター
+     * @param link リンク情報
+     * @param node ノード数
+     * @param runCounter 実行カウンター
+     * @param pressureCoefficient 圧力係数行列
+     * @param inflow 流入フロー
+     * @throws IOException 入出力例外
+     */
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient, double inflow) throws IOException {
+        outputToTxt(client, ct, link, node, runCounter, pressureCoefficient, null, inflow);
+    }
+
+    /**
+     * statusファイルに管の長さ，管の太さ，管の容量，圧力係数，チューブ圧力を出力する
+     * @param client クライアント
+     * @param ct カウンター
+     * @param link リンク情報
+     * @param node ノード数
+     * @param runCounter 実行カウンター
+     * @param pressureCoefficient 圧力係数行列
+     * @param tubePressure チューブ圧力配列
+     * @param inflow 流入フロー
+     * @throws IOException 入出力例外
+     */
+    public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient, double[] tubePressure, double inflow) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
-        String dirPath = getDirectoryPath("txt", runCounter);
+        String dirPath = getDirectoryPath("status", runCounter);
         // ファイル名を作成
         String filename = dirPath + "/test_topology_" + (ct + 1) + ".txt";
 
@@ -140,13 +173,37 @@ public class ResultOutputManager {
             dir.mkdirs();
         }
         try (FileWriter writer = new FileWriter(filename)) {
-            //要求uav台数，出発ノード，到着ノードを１行目に出力
-            writer.write(String.format("%.1f,%d,%d\n", client.getFlow().getTheNumberOfUAV(), client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
-            writer.write("source,destination,length,thickness,capacity\n");
+            // 1行目: 流入フロー，出発ノード，到着ノード（要求UAV数→流入フローへ変更）
+            writer.write(String.format("%.1f,%d,%d\n", inflow, client.getFlow().getSource().getId(), client.getFlow().getDestination().getId()));
+            
+            // ヘッダー行（P_tubePressureを追加）
+            if (tubePressure != null) {
+                writer.write("source,destination,length,thickness,capacity,pressureCoefficient,sourcePressure,destPressure\n");
+            } else {
+                writer.write("source,destination,length,thickness,capacity,pressureCoefficient\n");
+            }
+            
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
                     if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY) {
-                        writer.write(String.format("%d,%d,%.4f,%.4f,%.4f\n", i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), link[i][j].getCapacity()));
+                        // 圧力係数を取得（非対角要素は負の値になっているので絶対値を取る）
+                        double pressureCoeff = 0.0;
+                        if (pressureCoefficient != null && i != j) {
+                            pressureCoeff = Math.abs(pressureCoefficient[i][j]);
+                        }
+                        
+                        if (tubePressure != null) {
+                            // P_tubePressureも出力
+                            double sourcePressure = tubePressure[i];
+                            double destPressure = tubePressure[j];
+                            writer.write(String.format("%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n", 
+                                i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), 
+                                link[i][j].getCapacity(), pressureCoeff, sourcePressure, destPressure));
+                        } else {
+                            writer.write(String.format("%d,%d,%.4f,%.4f,%.4f,%.4f\n", 
+                                i, j, link[i][j].getL_tubeLength(), link[i][j].getD_tubeThickness(), 
+                                link[i][j].getCapacity(), pressureCoeff));
+                        }
                     }
                 }
             }
@@ -154,7 +211,71 @@ public class ResultOutputManager {
     }
 
     /**
-     * 経路ごとのUAV数をExcel形式で出力する
+     * イテレーション毎のソース圧力を記録する
+     * @param iteration イテレーション番号
+     * @param sourcePressure ソース圧力値
+     * @param runCounter 実行カウンター
+     * @throws IOException 入出力例外
+     */
+    public static void outputIterationSourcePressure(int iteration, double sourcePressure, int runCounter) throws IOException {
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("iteration/sourcePressure", runCounter);
+        // ファイル名を作成（手法ごとに1つのファイル）
+        String filename = dirPath + "/iteration_source_pressure.txt";
+
+        // Fileオブジェクトでディレクトリの存在を確認・作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            // ディレクトリが存在しない場合は作成
+            dir.mkdirs();
+        }
+
+        // ファイルが新規作成の場合はヘッダーを書き込み、既存の場合は追記
+        File file = new File(filename);
+        try (FileWriter writer = new FileWriter(filename, true)) { // 追記モード
+            // ファイルが空の場合のみヘッダーを書き込む
+            if (file.length() == 0) {
+                writer.write("iteration,sourcePressure\n");
+            }
+            // イテレーション番号とソース圧力を追記
+            writer.write(String.format("%d,%.6f\n", iteration, sourcePressure));
+        }
+    }
+
+    /**
+     * イテレーション毎のフロー値を記録する
+     * @param iteration イテレーション番号
+     * @param flowValue フロー値（要求台数/流入フロー）
+     * @param runCounter 実行カウンター
+     * @throws IOException 入出力例外
+     */
+    public static void outputIterationFlow(int iteration, double flowValue, int runCounter) throws IOException {
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("iteration/flow", runCounter);
+        // ファイル名を作成（手法ごとに1つのファイル）
+        String filename = dirPath + "/iteration_flow.txt";
+
+        // Fileオブジェクトでディレクトリの存在を確認・作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            // ディレクトリが存在しない場合は作成
+            dir.mkdirs();
+        }
+
+        // ファイルが新規作成の場合はヘッダーを書き込み、既存の場合は追記
+        File file = new File(filename);
+        try (FileWriter writer = new FileWriter(filename, true)) { // 追記モード
+            // ファイルが空の場合のみヘッダーを書き込む
+            if (file.length() == 0) {
+                writer.write("iteration,flow\n");
+            }
+            // イテレーション番号とフロー値を追記
+            writer.write(String.format("%d,%.6f\n", iteration, flowValue));
+        }
+    }
+
+    /**
+     * 経路ごとのUAV数をflow形式で出力する
      * @param client クライアント
      * @param ct カウンター
      * @param link リンク情報

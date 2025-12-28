@@ -6,6 +6,7 @@ import item.BeaconCluster;
 import item.Link;
 import item.Uav;
 import server.controller.ServerController;
+import server.util.LogManager;
 import server.util.MathUtils;
 import server.util.ResultOutputManager;
 
@@ -31,7 +32,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     protected static final int PLOT_2 = 20;
     protected static final double THRESHOLD_1 = 0.5;
     protected static final double THRESHOLD_2 = 2.0;
-    protected static final double coefficient_tanh = 1;
+    protected static final double coefficient_tanh = 0.5;
 
     // サーバーコントローラー
     protected final ServerController serverController;
@@ -204,21 +205,33 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
 
             // 結果のプロット
             if ((ct + 1) % PLOT == 0) {
-                System.out.println("Iteration: " + (ct + 1));
+                LogManager.getInstance().log("Iteration: " + (ct + 1));
                 ResultOutputManager.outputToPajek(client, eps, client.getFlow().getTheNumberOfUAV(), ct, link, beaconCluster, node, serverController.getRunCounter());
-                ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter());
-                ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter());
+                ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), client.getFlow().getTheNumberOfUAV());
+                ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, client.getFlow().getTheNumberOfUAV());
             }
 
             // 追加のプロット（サブクラスでオーバーライド可能）
             additionalPlotting(client, ct);
+
+            // イテレーション毎の結果を記録
+            try {
+                int sourceNodeId = client.getFlow().getSource().getId();
+                if (sourceNodeId >= 0 && sourceNodeId < P_tubePressure.length) {
+                    double currentSourcePressure = P_tubePressure[sourceNodeId];
+                    ResultOutputManager.outputIterationSourcePressure(ct + 1, currentSourcePressure, serverController.getRunCounter());
+                }
+                ResultOutputManager.outputIterationFlow(ct + 1, client.getFlow().getTheNumberOfUAV(), serverController.getRunCounter());
+            } catch (IOException e) {
+                LogManager.getInstance().error("Failed to output iteration data", e);
+            }
 
             ct++;
             
             // 最後のループの場合に実行する処理
             if (ct == numLoop) {
                 // 初期設定として、Flow_CapacityにQ_tubeFlowを代入,各リンクを流れる流量の整数値をtubeFlowに追加
-                System.out.println("breakout point");
+                LogManager.getInstance().log("breakout point");
                 for (int i = 0; i < node; i++) {
                     for (int j = 0; j < node; j++) {
                         if (link[i][j].getL_tubeLength() != INF) {
@@ -351,14 +364,14 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                             flyingUavQueue.add(currentUAV);
                             link[u][v].decrementCapacity();
                             flowCounter[0]++;
-                            System.out.println("UAV " + currentUAV.getId() + " is flying from " + u + " to " + v);
+                            LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v);
                         } else {
                             currentUAV.startWaitingTimer();
                             currentUAV.setStayedBeaconId(u);
                             beaconCluster.getBeacon(u).addUav(currentUAV);
                             beaconCluster.getBeacon(u).incrementWaitingUavCount();
                             uavQueue.add(currentUAV);
-                            System.out.println("UAV " + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ")");
+                            LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ")");
                         }
 
                         latch.countDown();
@@ -376,13 +389,13 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             scheduler.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            System.err.println("スレッドが割り込まれました: " + e.getMessage());
+            LogManager.getInstance().error("スレッドが割り込まれました: " + e.getMessage());
         }
 
         if (!flowAvailable) {
             int needUAV = requiredUAVs - UAV_count;
             if (needUAV > 0) {
-                System.out.println("全てのUAVに経路が割り当てられませんでした。残り" + needUAV + "台のUAVを再割り当てします。");
+                LogManager.getInstance().log("全てのUAVに経路が割り当てられませんでした。残り" + needUAV + "台のUAVを再割り当てします。");
                 adjustRemainingFlow(needUAV, startNode, goalNode, client, flyingUavQueue, uavQueue);
             }
         }
@@ -531,14 +544,14 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                             currentUAV.setPassedLink(link[u][v]);
                             flyingUavQueue.add(currentUAV);
                             link[u][v].decrementCapacity();
-                            System.out.println("UAV " + currentUAV.getId() + " is flying from " + u + " to " + v + " adjustRemainingFlow");
+                            LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v + " adjustRemainingFlow");
                         } else {
                             currentUAV.startWaitingTimer();
                             currentUAV.setStayedBeaconId(u);
                             beaconCluster.getBeacon(u).addUav(currentUAV);
                             beaconCluster.getBeacon(u).incrementWaitingUavCount();
                             uavQueue.add(currentUAV);
-                            System.out.println("UAV " + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ") adjustRemainingFlow");
+                            LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ") adjustRemainingFlow");
                         }
                         countOfUAV++;
                     }
@@ -546,7 +559,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             }
 
             if (!pathFound) {
-                System.out.println("有効な経路が見つかりませんでした");
+                LogManager.getInstance().log("有効な経路が見つかりませんでした");
                 break;
             }
         }
