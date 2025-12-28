@@ -49,6 +49,12 @@ clean:
 	@echo "ビルド成果物をクリーンアップします..."
 	mvn clean
 
+# Redisデータをクリア
+redis-clear:
+	@echo "Redisデータをクリアします..."
+	docker exec chworkforce-redis-1 redis-cli FLUSHALL
+	@echo "✓ Redisデータがクリアされました"
+
 # ヘルプ
 help:
 	@echo "=== UAVシミュレータ Makefile ==="
@@ -59,6 +65,7 @@ help:
 	@echo "  make restart     - Redisコンテナを再起動"
 	@echo "  make status      - Redisコンテナの状態を確認"
 	@echo "  make logs        - Redisコンテナのログを表示"
+	@echo "  make redis-clear - Redisデータをクリア"
 	@echo "  make compile     - プロジェクトをコンパイル"
 	@echo "  make run         - シミュレータを実行（コンパイル込み）"
 	@echo "  make run-quick   - シミュレータを実行（コンパイルなし）"

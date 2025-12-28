@@ -2,6 +2,7 @@ package server.redis;
 
 import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
+import org.redisson.codec.JsonJacksonCodec;
 import org.redisson.config.Config;
 import server.util.LogManager;
 
@@ -68,6 +69,8 @@ public class RedisConnectionManager {
 
         try {
             Config config = new Config();
+            // JSON形式で保存するためのコーデックを設定（Redis Commanderで読みやすくなる）
+            config.setCodec(new JsonJacksonCodec());
             config.useSingleServer()
                 .setAddress("redis://" + redisHost + ":" + redisPort)
                 .setConnectionPoolSize(connectionPoolSize)
