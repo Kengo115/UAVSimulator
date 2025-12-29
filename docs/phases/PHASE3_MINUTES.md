@@ -1795,6 +1795,12 @@ public double recoverCapacity(int srcNode, int dstNode) {
 |---------|------|
 | `src/test/LuaAtomicTest.java` | Luaスクリプト競合テスト（50スレッド同時アクセス） |
 
+### Phase 3b-5: 新規作成
+
+| ファイル | 役割 |
+|---------|------|
+| `src/test/MidLinkWaitingTest.java` | 途中リンク待機・再開E2Eテスト |
+
 ### Phase 3b-3: 修正
 
 | ファイル | 変更内容 |
@@ -2243,6 +2249,130 @@ Phase 3b: Worker worker-1 - UAV 0 処理完了
 
 ---
 
+## Phase 3b-5: 途中リンク待機・再開
+
+### 実装方針
+**途中のリンク（2番目以降）で容量不足時の待機・再開処理を検証**
+
+Phase 3b-3で実装済みのFlightSchedulerには、途中リンク待機機能が既に含まれています。Phase 3b-5ではこの機能をE2Eテストで検証します。
+
+### テスト条件
+
+| 項目 | 値 |
+|------|-----|
+| ノード数 | 6つ |
+| 経路 | `[0, 1, 4, 5]`（3リンク） |
+| リンク距離 | [50.0, 75.0, 60.0]（合計185m） |
+| UAV数 | 5台 |
+| UAV速度 | 10.0 m/s |
+| 1番目のリンク(0→1)容量 | 100（無制限） |
+| **2番目のリンク(1→4)容量** | **2（制限）** |
+| 3番目のリンク(4→5)容量 | 100（無制限） |
+| 期待途中待機数 | 3台（5台 - 容量2） |
+| 基準飛行時間 | 18.5秒/台（待機なしの場合） |
+
+### 途中リンク待機の実装（FlightScheduler.java）
+
+**既存の実装**（Phase 3b-3で作成済み）:
+
+```java
+// onLinkPassed() 内での次リンク容量チェック
+int nextFrom = path[linkIndex + 1];
+int nextTo = path[linkIndex + 2];
+
+if (!capacityManager.tryConsumeCapacity(nextFrom, nextTo)) {
+    // 容量不足 → 途中待機
+    onMidFlightWaiting(job, linkIndex + 1, nextFrom, nextTo);
+    return;
+}
+
+// onMidFlightWaiting() - 途中待機処理
+private void onMidFlightWaiting(UAVJob job, int waitingLinkIndex, int fromNode, int toNode) {
+    // 再開位置を記録
+    job.setCurrentPathIndex(waitingLinkIndex);
+
+    // 待機キューに登録
+    waitingManager.enqueue(fromNode, toNode, job);
+
+    // 飛行中から削除
+    activeFlights.decrementAndGet();
+}
+```
+
+### テスト結果
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 1（非同期）
+
+**テスト出力（抜粋）**:
+```
+=== Phase 3b-5: 途中リンク待機・再開テスト ===
+
+テスト条件:
+  - UAV数: 5
+  - 経路: [0, 1, 4, 5] (3リンク)
+  - リンク容量:
+    - 0→1: 100 (無制限)
+    - 1→4: 2 (制限)
+    - 4→5: 100 (無制限)
+  - 期待途中待機数: 3台
+
+[全5台が最初のリンク(0→1)を通過]
+  Phase 3b-3: UAV 0 リンク通過 0→1
+  Phase 3b-3: UAV 1 リンク通過 0→1
+  ...
+
+[2番目のリンク(1→4)で途中待機発生]
+  Phase 3b-4: link[1][4] 容量消費成功（Lua原子操作）  ← UAV 0
+  Phase 3b-4: link[1][4] 容量消費成功（Lua原子操作）  ← UAV 2
+  Phase 3b-4: link[1][4] 容量不足（Lua原子操作）      ← UAV 1 待機
+  Phase 3b-4: link[1][4] 容量不足（Lua原子操作）      ← UAV 3 待機
+  Phase 3b-4: link[1][4] 容量不足（Lua原子操作）      ← UAV 4 待機
+  Phase 3b-3: UAV 1 途中待機 (link 1→4, linkIndex=1)
+  Phase 3b-3: UAV 3 途中待機 (link 1→4, linkIndex=1)
+  Phase 3b-3: UAV 4 途中待機 (link 1→4, linkIndex=1)
+
+[容量回復 → 待機UAV再ジョブ化]
+  Phase 3b-4: link[1][4] 容量回復 → 1.0（Lua原子操作）
+  Phase 3b-2d: UAV 3 を待機キュー (1→4) から取り出し
+  Phase 3b-3: 待機UAV 3 を再ジョブ化 (link 1→4)
+  Phase 3b-3: Worker mid-link-test-worker ジョブ取得 UAV 3 (linkIndex=1, link=1→4)
+  ...
+
+=========================
+テスト結果:
+  完了UAV: 5/5
+  リンク通過: 15/15
+  実行時間: 34.29秒
+  基準時間: 18.5秒（待機なしの場合）
+  途中待機発生: あり（予想通り）
+
+✓ テスト成功！
+  - 全5台が完了
+  - 全15回のリンク通過を確認
+  - 途中リンク待機→再開フローが正常動作
+=========================
+```
+
+### 検証ポイント
+
+| 項目 | 期待値 | 実測値 | 結果 |
+|------|--------|--------|------|
+| 完了UAV | 5 | 5 | ✅ |
+| リンク通過 | 15 | 15 | ✅ |
+| 途中待機数 | 3 | 3 | ✅ |
+| 再開処理 | 3回 | 3回 | ✅ |
+
+✅ **全5台が1番目のリンク(0→1)を同時に通過**
+✅ **2番目のリンク(1→4)で3台が途中待機（容量2に対して5台）**
+✅ **容量回復時に待機UAVが正しく再ジョブ化**
+✅ **再開後のUAVがlinkIndex=1から正しく飛行再開**
+✅ **全15回のリンク通過と5台の完了を確認**
+
+---
+
 ## 現在の制限事項と今後の課題
 
 ### Phase 3b-2d時点での制限
@@ -2272,15 +2402,16 @@ if (waitingManager.hasWaitingUAV(...)) {
 }
 ```
 
-#### 3. 途中リンク待機処理が未実装
-- 最初のリンクのみ容量チェック・待機登録を実装
-- 途中リンク（2番目以降）での容量チェック・待機は未実装
-- → Phase 3b-2eで実装予定
+#### 3. ~~途中リンク待機処理が未実装~~ ✅ Phase 3b-5で検証済み
+```java
+// Phase 3b-3 (FlightScheduler.java) で実装済み
+// Phase 3b-5 (MidLinkWaitingTest.java) で検証済み
+```
 
 #### 4. RouteSearcher統合が未実装
 - 現在はテストコードからジョブ投入
 - 実際の経路探索からのジョブ投入
-- → Phase 3b-2fで実装予定
+- → Phase 3b-6で実装予定
 
 ### 解決済みの課題（Phase 3b-2bで対応）
 
@@ -2333,16 +2464,11 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 
 ## 次のステップ
 
-### Phase 3b-5: 途中リンク待機・再開（次の作業）
+### ~~Phase 3b-5: 途中リンク待機・再開~~ ✅ 完了
 
-**目標**: 途中のリンク（2番目以降）で容量不足時の待機・再開処理を実装
+E2Eテスト（MidLinkWaitingTest）で途中リンク待機→再開フローを検証済み。
 
-**実装予定**:
-1. FlightScheduler.onLinkPassed()で次リンク容量チェック（既に実装済み）
-2. onMidFlightWaiting()で途中待機を登録（既に実装済み）
-3. 途中リンク待機→再開のE2Eテストを作成
-
-### Phase 3b-6: RouteSearcher統合
+### Phase 3b-6: RouteSearcher統合（次の作業）
 
 | フェーズ | 内容 |
 |---------|------|
@@ -2422,6 +2548,7 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 - ✅ `src/test/UAVEventSerializationTest.java`（シリアライズテスト）
 - ✅ `src/test/AsyncFlightTest.java`（非同期飛行E2Eテスト）
 - ✅ `src/test/LuaAtomicTest.java`（Luaスクリプト競合テスト）
+- ✅ `src/test/MidLinkWaitingTest.java`（途中リンク待機・再開テスト）
 
 ### 削除されたテストファイル（同期Worker用）
 - ❌ `src/test/SingleLinkFlightTest.java`
@@ -2437,6 +2564,7 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 - ✅ **Phase 3b-2d**: 最初リンク待機・再開 - 5/5完了、15/15リンク通過、3/3再ジョブ化
 - ✅ **Phase 3b-3**: 非同期イベントスケジューリング - 1 Workerで5台同時飛行、約19秒（同期方式の92.5秒から約80%短縮）
 - ✅ **Phase 3b-4**: Luaスクリプト原子操作 - 容量消費・回復の完全な原子性を実現、競合テスト（50スレッド同時アクセスで5/5成功、45/45失敗）
+- ✅ **Phase 3b-5**: 途中リンク待機・再開 - 2番目のリンクで3台が途中待機→容量回復後に正常再開、5/5完了
 
 ---
 
@@ -2447,4 +2575,5 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 **Phase 3b-2d 完了日**: 2025-12-29
 **Phase 3b-3 完了日**: 2025-12-29
 **Phase 3b-4 完了日**: 2025-12-29
-**次の作業**: Phase 3b-5（途中リンク待機・再開）
+**Phase 3b-5 完了日**: 2025-12-29
+**次の作業**: Phase 3b-6（RouteSearcher統合）
