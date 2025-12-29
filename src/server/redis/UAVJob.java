@@ -32,6 +32,10 @@ public class UAVJob implements Serializable {
     // Phase 3b-2b: リンク距離情報
     private double[] linkDistances;        // 各リンクの距離（メートル）
 
+    // Phase 3b-3: 非同期スケジューリング用
+    private double elapsedFlightTime;      // 経過飛行時間（秒）
+    private long currentLinkStartTime;     // 現在のリンク飛行開始時刻（ミリ秒）
+
     /**
      * デフォルトコンストラクタ（シリアライゼーション用）
      */
@@ -127,6 +131,32 @@ public class UAVJob implements Serializable {
         this.currentPathIndex = currentPathIndex;
     }
 
+    // Phase 3b-3: 非同期スケジューリング用メソッド
+
+    public double getElapsedFlightTime() {
+        return elapsedFlightTime;
+    }
+
+    public void setElapsedFlightTime(double elapsedFlightTime) {
+        this.elapsedFlightTime = elapsedFlightTime;
+    }
+
+    /**
+     * 経過飛行時間を加算
+     * @param time 加算する時間（秒）
+     */
+    public void addElapsedFlightTime(double time) {
+        this.elapsedFlightTime += time;
+    }
+
+    public long getCurrentLinkStartTime() {
+        return currentLinkStartTime;
+    }
+
+    public void setCurrentLinkStartTime(long currentLinkStartTime) {
+        this.currentLinkStartTime = currentLinkStartTime;
+    }
+
     // Phase 3b-2b: リンク距離関連メソッド
 
     public double[] getLinkDistances() {
@@ -191,6 +221,7 @@ public class UAVJob implements Serializable {
                 ", sourceBeaconId=" + sourceBeaconId +
                 ", destinationBeaconId=" + destinationBeaconId +
                 ", currentPathIndex=" + currentPathIndex +
+                ", elapsedFlightTime=" + elapsedFlightTime +
                 ", totalDistance=" + getTotalDistance() +
                 '}';
     }
