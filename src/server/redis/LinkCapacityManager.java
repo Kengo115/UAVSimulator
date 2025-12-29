@@ -4,12 +4,16 @@ import item.Link;
 import org.redisson.api.RAtomicDouble;
 import org.redisson.api.RAtomicLong;
 import org.redisson.api.RBucket;
+import org.redisson.api.RScript;
 import org.redisson.api.RedissonClient;
 import server.util.LogManager;
+
+import java.util.Collections;
 
 /**
  * リンク容量をRedisに保存・管理するクラス
  * Phase 3a: リンク容量Redis移行
+ * Phase 3b-4: Luaスクリプトによる原子操作
  *
  * アトミック操作を使用して、複数ワーカーによる競合を防止
  */
@@ -17,6 +21,34 @@ public class LinkCapacityManager {
 
     private boolean redisEnabled = false;
     private RedissonClient client;
+    private RScript script;
+
+    /**
+     * Phase 3b-4: 容量消費用Luaスクリプト
+     * チェック→消費を1つの原子操作として実行
+     *
+     * KEYS[1]: 容量キー (link:X:Y:capacity)
+     * 戻り値: 1 = 成功, 0 = 失敗（容量不足）
+     */
+    private static final String CONSUME_CAPACITY_SCRIPT =
+        "local capacity = tonumber(redis.call('GET', KEYS[1])) or 0 " +
+        "if capacity >= 1 then " +
+        "    redis.call('INCRBYFLOAT', KEYS[1], -1) " +
+        "    return 1 " +
+        "else " +
+        "    return 0 " +
+        "end";
+
+    /**
+     * Phase 3b-4: 容量回復用Luaスクリプト
+     * 回復後の容量を返す
+     *
+     * KEYS[1]: 容量キー (link:X:Y:capacity)
+     * 戻り値: 回復後の容量
+     */
+    private static final String RECOVER_CAPACITY_SCRIPT =
+        "local newCapacity = redis.call('INCRBYFLOAT', KEYS[1], 1) " +
+        "return newCapacity";
 
     /**
      * コンストラクタ
@@ -26,7 +58,9 @@ public class LinkCapacityManager {
             RedisConnectionManager connectionManager = RedisConnectionManager.getInstance();
             if (connectionManager.isConnected()) {
                 this.client = connectionManager.getClient();
+                this.script = client.getScript();
                 this.redisEnabled = true;
+                LogManager.getInstance().log("Phase 3b-4: LinkCapacityManager初期化（Luaスクリプト有効）");
             } else {
                 LogManager.getInstance().log("LinkCapacityManager: Redis未接続のため、容量管理機能は無効です");
             }
@@ -238,8 +272,8 @@ public class LinkCapacityManager {
     }
 
     /**
-     * リンク容量を消費する（アトミック操作）
-     * Phase 3b-2d: 容量チェック + 消費を行う
+     * リンク容量を消費する（Luaスクリプトによる原子操作）
+     * Phase 3b-4: チェック→消費を1つの原子操作として実行
      *
      * 1 UAV = 1 容量として消費
      * 容量が1未満の場合は消費せずfalseを返す
@@ -255,27 +289,28 @@ public class LinkCapacityManager {
 
         try {
             String key = "link:" + srcNode + ":" + dstNode + ":capacity";
-            RAtomicDouble capacity = client.getAtomicDouble(key);
 
-            // アトミックにデクリメント
-            double newCapacity = capacity.addAndGet(-1.0);
+            // Luaスクリプトで原子的にチェック→消費
+            Long result = script.eval(
+                RScript.Mode.READ_WRITE,
+                CONSUME_CAPACITY_SCRIPT,
+                RScript.ReturnType.INTEGER,
+                Collections.singletonList(key)
+            );
 
-            if (newCapacity >= 0) {
-                // 成功: 容量確保できた
+            boolean success = (result != null && result == 1);
+
+            if (success) {
                 LogManager.getInstance().log(
-                    "Phase 3b-2d: link[" + srcNode + "][" + dstNode + "] 容量消費成功 " +
-                    (newCapacity + 1) + " → " + newCapacity
+                    "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量消費成功（Lua原子操作）"
                 );
-                return true;
             } else {
-                // 失敗: 容量不足 → 戻す
-                capacity.addAndGet(1.0);
                 LogManager.getInstance().log(
-                    "Phase 3b-2d: link[" + srcNode + "][" + dstNode + "] 容量不足 (現在=" +
-                    (newCapacity + 1) + ")"
+                    "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量不足（Lua原子操作）"
                 );
-                return false;
             }
+
+            return success;
         } catch (Exception e) {
             LogManager.getInstance().error("容量消費エラー: link[" + srcNode + "][" + dstNode + "]", e);
             return false;
@@ -283,8 +318,8 @@ public class LinkCapacityManager {
     }
 
     /**
-     * リンク容量を回復する（アトミック操作）
-     * Phase 3b-2d: UAVがリンクを通過した際に容量を回復
+     * リンク容量を回復する（Luaスクリプトによる原子操作）
+     * Phase 3b-4: UAVがリンクを通過した際に容量を回復
      *
      * 1 UAV = 1 容量として回復
      *
@@ -299,12 +334,27 @@ public class LinkCapacityManager {
 
         try {
             String key = "link:" + srcNode + ":" + dstNode + ":capacity";
-            RAtomicDouble capacity = client.getAtomicDouble(key);
-            double newCapacity = capacity.addAndGet(1.0);
+
+            // Luaスクリプトで原子的に回復
+            Object result = script.eval(
+                RScript.Mode.READ_WRITE,
+                RECOVER_CAPACITY_SCRIPT,
+                RScript.ReturnType.VALUE,
+                Collections.singletonList(key)
+            );
+
+            // 結果を適切にdoubleに変換
+            double newCapacity;
+            if (result instanceof Number) {
+                newCapacity = ((Number) result).doubleValue();
+            } else if (result instanceof String) {
+                newCapacity = Double.parseDouble((String) result);
+            } else {
+                newCapacity = 0.0;
+            }
 
             LogManager.getInstance().log(
-                "Phase 3b-2d: link[" + srcNode + "][" + dstNode + "] 容量回復 " +
-                (newCapacity - 1) + " → " + newCapacity
+                "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量回復 → " + newCapacity + "（Lua原子操作）"
             );
             return newCapacity;
         } catch (Exception e) {

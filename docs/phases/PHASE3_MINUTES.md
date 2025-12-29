@@ -41,7 +41,7 @@ Phase 3は以下の3段階に分かれています：
 | **Phase 3b-2c** | Worker複数リンク飛行 | ✅ 完了 |
 | **Phase 3b-2d** | 最初リンク待機・再開 | ✅ 完了 |
 | **Phase 3b-3** | 非同期イベントスケジューリング | ✅ 完了 |
-| **Phase 3b-4** | Luaスクリプト原子操作 | ⬜ 未着手 |
+| **Phase 3b-4** | Luaスクリプト原子操作 | ✅ 完了 |
 | **Phase 3b-5** | 途中リンク待機・再開 | ⬜ 未着手 |
 | **Phase 3b-6** | RouteSearcher統合 | ⬜ 未着手 |
 | **Phase 3b-7** | 統合テスト・安定化 | ⬜ 未着手 |
@@ -1584,6 +1584,120 @@ private static final double LINK_CAPACITY = 100.0;
 
 ---
 
+## Phase 3b-4: Luaスクリプト原子操作
+
+### 実装方針
+**Luaスクリプトによる完全な原子操作**
+
+Phase 3b-3では楽観的ロック方式（デクリメント→負なら戻す）を使用していましたが、複数Workerが同時に同じリンクを処理すると一瞬だけ不整合が発生する可能性がありました。Phase 3b-4ではLuaスクリプトを使用して、容量操作を完全に原子的にします。
+
+### 楽観的ロック vs Luaスクリプト
+
+| 項目 | 楽観的ロック（Phase 3b-3） | Luaスクリプト（Phase 3b-4） |
+|------|--------------------------|---------------------------|
+| 原子性 | 個別操作のみ | **完全に原子的** |
+| 競合ウィンドウ | あり（一瞬） | **なし** |
+| 負の容量発生 | 可能性あり | **不可能** |
+| Redis呼び出し回数 | 2回（失敗時） | **1回** |
+
+### 実装した機能
+
+#### 1. 容量消費用Luaスクリプト
+
+```lua
+-- KEYS[1]: 容量キー (link:X:Y:capacity)
+-- 戻り値: 1 = 成功, 0 = 失敗（容量不足）
+local capacity = tonumber(redis.call('GET', KEYS[1])) or 0
+if capacity >= 1 then
+    redis.call('INCRBYFLOAT', KEYS[1], -1)
+    return 1
+else
+    return 0
+end
+```
+
+#### 2. 容量回復用Luaスクリプト
+
+```lua
+-- KEYS[1]: 容量キー (link:X:Y:capacity)
+-- 戻り値: 回復後の容量
+local newCapacity = redis.call('INCRBYFLOAT', KEYS[1], 1)
+return newCapacity
+```
+
+#### 3. LinkCapacityManager.java 修正
+
+**tryConsumeCapacity()（Luaスクリプト版）**:
+```java
+public boolean tryConsumeCapacity(int srcNode, int dstNode) {
+    String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+
+    // Luaスクリプトで原子的にチェック→消費
+    Long result = script.eval(
+        RScript.Mode.READ_WRITE,
+        CONSUME_CAPACITY_SCRIPT,
+        RScript.ReturnType.INTEGER,
+        Collections.singletonList(key)
+    );
+
+    return (result != null && result == 1);
+}
+```
+
+**recoverCapacity()（Luaスクリプト版）**:
+```java
+public double recoverCapacity(int srcNode, int dstNode) {
+    String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+
+    // Luaスクリプトで原子的に回復
+    Object result = script.eval(
+        RScript.Mode.READ_WRITE,
+        RECOVER_CAPACITY_SCRIPT,
+        RScript.ReturnType.VALUE,
+        Collections.singletonList(key)
+    );
+
+    // 結果を適切にdoubleに変換
+    if (result instanceof Number) {
+        return ((Number) result).doubleValue();
+    }
+    return 0.0;
+}
+```
+
+### テスト結果
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 1（非同期）
+
+**テスト出力（抜粋）**:
+```
+2025-12-29 22:53:35.777 - Phase 3b-4: link[0][1] 容量消費成功（Lua原子操作）
+2025-12-29 22:53:35.781 - Phase 3b-4: link[0][1] 容量消費成功（Lua原子操作）
+...
+2025-12-29 22:53:40.802 - Phase 3b-4: link[0][1] 容量回復 → 97.0（Lua原子操作）
+2025-12-29 22:53:40.802 - Phase 3b-4: link[0][1] 容量回復 → 100.0（Lua原子操作）
+...
+テスト結果:
+  完了UAV: 5/5
+  リンク通過: 15/15
+✓ テスト成功！
+```
+
+### 検証ポイント
+
+| 項目 | 結果 |
+|------|------|
+| ✅ Luaスクリプト実行 | 正常動作 |
+| ✅ 容量消費（原子的） | 15回全て成功 |
+| ✅ 容量回復（原子的） | 15回全て成功 |
+| ✅ 既存テスト互換性 | AsyncFlightTest通過 |
+| ✅ 競合ウィンドウ | 完全に排除 |
+
+---
+
 ## 作成・修正したファイル
 
 ### Phase 3a: 新規作成
@@ -1675,11 +1789,23 @@ private static final double LINK_CAPACITY = 100.0;
 | `src/server/worker/AsyncUAVWorker.java` | 非同期UAVワーカー |
 | `src/test/AsyncFlightTest.java` | 非同期飛行E2Eテスト |
 
+### Phase 3b-4: 新規作成
+
+| ファイル | 役割 |
+|---------|------|
+| `src/test/LuaAtomicTest.java` | Luaスクリプト競合テスト（50スレッド同時アクセス） |
+
 ### Phase 3b-3: 修正
 
 | ファイル | 変更内容 |
 |---------|---------|
 | `src/server/redis/UAVJob.java` | elapsedFlightTime, currentLinkStartTime, addElapsedFlightTime()追加 |
+
+### Phase 3b-4: 修正
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `src/server/redis/LinkCapacityManager.java` | Luaスクリプト追加、tryConsumeCapacity()とrecoverCapacity()を原子操作化 |
 
 ---
 
@@ -2025,6 +2151,98 @@ Phase 3b: Worker worker-1 - UAV 0 処理完了
 
 ---
 
+### Phase 3b-4: Luaスクリプト原子操作テスト
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 1（非同期）
+
+**テスト条件**:
+- AsyncFlightTestを使用（Phase 3b-3と同じ条件）
+- Luaスクリプトによる容量消費・回復を検証
+
+**テスト結果**:
+```
+テスト結果:
+  完了UAV: 5/5
+  リンク通過: 15/15
+  容量消費（Lua原子操作）: 15回成功
+  容量回復（Lua原子操作）: 15回成功
+✓ テスト成功！
+```
+
+✅ **Luaスクリプト実行が正常動作**
+✅ **容量消費: チェック→消費が1つの原子操作として実行**
+✅ **容量回復: 原子的にインクリメント**
+✅ **競合ウィンドウが完全に排除**
+✅ **既存テスト（AsyncFlightTest）との互換性維持**
+
+---
+
+### 競合テスト（LuaAtomicTest）
+
+**テスト目的**: Luaスクリプトの原子性を競合条件下で検証
+
+**テスト条件**:
+- 初期容量: 5
+- 同時アクセススレッド数: 50
+- 全スレッドが `CountDownLatch` で同期して一斉開始
+- 期待成功数: 5（容量と同じ）
+- 期待失敗数: 45（50 - 5）
+
+**テスト結果**:
+```
+=== Phase 3b-4: Luaスクリプト競合テスト ===
+
+テスト条件:
+  - 初期容量: 5
+  - 同時アクセススレッド数: 50
+  - 期待成功数: 5
+  - 期待失敗数: 45
+
+[3/4] 競合テスト実行...
+  50スレッドが同時に容量消費を試行
+  全スレッド開始!
+  Thread 22: 失敗 (累計失敗: 1)
+  Thread 20: 成功 (累計成功: 1)
+  Thread 6: 成功 (累計成功: 2)
+  ...（50スレッドが約39msで完了）...
+
+  実行時間: 39ms
+
+=========================
+テスト結果:
+  成功数: 5 (期待: 5)
+  失敗数: 45 (期待: 45)
+  最終容量: 0.0 (期待: 0)
+  合計処理数: 50 (期待: 50)
+
+✓ テスト成功！
+  - 成功数が容量と一致
+  - 失敗数が正確
+  - 容量が負にならなかった
+  - Luaスクリプトの原子性が確認された
+=========================
+```
+
+**検証ポイント**:
+
+| 項目 | 期待値 | 実測値 | 結果 |
+|------|--------|--------|------|
+| 成功数 | 5 | 5 | ✅ |
+| 失敗数 | 45 | 45 | ✅ |
+| 最終容量 | 0.0 | 0.0 | ✅ |
+| 合計処理数 | 50 | 50 | ✅ |
+| 容量が負になる | なし | なし | ✅ |
+
+✅ **50スレッド同時アクセスでも正確に5回のみ成功**
+✅ **容量が負にならない（楽観的ロックで発生する可能性があった問題を排除）**
+✅ **実行時間39ms（高速な並列処理）**
+✅ **Luaスクリプトの原子性が競合条件下で確認された**
+
+---
+
 ## 現在の制限事項と今後の課題
 
 ### Phase 3b-2d時点での制限
@@ -2115,28 +2333,7 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 
 ## 次のステップ
 
-### Phase 3b-4: Luaスクリプト原子操作（次の作業）
-
-**目標**: 容量チェックと消費をLuaスクリプトで原子的に実行し、競合を完全に防止
-
-**背景**:
-- 現在の`tryConsumeCapacity()`は楽観的ロック方式（デクリメント→負なら戻す）
-- 複数Workerが同時に同じリンクを処理すると、一瞬だけ不整合が発生する可能性
-- Luaスクリプトを使用することで、チェック→消費を1つの原子操作として実行
-
-**実装予定**:
-```lua
--- 容量チェック＋消費（原子操作）
-local capacity = redis.call('GET', KEYS[1])
-if tonumber(capacity) >= 1 then
-    redis.call('DECRBYFLOAT', KEYS[1], 1)
-    return 1  -- 成功
-else
-    return 0  -- 失敗
-end
-```
-
-### Phase 3b-5: 途中リンク待機・再開
+### Phase 3b-5: 途中リンク待機・再開（次の作業）
 
 **目標**: 途中のリンク（2番目以降）で容量不足時の待機・再開処理を実装
 
@@ -2224,6 +2421,7 @@ end
 - ✅ `src/test/UAVWorkerTest.java`（ワーカー基本機能テスト）
 - ✅ `src/test/UAVEventSerializationTest.java`（シリアライズテスト）
 - ✅ `src/test/AsyncFlightTest.java`（非同期飛行E2Eテスト）
+- ✅ `src/test/LuaAtomicTest.java`（Luaスクリプト競合テスト）
 
 ### 削除されたテストファイル（同期Worker用）
 - ❌ `src/test/SingleLinkFlightTest.java`
@@ -2238,6 +2436,7 @@ end
 - ✅ **Phase 3b-2c**: 複数リンク飛行 - 5/5完了、15/15リンク通過
 - ✅ **Phase 3b-2d**: 最初リンク待機・再開 - 5/5完了、15/15リンク通過、3/3再ジョブ化
 - ✅ **Phase 3b-3**: 非同期イベントスケジューリング - 1 Workerで5台同時飛行、約19秒（同期方式の92.5秒から約80%短縮）
+- ✅ **Phase 3b-4**: Luaスクリプト原子操作 - 容量消費・回復の完全な原子性を実現、競合テスト（50スレッド同時アクセスで5/5成功、45/45失敗）
 
 ---
 
@@ -2247,4 +2446,5 @@ end
 **Phase 3b-2c 完了日**: 2025-12-29
 **Phase 3b-2d 完了日**: 2025-12-29
 **Phase 3b-3 完了日**: 2025-12-29
-**次の作業**: Phase 3b-4（Luaスクリプト原子操作）
+**Phase 3b-4 完了日**: 2025-12-29
+**次の作業**: Phase 3b-5（途中リンク待機・再開）
