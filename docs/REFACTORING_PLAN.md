@@ -929,248 +929,620 @@ public void testPhase3a_LinkCapacityRedis() {
 
 ---
 
-### Phase 3b: ワーカープロセス導入（3-4日）
+### Phase 3b: イベント駆動ワーカーアーキテクチャ
 
-#### ゴール
-- **別JVMでUAV処理を実行**
-- Redisジョブキューを使用
-- メインプロセスとワーカープロセスの協調動作
-- **⚡ 時間精度の改善（後述）**
+**更新日**: 2025-12-29
+**ステータス**: 🔄 設計完了・実装待ち
 
-#### 現状の課題
+---
 
-**Phase 3a完了時点:**
+#### 設計変更の背景
+
+Phase 3b-1で基本的なジョブキューとワーカーを実装しましたが、以下の問題が発生しました：
+
+**発生した問題（差し戻し前のコミットで確認）:**
+1. 40台のUAVのうち、10台しか処理されなかった
+2. 待機UAVが適切に再処理されなかった
+3. 完了通知がメインプロセスに届いても、待機UAVの再ジョブ化ができなかった
+
+**根本原因:**
+- 現在のポーリングベースの待機処理をそのままWorkerモードに移植しようとした
+- メインプロセスの`processWaitingUAVs()`がWorkerモードでは動作しない
+- 容量管理がメモリとRedisで分離していた
+
+**解決策:**
+- **イベント駆動アーキテクチャ**への全面移行
+- UAVの全アクション（飛行開始、リンク通過、待機開始、待機終了、飛行完了）をイベントで管理
+- 2秒間隔のポーリングループを廃止
+
+---
+
+#### 目標アーキテクチャ（イベント駆動）
+
 ```
-[メインプロセス - 1つのタイマー]
-  │
-  └─ 2秒ごとに全UAVを順次処理（直列処理）
-     ├─ UAV 0の位置更新
-     ├─ UAV 1の位置更新
-     ├─ UAV 2の位置更新
-     │   ...
-     └─ UAV 99の位置更新
-
-     ⚠️ UAV数が増えると処理時間が増加
-     ⚠️ 処理時間 > 2秒 になると遅延発生
-     ⚠️ 理論飛行時間と実測時間にズレが発生
-```
-
-**時間のズレの原因:**
-- 2秒間隔の**離散的な**処理（連続的ではない）
-- 全UAVを1つのスレッドで**直列処理**
-- UAV数が増えると処理時間が線形増加
-- 処理時間が2秒を超えると遅延が蓄積
-
-**例:**
-```
-理論飛行時間: distance / speed = 1500m / 14.48m/s = 103.5秒
-実測飛行時間: 104秒（2秒間隔なので切り上げ）
-ズレ: 0.5秒
-
-UAV数が100台の場合:
-1回の処理に0.5秒かかると仮定
-→ 100台 × 0.5秒 = 50秒（2秒を大幅超過！）
-→ 次の処理サイクルまで48秒待機
-→ 大幅な遅延が発生
-```
-
-#### アーキテクチャ
-
-**Phase 3b完了後:**
-```
-┌────────────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│  Main Process      │         │     Redis       │         │ Worker Process  │
-│  (Controller)      │         │   (State DB)    │         │   (Multiple)    │
-│                    │         │                 │         │                 │
-│  ┌──────────────┐ │  LPUSH  │ ┌─────────────┐ │  BRPOP  │ ┌─────────────┐ │
-│  │経路探索       │ ├────────▶│ │ Job Queue   │ │◀────────┤ │UAV Worker 1 │ │
-│  │- Dijkstra    │ │         │ │             │ │         │ │             │ │
-│  │- EPS         │ │         │ │ jobs:uav    │ │         │ │ [Timer 1]   │ │
-│  │- BinaryEPS   │ │         │ └─────────────┘ │         │ │ UAV 0       │ │
-│  └──────────────┘ │         │                 │         │ │ UAV 1       │ │
-│                    │  READ   │ ┌─────────────┐ │  READ/  │ └─────────────┘ │
-│  ┌──────────────┐ │         │ │ UAV State   │ │  WRITE  │                 │
-│  │UAV割り当て   │ │         │ │             │ │         │ ┌─────────────┐ │
-│  │- 経路設定    │ │         │ │ uav:{id}    │ │◀────────┤ │UAV Worker 2 │ │
-│  │- 速度設定    │ │         │ └─────────────┘ │         │ │             │ │
-│  └──────────────┘ │         │                 │         │ │ [Timer 2]   │ │
-│                    │  READ   │ ┌─────────────┐ │  READ/  │ │ UAV 2       │ │
-│  ┌──────────────┐ │         │ │ Link        │ │  WRITE  │ │ UAV 3       │ │
-│  │結果集約       │ │         │ │ Capacity    │ │         │ └─────────────┘ │
-│  │- ログ出力    │ │         │ │             │ │         │                 │
-│  │- 統計表示    │ │         │ │link:{i}:{j} │ │         │ ┌─────────────┐ │
-│  └──────────────┘ │         │ │:capacity    │ │         │ │UAV Worker N │ │
-│         ▲          │         │ │:flying_count│ │         │ │             │ │
-│         │          │  SUB    │ └─────────────┘ │  PUB    │ │ [Timer N]   │ │
-│         │          │         │                 │         │ │ UAV M       │ │
-│         └──────────┼─────────│ ┌─────────────┐ │◀────────┤ │ UAV M+1     │ │
-│     完了通知受信   │         │ │ Pub/Sub     │ │  発行    │ └─────────────┘ │
-│                    │         │ │             │ │         │                 │
-│                    │         │ │uav:completed│ │         │  各ワーカーが   │
-└────────────────────┘         │ └─────────────┘ │         │  独立したタイマー│
-                               │                 │         │  で処理         │
-                               └─────────────────┘         └─────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           メインプロセス                                 │
+│                                                                          │
+│  ┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐    │
+│  │RouteSearcher │     │UAVLinkPassed     │     │UAVCompletion     │    │
+│  │              │     │Listener          │     │Listener          │    │
+│  │ 経路探索     │     │                  │     │                  │    │
+│  │ ジョブ投入   │     │ 容量回復         │     │ 統計更新         │    │
+│  │ 待機登録     │     │ 待機UAV再ジョブ化│     │ 最終容量回復     │    │
+│  └──────┬───────┘     └────────▲─────────┘     └────────▲─────────┘    │
+│         │                      │                        │               │
+└─────────┼──────────────────────┼────────────────────────┼───────────────┘
+          │                      │                        │
+          │ enqueue              │ publish                │ publish
+          ▼                      │                        │
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Redis                                       │
+│                                                                          │
+│   jobs:uav (Queue)          uav:link:passed         uav:completed       │
+│   ┌─────────────┐           (Pub/Sub Channel)       (Pub/Sub Channel)   │
+│   │ [Jobs...]   │                                                        │
+│   └──────┬──────┘                                                        │
+│          │                                                               │
+│   waiting:link:X:Y (Deque)   ← リンク別待機キュー（FIFO）                │
+│   ┌─────────────┐                                                        │
+│   │ [Jobs...]   │                                                        │
+│   └─────────────┘                                                        │
+└─────────┼───────────────────────────────────────────────────────────────┘
+          │ poll
+          ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Worker プロセス                                │
+│                                                                          │
+│   while (running) {                                                      │
+│       job = jobQueue.dequeue()        ←── 【飛行開始】                   │
+│       │                                                                  │
+│       for each link in path:                                             │
+│           │                                                              │
+│           ├─ flyLink(from, to)        ←── 【飛行中】タイマーで計測       │
+│           │                                                              │
+│           └─ linkPassedEvent.publish() ──→ 【リンク通過】イベント送信    │
+│                                                                          │
+│       completionEvent.publish()       ──→ 【飛行完了】イベント送信       │
+│   }                                                                      │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key Point:**
-- 各ワーカーが**独立したタイマー**を持つ
-- UAVごとに**並列処理**（直列→並列）
-- ワーカー数を増やせば処理能力が線形増加
+---
 
-#### 実装
+#### UAVアクションのイベント一覧
 
-**1. ジョブ定義**
+| アクション | トリガー | イベント/処理 | 担当 |
+|-----------|---------|--------------|------|
+| **経路割当** | 経路探索完了 | ジョブ投入 or 待機登録 | メインプロセス |
+| **飛行開始** | ジョブ取得 | `jobs:uav` からpoll | Worker |
+| **リンク通過** | 飛行距離到達 | `UAVLinkPassedEvent` 送信 | Worker |
+| **待機開始** | 容量不足検知 | `waiting:link:X:Y` に登録 | Worker/メイン |
+| **待機終了** | 容量回復検知 | 待機キューからdequeue | メインプロセス |
+| **飛行再開** | 再ジョブ化 | `jobs:uav` に再投入 | メインプロセス |
+| **飛行完了** | 最終リンク通過 | `UAVCompletionEvent` 送信 | Worker |
+
+---
+
+#### 段階的実装計画
+
+##### Phase 3b-2a: 基盤クラス作成
+
+**目標**: イベントクラスと管理クラスの枠組みを作成（ロジックなし）
+
+**作成ファイル**:
+```
+src/server/redis/
+├── UAVLinkPassedEvent.java      # リンク通過イベント（データクラス）
+├── UAVCompletionEvent.java      # 完了イベント（データクラス）
+├── WaitingUAVManager.java       # 待機UAV管理（スタブ）
+└── UAVEventChannels.java        # Pub/Subチャンネル名定数
+```
+
+**イベントクラス設計**:
 ```java
-// src/server/redis/UAVJob.java
-public class UAVJob implements Serializable {
+// UAVLinkPassedEvent.java
+public class UAVLinkPassedEvent implements Serializable {
     private int uavId;
     private int clientId;
-    private int[] path;
-    private double speed;
-    private long startTime;
-    private String flyingLinkKey;  // "0-1" 形式
+    private int passedFromNode;      // 通過したリンクの始点
+    private int passedToNode;        // 通過したリンクの終点
+    private int nextFromNode;        // 次のリンクの始点（-1 = 最終リンク）
+    private int nextToNode;          // 次のリンクの終点（-1 = 最終リンク）
+    private int[] path;              // 経路情報
+    private int currentLinkIndex;    // 現在の経路インデックス
+    private long timestamp;          // イベント発生時刻
+    private double elapsedFlightTime; // 経過飛行時間
+    // getter/setter/toString
+}
 
-    // getters/setters
+// UAVCompletionEvent.java
+public class UAVCompletionEvent implements Serializable {
+    private int uavId;
+    private int clientId;
+    private long arrivalTime;        // 到着時刻
+    private double totalDistance;    // 総飛行距離
+    private double actualFlightTime; // 実飛行時間
+    private double totalWaitingTime; // 総待機時間
+    private int[] path;              // 飛行経路
+    private int sourceBeaconId;      // 出発地
+    private int destinationBeaconId; // 目的地
+    // getter/setter/toString
 }
 ```
 
-**2. ジョブキュー管理**
+**テスト条件**:
+- コンパイルが通ること
+- 既存機能に影響がないこと（`make run`で従来通り動作）
+
+**コミット**: `Phase 3b-2a: イベントクラスと管理クラスの枠組み作成`
+
+---
+
+##### Phase 3b-2b: Worker飛行処理（待機なし・単一リンク）
+
+**目標**: 最もシンプルなケースでWorker処理を動作確認
+
+**テスト条件**:
+```
+- ノード: 2つのみ（0 → 1）
+- 経路: 単一リンク [0, 1]
+- UAV数: 5台
+- リンク容量: 100（待機が発生しない）
+- Worker数: 1
+```
+
+**実装内容**:
+
+1. **UAVJob.java 修正** - リンク距離情報を追加
 ```java
-// src/server/redis/UAVJobQueue.java
-public class UAVJobQueue {
-    private static final String QUEUE_KEY = "uav:jobs";
-    private RBlockingQueue<UAVJob> queue;
+private double[] linkDistances;  // 各リンクの距離
 
-    public UAVJobQueue(RedissonClient redisson) {
-        this.queue = redisson.getBlockingQueue(QUEUE_KEY);
+public double getLinkDistance(int linkIndex) {
+    return linkDistances[linkIndex];
+}
+```
+
+2. **UAVWorker.java 修正** - 単一リンク飛行処理
+```java
+private void processUAVJob(UAVJob job) {
+    int[] path = job.getPath();
+    int fromNode = path[0];
+    int toNode = path[1];
+
+    // リンク距離を取得
+    double linkDistance = job.getLinkDistance(0);
+
+    // 飛行時間を計算
+    double flightTime = linkDistance / job.getSpeed();
+
+    // タイマーで待機（実際の飛行をシミュレート）
+    Thread.sleep((long)(flightTime * 1000));
+
+    // 完了イベント送信
+    publishCompletionEvent(job);
+}
+```
+
+3. **UAVCompletionListener.java 作成**
+```java
+public class UAVCompletionListener {
+    public void startListening() {
+        RTopic topic = client.getTopic(UAVEventChannels.COMPLETION);
+        topic.addListener(UAVCompletionEvent.class, (channel, event) -> {
+            handleCompletionEvent(event);
+        });
     }
 
-    // ジョブを追加（メインプロセス）
-    public void enqueueJob(UAVJob job) {
-        queue.offer(job);
-        LogManager.getInstance().log("Enqueued UAV job: " + job.getUavId());
-    }
-
-    // ジョブを取得（ワーカープロセス）
-    public UAVJob dequeueJob(long timeout, TimeUnit unit) throws InterruptedException {
-        return queue.poll(timeout, unit);
+    private void handleCompletionEvent(UAVCompletionEvent event) {
+        LogManager.getInstance().log("UAV " + event.getUavId() + " 完了通知受信");
+        // 統計更新（ログ出力のみ）
     }
 }
 ```
 
-**3. ワーカープロセス**
+**期待結果**:
+```
+Worker: "UAV 0 飛行開始 (0→1)"
+Worker: "UAV 0 飛行完了"
+Main: "UAV 0 完了通知受信"
+```
+
+**コミット**: `Phase 3b-2b: Worker単一リンク飛行処理`
+
+---
+
+##### Phase 3b-2c: Worker飛行処理（待機なし・複数リンク）
+
+**目標**: 複数リンクの経路でWorker処理を動作確認
+
+**テスト条件**:
+```
+- ノード: 6つ（0 → 1 → 4 → 5）
+- 経路: 3リンク [0, 1, 4, 5]
+- UAV数: 5台
+- リンク容量: 100（待機が発生しない）
+- Worker数: 1
+```
+
+**実装内容**:
+
+1. **UAVWorker.java 修正** - 複数リンク対応
 ```java
-// src/server/worker/UAVWorker.java
-public class UAVWorker {
-    private UAVJobQueue jobQueue;
-    private RedissonClient redisson;
+private void processUAVJob(UAVJob job) {
+    int[] path = job.getPath();
+    int currentLinkIndex = job.getCurrentLinkIndex();
 
-    public static void main(String[] args) {
-        // Redis接続
-        Config config = new Config();
-        config.useSingleServer().setAddress("redis://localhost:6379");
-        RedissonClient redisson = Redisson.create(config);
+    while (currentLinkIndex < path.length - 1) {
+        int fromNode = path[currentLinkIndex];
+        int toNode = path[currentLinkIndex + 1];
 
-        UAVWorker worker = new UAVWorker(redisson);
-        worker.start();
+        // このリンクを飛行
+        double linkDistance = job.getLinkDistance(currentLinkIndex);
+        double flightTime = linkDistance / job.getSpeed();
+
+        LogManager.log("UAV " + job.getUavId() + " 飛行中 " + fromNode + "→" + toNode);
+        Thread.sleep((long)(flightTime * 1000));
+
+        // リンク通過イベント送信
+        publishLinkPassedEvent(job, fromNode, toNode, currentLinkIndex);
+
+        currentLinkIndex++;
     }
 
-    public void start() {
-        LogManager.getInstance().log("UAV Worker started");
+    // 全リンク通過 → 完了イベント
+    publishCompletionEvent(job);
+}
+```
 
-        while (true) {
-            try {
-                // ジョブを取得（ブロッキング）
-                UAVJob job = jobQueue.dequeueJob(5, TimeUnit.SECONDS);
+2. **UAVLinkPassedListener.java 作成**
+```java
+public class UAVLinkPassedListener {
+    public void startListening() {
+        RTopic topic = client.getTopic(UAVEventChannels.LINK_PASSED);
+        topic.addListener(UAVLinkPassedEvent.class, (channel, event) -> {
+            handleLinkPassedEvent(event);
+        });
+    }
 
-                if (job != null) {
-                    processUAVJob(job);
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
+    private void handleLinkPassedEvent(UAVLinkPassedEvent event) {
+        LogManager.log("UAV " + event.getUavId() +
+            " リンク通過 " + event.getPassedFromNode() + "→" + event.getPassedToNode());
+        // 容量管理は後のフェーズで実装
+    }
+}
+```
+
+**期待結果**:
+```
+Worker: "UAV 0 飛行中 0→1"
+Main: "UAV 0 リンク通過 0→1"
+Worker: "UAV 0 飛行中 1→4"
+Main: "UAV 0 リンク通過 1→4"
+Worker: "UAV 0 飛行中 4→5"
+Main: "UAV 0 リンク通過 4→5"
+Worker: "UAV 0 飛行完了"
+Main: "UAV 0 完了通知受信"
+```
+
+**コミット**: `Phase 3b-2c: Worker複数リンク飛行処理`
+
+---
+
+##### Phase 3b-2d: 待機キュー管理（最初のリンクのみ）
+
+**目標**: 最初のリンクでの待機・再開を実装
+
+**テスト条件**:
+```
+- UAV数: 10台
+- 最初のリンク（0→1）の容量: 5
+- 期待: 5台が飛行、5台が待機、順次再開
+```
+
+**実装内容**:
+
+1. **WaitingUAVManager.java 本実装**
+```java
+public class WaitingUAVManager {
+    private RedissonClient client;
+
+    /**
+     * 待機UAVをリンク別キューに登録（FIFO）
+     */
+    public void enqueue(int fromNode, int toNode, UAVJob job) {
+        String key = "waiting:link:" + fromNode + ":" + toNode;
+        RDeque<UAVJob> queue = client.getDeque(key);
+        queue.addLast(job);
+        LogManager.log("UAV " + job.getUavId() + " 待機開始 (link " + fromNode + "→" + toNode + ")");
+    }
+
+    /**
+     * 待機UAVをリンク別キューから取り出し（FIFO）
+     */
+    public UAVJob dequeue(int fromNode, int toNode) {
+        String key = "waiting:link:" + fromNode + ":" + toNode;
+        RDeque<UAVJob> queue = client.getDeque(key);
+        return queue.pollFirst();
+    }
+
+    /**
+     * 指定リンクに待機UAVがいるか確認
+     */
+    public boolean hasWaitingUAV(int fromNode, int toNode) {
+        String key = "waiting:link:" + fromNode + ":" + toNode;
+        RDeque<UAVJob> queue = client.getDeque(key);
+        return !queue.isEmpty();
+    }
+}
+```
+
+2. **UAVCompletionListener.java 修正** - 待機UAV再ジョブ化
+```java
+private void handleCompletionEvent(UAVCompletionEvent event) {
+    // 統計更新
+    incrementFinishCounter(event);
+
+    // 最終リンクの容量回復 + 待機UAV再ジョブ化
+    int[] path = event.getPath();
+    int lastFrom = path[path.length - 2];
+    int lastTo = path[path.length - 1];
+
+    // 容量回復
+    linkCapacityManager.incrementCapacity(lastFrom, lastTo, 1.0);
+
+    // 待機UAVがいれば再ジョブ化
+    if (waitingManager.hasWaitingUAV(lastFrom, lastTo)) {
+        UAVJob waitingJob = waitingManager.dequeue(lastFrom, lastTo);
+        if (waitingJob != null) {
+            linkCapacityManager.decrementCapacity(lastFrom, lastTo, 1.0);
+            jobQueue.enqueueJob(waitingJob);
+            LogManager.log("UAV " + waitingJob.getUavId() + " 飛行再開");
+        }
+    }
+}
+```
+
+**期待結果**:
+```
+UAV 0-4: 飛行開始
+UAV 5-9: 待機開始 (link 0→1)
+UAV 0 完了 → UAV 5 飛行再開
+UAV 1 完了 → UAV 6 飛行再開
+...
+最終的に10台すべて完了
+```
+
+**コミット**: `Phase 3b-2d: 最初のリンクでの待機・再開`
+
+---
+
+##### Phase 3b-2e: 途中リンクでの待機・再開
+
+**目標**: 途中のリンクでも待機・再開が動作
+
+**テスト条件**:
+```
+- 経路: [0, 1, 4, 5]
+- リンク0→1の容量: 100（待機なし）
+- リンク1→4の容量: 3（待機発生）
+- UAV数: 10台
+```
+
+**実装内容**:
+
+1. **UAVWorker.java 修正** - 途中リンク容量チェック
+```java
+while (currentLinkIndex < path.length - 1) {
+    int fromNode = path[currentLinkIndex];
+    int toNode = path[currentLinkIndex + 1];
+
+    // リンク飛行
+    flyLink(job, fromNode, toNode);
+
+    // リンク通過イベント送信
+    publishLinkPassedEvent(job, fromNode, toNode, currentLinkIndex);
+
+    currentLinkIndex++;
+
+    // 次のリンクがあれば容量チェック
+    if (currentLinkIndex < path.length - 1) {
+        int nextFrom = path[currentLinkIndex];
+        int nextTo = path[currentLinkIndex + 1];
+
+        // Redisから容量を確認
+        double capacity = linkCapacityManager.getCapacity(nextFrom, nextTo);
+
+        if (capacity > 0) {
+            // 容量あり → 継続
+            linkCapacityManager.decrementCapacity(nextFrom, nextTo, 1.0);
+        } else {
+            // 容量なし → 待機キューに登録してジョブ終了
+            UAVJob continuationJob = createContinuationJob(job, currentLinkIndex);
+            waitingManager.enqueue(nextFrom, nextTo, continuationJob);
+            return;  // このジョブは終了
+        }
+    }
+}
+```
+
+2. **UAVLinkPassedListener.java 修正** - 通過リンクの容量回復
+```java
+private void handleLinkPassedEvent(UAVLinkPassedEvent event) {
+    int passedFrom = event.getPassedFromNode();
+    int passedTo = event.getPassedToNode();
+
+    // 通過リンクの容量回復
+    linkCapacityManager.incrementCapacity(passedFrom, passedTo, 1.0);
+
+    // このリンクで待機中のUAVがいれば再ジョブ化
+    if (waitingManager.hasWaitingUAV(passedFrom, passedTo)) {
+        double capacity = linkCapacityManager.getCapacity(passedFrom, passedTo);
+        if (capacity > 0) {
+            UAVJob waitingJob = waitingManager.dequeue(passedFrom, passedTo);
+            if (waitingJob != null) {
+                linkCapacityManager.decrementCapacity(passedFrom, passedTo, 1.0);
+                jobQueue.enqueueJob(waitingJob);
+                LogManager.log("UAV " + waitingJob.getUavId() + " 飛行再開 (途中リンク)");
             }
         }
     }
-
-    private void processUAVJob(UAVJob job) {
-        LogManager.getInstance().log("Processing UAV: " + job.getUavId());
-
-        // UAV状態をRedisから取得
-        RMap<String, Object> uavState = redisson.getMap("uav:" + job.getUavId());
-
-        // 2秒間隔で位置更新をシミュレート
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-        scheduler.scheduleAtFixedRate(() -> {
-            // 飛行時間計算
-            long elapsedTime = (System.currentTimeMillis() - job.getStartTime()) / 1000;
-            double flightDistance = elapsedTime * job.getSpeed();
-
-            // 状態更新
-            uavState.put("flightTime", elapsedTime);
-            uavState.put("flightDistance", flightDistance);
-
-            // 目的地到着判定
-            if (hasReachedDestination(job, flightDistance)) {
-                // 完了通知
-                RTopic topic = redisson.getTopic("uav:completed");
-                topic.publish(job.getUavId());
-
-                scheduler.shutdown();
-            }
-        }, 0, 2, TimeUnit.SECONDS);
-    }
-
-    private boolean hasReachedDestination(UAVJob job, double flightDistance) {
-        // 経路の総距離を計算して比較
-        // ... 実装 ...
-        return false;
-    }
 }
 ```
 
-**4. メインプロセスの修正**
+**コミット**: `Phase 3b-2e: 途中リンクでの待機・再開`
+
+---
+
+##### Phase 3b-2f: RouteSearcher統合
+
+**目標**: 実際の経路探索からWorkerモードで飛行
+
+**実装内容**:
+
+1. **AbstractPhysarumSolverRouteSearcher.java 修正**
 ```java
-// src/server/controller/ServerController.java
-public void run_EPS(...) throws IOException {
-    // [既存] 経路探索
-    extendedPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
+// runUAVFlow() 内
+if (workerModeEnabled) {
+    // Workerモード
+    UAVJob job = createJob(uav, pathArray, linkDistances);
 
-    // [新規] ジョブをワーカーにエンキュー
-    UAVJobQueue jobQueue = new UAVJobQueue(RedisManager.getRedisson());
-
-    for (Uav uav : flyingUavQueue) {
-        UAVJob job = new UAVJob();
-        job.setUavId(uav.getId());
-        job.setClientId(uav.getClientId());
-        job.setPath(uav.getPath());
-        job.setSpeed(uav.getSpeed());
-        job.setStartTime(System.currentTimeMillis());
-
+    if (link[u][v].getCapacity() > 0) {
+        link[u][v].decrementCapacity();
+        linkCapacityManager.decrementCapacity(u, v, 1.0);
         jobQueue.enqueueJob(job);
+    } else {
+        waitingManager.enqueue(u, v, job);
     }
-
-    // [新規] 完了通知を購読
-    RTopic topic = RedisManager.getRedisson().getTopic("uav:completed");
-    topic.addListener(Integer.class, (channel, uavId) -> {
-        LogManager.getInstance().log("UAV " + uavId + " completed");
-        // 完了カウンターを更新
-    });
+} else {
+    // 従来モード（既存コード）
+    flyingUavQueue.add(uav);
 }
 ```
 
-#### Docker設定
+2. **ServerController.java 修正**
+```java
+// Workerモード切り替えフラグ
+private boolean workerModeEnabled = false;
 
-```dockerfile
-# Dockerfile.worker
-FROM openjdk:17-slim
-WORKDIR /app
-COPY target/uav-simulator-worker.jar /app/
-CMD ["java", "-jar", "uav-simulator-worker.jar"]
+public void setWorkerModeEnabled(boolean enabled) {
+    this.workerModeEnabled = enabled;
+    if (enabled) {
+        initializeCompletionListener();
+        initializeLinkPassedListener();
+    }
+}
 ```
 
+3. **BoundaryController.java 修正**
+```java
+// 起動オプションでWorkerモード切り替え
+if (args.contains("--worker-mode")) {
+    serverController.setWorkerModeEnabled(true);
+    System.out.println("Workerモードで起動します");
+}
+```
+
+**テスト**:
+```bash
+# 従来モード（デフォルト）
+make run
+
+# Workerモード
+java -cp ... controller.BoundaryController --worker-mode
+```
+
+**コミット**: `Phase 3b-2f: RouteSearcher統合とモード切り替え`
+
+---
+
+#### Redis Key構造（Phase 3b追加分）
+
+```
+# ジョブキュー
+jobs:uav  →  List [Job1, Job2, ...]
+
+# リンク別待機キュー（FIFO）
+waiting:link:0:1  →  Deque [Job5, Job12, Job15]
+waiting:link:0:2  →  Deque [Job3]
+waiting:link:1:4  →  Deque [Job8]
+
+# Pub/Subチャンネル
+uav:link:passed  →  Channel (UAVLinkPassedEvent)
+uav:completed    →  Channel (UAVCompletionEvent)
+```
+
+---
+
+#### 切り戻し方法
+
+各コミット後に問題が発生した場合:
+
+```bash
+# 直前のコミットに戻す
+git reset --hard HEAD~1
+
+# 特定のコミットに戻す
+git reset --hard <commit-hash>
+
+# Workerモードを無効にして従来モードで動作確認
+# （--worker-mode オプションを付けずに起動）
+make run
+```
+
+---
+
+#### 成果物（Phase 3b完了時）
+
+**新規作成**:
+- ✅ UAVLinkPassedEvent.java
+- ✅ UAVCompletionEvent.java
+- ✅ UAVEventChannels.java
+- ✅ WaitingUAVManager.java
+- ✅ UAVLinkPassedListener.java
+- ✅ UAVCompletionListener.java
+
+**修正**:
+- ✅ UAVJob.java（リンク距離情報追加）
+- ✅ UAVWorker.java（イベント駆動処理）
+- ✅ AbstractPhysarumSolverRouteSearcher.java（Workerモード対応）
+- ✅ ServerController.java（モード切り替え）
+- ✅ BoundaryController.java（起動オプション）
+
+---
+
+### Phase 3b-3: 統合テスト・安定化
+
+**目標**: 本番相当の条件でテスト
+
+**テスト項目**:
+
+| テスト | 条件 | 期待結果 |
+|-------|------|---------|
+| 単一リンク・少数UAV | 5台, 容量100 | 全UAV完了 |
+| 複数リンク・少数UAV | 5台, 容量100 | 全UAV完了 |
+| 待機あり・最初のリンク | 10台, 容量5 | 全UAV完了（待機→再開） |
+| 待機あり・途中リンク | 10台, 容量3 | 全UAV完了（途中待機→再開） |
+| 本番相当 | 40台, 容量30 | 全UAV完了 |
+| 全経路探索手法 | Dijkstra/EPS/HYBRID/BINARY | 全UAV完了 |
+
+**コミット**: `Phase 3b-3: 統合テスト完了`
+
+---
+
+### Phase 4: 完全移行とスケーリング
+
+**目標**: 完全にイベント駆動ベースの処理に移行
+
+#### 実装内容
+
+**1. 従来のポーリングループを削除**
+```java
+// UAVFlyScheduler.java を非推奨化または削除
+// flyUAV() の2秒間隔ポーリングは不要に
+```
+
+**2. Docker Compose設定**
 ```yaml
-# docker-compose.yml
 services:
   redis:
     image: redis:7-alpine
@@ -1180,342 +1552,70 @@ services:
   uav-worker-1:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile
+    command: ["java", "-cp", "/app/classes:/app/lib/*", "server.worker.UAVWorker", "worker-1"]
     depends_on:
       - redis
     environment:
-      - REDIS_URL=redis://redis:6379
-      - WORKER_ID=1
+      - REDIS_HOST=redis
 
   uav-worker-2:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile
+    command: ["java", "-cp", "/app/classes:/app/lib/*", "server.worker.UAVWorker", "worker-2"]
     depends_on:
       - redis
     environment:
-      - REDIS_URL=redis://redis:6379
-      - WORKER_ID=2
+      - REDIS_HOST=redis
 ```
 
-#### テスト
-
-```java
-@Test
-public void testPhase3_WorkerProcessing() {
-    // 1. Redisが起動していることを確認
-    // 2. ワーカーを起動
-    // 3. ジョブをエンキュー
-    // 4. ワーカーが処理することを確認
-    // 5. 完了通知が届くことを確認
-}
-```
-
-#### ⚡ 時間精度の改善
-
-**質問: ワーカー化で時間のズレは解決できますか？**
-
-**回答: はい、大幅に改善できます。ただし完全にはゼロにはなりません。**
-
-##### 現状の問題分析
-
-**Phase 3a（メインプロセス・直列処理）:**
-```
-時刻t=0秒:
-  → 全UAV（100台）を順次処理
-     UAV 0処理: 10ms
-     UAV 1処理: 10ms
-     ...
-     UAV 99処理: 10ms
-  → 合計: 1000ms（1秒）
-
-時刻t=2秒:
-  → 再び全UAV処理（1秒）
-
-時刻t=4秒:
-  → 再び全UAV処理（1秒）
-
-問題点:
-1. 処理時間がUAV数に比例（O(N)）
-2. UAV 0とUAV 99で処理タイミングが1秒ずれる
-3. UAV数が増えると処理が2秒を超過する可能性
-```
-
-**Phase 3b（ワーカー・並列処理）:**
-```
-[Worker 1]               [Worker 2]               [Worker N]
-  ├─ UAV 0 (Timer)        ├─ UAV 2 (Timer)        ├─ UAV M (Timer)
-  │  └─ 2秒間隔           │  └─ 2秒間隔           │  └─ 2秒間隔
-  │                       │                       │
-  └─ UAV 1 (Timer)        └─ UAV 3 (Timer)        └─ UAV M+1 (Timer)
-     └─ 2秒間隔              └─ 2秒間隔              └─ 2秒間隔
-
-利点:
-1. 各UAVが独立したタイマーで処理（並列）
-2. 他のUAVの影響を受けない
-3. 処理時間がワーカー数で割れる（O(N/W)、W=ワーカー数）
-```
-
-##### 時間精度の比較
-
-| ケース | UAV数 | ワーカー数 | 処理時間/サイクル | 遅延 | 精度 |
-|--------|------|----------|-----------------|------|------|
-| **Phase 3a（現状）** | 10台 | 1 | 100ms | 0秒 | ✅ 良好 |
-| **Phase 3a（現状）** | 100台 | 1 | 1000ms | 0秒 | ⚠️ やや悪化 |
-| **Phase 3a（現状）** | 500台 | 1 | 5000ms | **3秒** | ❌ 大幅悪化 |
-| **Phase 3b（ワーカー）** | 100台 | 10 | 100ms | 0秒 | ✅ 良好 |
-| **Phase 3b（ワーカー）** | 500台 | 50 | 100ms | 0秒 | ✅ 良好 |
-| **Phase 3b（ワーカー）** | 1000台 | 100 | 100ms | 0秒 | ✅ 良好 |
-
-**計算式:**
-```
-処理時間/サイクル = (UAV数 × UAV処理時間) / ワーカー数
-
-遅延 = max(0, 処理時間/サイクル - 2秒)
-```
-
-##### 並列数の制限
-
-**理論上の最大並列数:**
-```
-ワーカー数 = UAV数
-
-例: 100台のUAVなら100ワーカー
-→ 各ワーカーが1台のUAVを専属で処理
-```
-
-**実用上の推奨並列数:**
-```
-ワーカー数 = CPUコア数 × 1.5〜2
-
-理由:
-1. Redis接続数の制限（デフォルト: 10000接続）
-2. メモリ使用量（各ワーカーがJVM起動）
-3. コンテキストスイッチのオーバーヘッド
-
-例:
-- 8コアマシン → 12〜16ワーカー
-- 16コアマシン → 24〜32ワーカー
-- 32コアマシン → 48〜64ワーカー
-```
-
-**スケーリング例:**
+**3. スケーリング**
 ```bash
 # ワーカー数を動的に増減
-docker-compose up -d --scale uav-worker=10   # 10ワーカー
-docker-compose up -d --scale uav-worker=50   # 50ワーカー
-docker-compose up -d --scale uav-worker=100  # 100ワーカー
-```
-
-##### 改善効果のシミュレーション
-
-**実験設定:**
-- UAV数: 100台
-- 経路距離: 1500m
-- 速度: 14.48m/s
-- 理論飛行時間: 103.57秒
-
-**Phase 3a（現状）:**
-```
-処理サイクル: 2秒ごと
-サイクル数: 103.57 / 2 = 51.785回 → 52回
-実測時間: 52 × 2 = 104秒
-誤差: 0.43秒（0.4%）
-
-UAV処理時間: 10ms × 100台 = 1000ms
-→ まだ2秒以内なので遅延なし
-```
-
-**Phase 3a（大規模）:**
-```
-UAV数: 500台
-処理時間: 10ms × 500台 = 5000ms（5秒）
-→ 2秒を3秒超過！
-
-タイムライン:
-t=0秒: 処理開始
-t=5秒: 処理完了（本来はt=2秒で開始すべき）
-t=5秒: 次の処理開始
-t=10秒: 処理完了（本来はt=4秒）
-
-→ 遅延が蓄積し、実測時間が大幅に増加
-```
-
-**Phase 3b（ワーカー10台）:**
-```
-ワーカー数: 10台
-各ワーカー担当: 100 / 10 = 10台のUAV
-処理時間: 10ms × 10台 = 100ms
-→ 2秒以内、遅延なし
-
-タイムライン:
-t=0秒: 全ワーカーが並列で処理開始
-t=0.1秒: 全ワーカーが処理完了
-t=2秒: 全ワーカーが次の処理開始
-t=2.1秒: 全ワーカーが処理完了
-
-→ 遅延ゼロ、理論値に近い精度
-```
-
-**Phase 3b（ワーカー50台で500UAV）:**
-```
-ワーカー数: 50台
-各ワーカー担当: 500 / 50 = 10台のUAV
-処理時間: 10ms × 10台 = 100ms
-→ 2秒以内、遅延なし
-
-Phase 3aでは不可能だった規模でも、
-ワーカーを増やすことで対応可能
-```
-
-##### 残る誤差について
-
-**2秒間隔による離散化誤差:**
-```
-理論飛行時間: 103.57秒
-2秒間隔での実測: 104秒
-誤差: 0.43秒
-
-この誤差は2秒間隔処理の構造上、
-ワーカー化しても残ります。
-```
-
-**完全に誤差をゼロにする方法（Phase 4以降の検討事項）:**
-```java
-// イベント駆動モデル（到着時刻を事前計算）
-double arrivalTime = distance / speed;
-scheduler.schedule(() -> {
-    // 到着処理
-}, (long)arrivalTime, TimeUnit.SECONDS);
-
-→ 2秒間隔ではなく、到着予定時刻に処理
-→ 理論値との誤差がほぼゼロ
-```
-
-##### まとめ
-
-| 項目 | Phase 3a（現状） | Phase 3b（ワーカー） | 改善率 |
-|-----|-----------------|-------------------|--------|
-| **小規模（10台）** | 0.4%の誤差 | 0.4%の誤差 | 同等 |
-| **中規模（100台）** | 0.4%の誤差 | 0.4%の誤差 | 同等 |
-| **大規模（500台）** | 遅延蓄積で破綻 | 0.4%の誤差 | **大幅改善** |
-| **超大規模（1000台）** | 処理不可能 | ワーカー増で対応可 | **質的改善** |
-| **スケーラビリティ** | ❌ 限界あり | ✅ 水平スケール可 | **無限** |
-
-**結論:**
-- ワーカー化により、**大規模シミュレーションでの時間精度が大幅改善**
-- 小規模では効果が見えにくいが、規模が大きいほど効果絶大
-- 並列数は理論上UAV数まで、実用上はCPUコア数の1.5〜2倍を推奨
-- 2秒間隔の離散化誤差（0.4%程度）はワーカー化でも残る
-  - 完全にゼロにするにはイベント駆動モデルへの移行が必要（Phase 4以降）
-
-#### 成果物
-- ✅ UAVWorker実装
-- ✅ ジョブキュー実装
-- ✅ Docker設定
-- ✅ Pub/Sub実装
-
-#### ロールバック
-- ワーカーを起動しなければ既存処理で動作
-
----
-
-### Phase 4: 完全移行とスケーリング（3-4日）
-
-#### ゴール
-- 既存のScheduledExecutorServiceを削除
-- 完全にRedis + Workerベースの処理
-- 水平スケール可能に
-
-#### 実装
-
-**1. UAVFlyScheduler の非推奨化**
-```java
-// src/server/uav/UAVFlyScheduler.java
-@Deprecated
-public class UAVFlyScheduler {
-    // この実装は使用されない
-    // すべてRedisワーカーで処理
-}
-```
-
-**2. スケーリング設定**
-```yaml
-# docker-compose.yml
-services:
-  uav-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.worker
-    depends_on:
-      - redis
-    environment:
-      - REDIS_URL=redis://redis:6379
-    deploy:
-      replicas: 5  # 5つのワーカープロセス
-```
-
-#### テスト
-
-```java
-@Test
-public void testPhase4_FullMigration() {
-    // 1. 100台のUAVをシミュレーション
-    // 2. 複数ワーカーで並列処理
-    // 3. すべてのUAVが正しく完了することを確認
-    // 4. パフォーマンスを測定
-}
+docker-compose up -d --scale uav-worker=5   # 5ワーカー
+docker-compose up -d --scale uav-worker=10  # 10ワーカー
 ```
 
 #### 成果物
-- ✅ 既存コードの削除
+- ✅ 既存ポーリングコードの削除
+- ✅ Docker設定完成
 - ✅ スケーリング検証
-- ✅ パフォーマンステスト
 
 ---
 
-### Phase 5: モニタリングと最適化（2-3日）
+### Phase 5: モニタリングと最適化
 
-#### ゴール
-- Redisモニタリング
-- パフォーマンス最適化
-- 障害対応
+**目標**: 本番運用に向けた監視と最適化
 
-#### 実装
+#### 実装内容
 
-**1. Redis Insightの導入**
-```yaml
-# docker-compose.yml
-services:
-  redis-insight:
-    image: redislabs/redisinsight:latest
-    ports:
-      - "8001:8001"
-```
+**1. Redis Commanderでの監視**
+- ジョブキュー長（`jobs:uav`）
+- 待機キュー長（`waiting:link:*`）
+- リンク容量（`link:*:capacity`）
 
 **2. メトリクス収集**
 ```java
-// src/server/monitoring/MetricsCollector.java
 public class MetricsCollector {
-    public static void recordUAVProcessingTime(int uavId, long duration) {
-        RTimeSeries<Long> timeSeries = redisson.getTimeSeries("metrics:processing_time");
-        timeSeries.add(System.currentTimeMillis(), duration);
+    public static void recordProcessingTime(int uavId, long duration) {
+        // 処理時間を記録
     }
 
     public static void recordQueueLength() {
-        RBlockingQueue<UAVJob> queue = redisson.getBlockingQueue("uav:jobs");
-        int queueLength = queue.size();
-
-        RTimeSeries<Integer> timeSeries = redisson.getTimeSeries("metrics:queue_length");
-        timeSeries.add(System.currentTimeMillis(), queueLength);
+        // キュー長を記録
     }
 }
 ```
 
+**3. エラーハンドリング**
+- Worker異常終了時のジョブ復帰
+- Redis接続断時のフォールバック
+
 #### 成果物
-- ✅ モニタリングダッシュボード
+- ✅ モニタリング設定
 - ✅ メトリクス収集
-- ✅ アラート設定
+- ✅ エラーハンドリング強化
 
 ---
 
@@ -1526,20 +1626,32 @@ public class MetricsCollector {
 | **Phase 0** | 1-2日 | Docker環境、Redisson設定、Redis Commander | 低 | ✅ **完了** (2025-12-27) |
 | **Phase 1** | 3-4日 | 二重書き込み、整合性検証、BinaryEPS修正 | 低 | ✅ **完了** (2025-12-28) |
 | **Phase 2** | 3-4日 | 統計情報読み取り、ログ読み取り、パフォーマンス測定 | 中 | ✅ **完了** (2025-12-28) |
-| **Phase 3** | 5-7日 | リンク容量Redis移行、ワーカープロセス | 高 | ⬜ 未着手 |
-| **Phase 4** | 3-4日 | 完全移行 | 中 | ⬜ 未着手 |
-| **Phase 5** | 2-3日 | モニタリング | 低 | ⬜ 未着手 |
-| **合計** | **18-25日** | | | **進捗: 3/6完了** |
+| **Phase 3a** | 2-3日 | リンク容量Redis移行 | 中 | ✅ **完了** (2025-12-28) |
+| **Phase 3b-1** | 1-2日 | ジョブキュー・ワーカー基盤 | 中 | ✅ **完了** (2025-12-28) |
+| **Phase 3b-2a** | 1日 | イベントクラス枠組み | 低 | ⬜ 未着手 |
+| **Phase 3b-2b** | 1日 | Worker単一リンク飛行 | 低 | ⬜ 未着手 |
+| **Phase 3b-2c** | 1日 | Worker複数リンク飛行 | 中 | ⬜ 未着手 |
+| **Phase 3b-2d** | 1-2日 | 最初リンク待機・再開 | 中 | ⬜ 未着手 |
+| **Phase 3b-2e** | 1-2日 | 途中リンク待機・再開 | 高 | ⬜ 未着手 |
+| **Phase 3b-2f** | 1-2日 | RouteSearcher統合 | 高 | ⬜ 未着手 |
+| **Phase 3b-3** | 2-3日 | 統合テスト・安定化 | 中 | ⬜ 未着手 |
+| **Phase 4** | 3-4日 | 完全移行・スケーリング | 中 | ⬜ 未着手 |
+| **Phase 5** | 2-3日 | モニタリング・最適化 | 低 | ⬜ 未着手 |
 
 ### 実績
 - Phase 0: 実施日数 **約0.5日**（2025-12-27）
 - Phase 1: 実施日数 **約1日**（2025-12-28）
 - Phase 2: 実施日数 **約1日**（2025-12-28）
-- 合計: **約2.5日**（計画6-10日に対して効率的に完了）
+- Phase 3a: 実施日数 **約0.5日**（2025-12-28）
+- Phase 3b-1: 実施日数 **約0.5日**（2025-12-28）
+- 合計: **約3.5日**
 
-### Phase 2以降の変更
-- **Phase 2**: 「リンク容量Redis移行」→「統計情報読み取り切り替え」に変更（段階的アプローチのため）
-- **Phase 3**: リンク容量Redis移行とワーカープロセス導入を統合予定
+### 設計変更履歴
+- **2025-12-28**: Phase 3b-1実装後に問題発生（待機UAVが処理されない）
+- **2025-12-29**: Phase 3b-2以降をイベント駆動アーキテクチャに再設計
+  - ポーリングベース → イベント駆動
+  - 全UAVキュー走査 → リンク別待機キュー
+  - 2秒間隔処理 → 即時イベント応答
 
 ---
 
