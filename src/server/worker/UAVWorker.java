@@ -1,21 +1,22 @@
 package server.worker;
 
+import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
 import org.redisson.Redisson;
 import server.redis.RedisConnectionManager;
+import server.redis.UAVCompletionEvent;
+import server.redis.UAVEventChannels;
 import server.redis.UAVJob;
 import server.redis.UAVJobQueue;
 import server.util.LogManager;
 
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * UAVワーカープロセス
- * Phase 3b-1: 基本機能（ジョブ取得、タイマー処理、ログ出力）
+ * Phase 3b-2b: 単一リンク飛行処理と完了イベント送信
  *
  * 各ワーカーは独立したJVMプロセスとして動作し、
  * Redisジョブキューからジョブを取得してUAVを処理する
@@ -24,10 +25,9 @@ public class UAVWorker {
 
     private UAVJobQueue jobQueue;
     private RedissonClient redisson;
+    private RTopic completionTopic;  // Phase 3b-2b: 完了イベント送信用
     private String workerId;
     private AtomicBoolean running = new AtomicBoolean(true);
-
-    private static final int UPDATE_INTERVAL_SECONDS = 2;  // 2秒間隔で更新
 
     /**
      * コンストラクタ
@@ -43,9 +43,11 @@ public class UAVWorker {
             if (connectionManager.isConnected()) {
                 this.redisson = connectionManager.getClient();
                 this.jobQueue = new UAVJobQueue();
-                LogManager.getInstance().log("Phase 3b: UAV Worker " + workerId + " initialized");
+                // Phase 3b-2b: 完了イベント送信用トピック
+                this.completionTopic = redisson.getTopic(UAVEventChannels.COMPLETION);
+                LogManager.getInstance().log("Phase 3b-2b: UAV Worker " + workerId + " initialized");
             } else {
-                LogManager.getInstance().log("Phase 3b: Redis未接続のため、Worker " + workerId + " は起動できません");
+                LogManager.getInstance().log("Phase 3b-2b: Redis未接続のため、Worker " + workerId + " は起動できません");
                 throw new RuntimeException("Redis connection failed");
             }
         } catch (Exception e) {
@@ -89,91 +91,90 @@ public class UAVWorker {
 
     /**
      * UAVジョブを処理する
-     * Phase 3b-1: 基本機能（タイマーとログ出力のみ）
+     * Phase 3b-2b: 単一リンク飛行処理と完了イベント送信
      *
      * @param job UAVジョブ
      */
     private void processUAVJob(UAVJob job) {
+        int[] path = job.getPath();
+        int fromNode = path[0];
+        int toNode = path[path.length - 1];
+
         LogManager.getInstance().log(
-            "Phase 3b: Worker " + workerId + " - UAV " + job.getUavId() + " 処理開始 " +
-            "(client=" + job.getClientId() + ", " +
-            "source=" + job.getSourceBeaconId() + ", " +
-            "dest=" + job.getDestinationBeaconId() + ")"
+            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() +
+            " 飛行開始 (" + fromNode + "→" + toNode + ")"
         );
 
-        // Phase 3b-1: シンプルな距離計算
-        double totalDistance = calculateTotalDistance(job);
-        double theoreticalFlightTime = totalDistance / job.getSpeed();
+        // 総飛行距離を取得（UAVJob.getTotalDistance()を使用）
+        double totalDistance = job.getTotalDistance();
+
+        // リンク距離が設定されていない場合は仮の値を使用（後方互換性）
+        if (totalDistance <= 0) {
+            totalDistance = (path.length - 1) * 100.0;  // 仮: 1リンク100m
+            LogManager.getInstance().log(
+                "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() +
+                " リンク距離未設定のため仮の値を使用: " + totalDistance + "m"
+            );
+        }
+
+        // 飛行時間を計算
+        double flightTimeSeconds = totalDistance / job.getSpeed();
 
         LogManager.getInstance().log(
-            "Phase 3b: Worker " + workerId + " - UAV " + job.getUavId() + " " +
+            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() + " " +
             "distance=" + String.format("%.2f", totalDistance) + "m, " +
             "speed=" + String.format("%.2f", job.getSpeed()) + "m/s, " +
-            "theoretical time=" + String.format("%.2f", theoreticalFlightTime) + "s"
+            "flightTime=" + String.format("%.2f", flightTimeSeconds) + "s"
         );
 
-        // タイマーを起動（2秒間隔で位置更新）
-        final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+        // 飛行をシミュレート（Thread.sleepで待機）
+        try {
+            long flightTimeMs = (long) (flightTimeSeconds * 1000);
+            Thread.sleep(flightTimeMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LogManager.getInstance().error("Worker " + workerId + " - 飛行中に割り込み", e);
+            return;
+        }
 
-        scheduler.scheduleAtFixedRate(() -> {
-            try {
-                // 経過時間を計算
-                long elapsedTimeMs = System.currentTimeMillis() - job.getStartTime();
-                double elapsedTimeSec = elapsedTimeMs / 1000.0;
+        // 飛行完了
+        LogManager.getInstance().log(
+            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() + " 飛行完了"
+        );
 
-                // 飛行距離を計算
-                double flightDistance = elapsedTimeSec * job.getSpeed();
+        // 完了イベントを送信
+        publishCompletionEvent(job, totalDistance, flightTimeSeconds);
 
-                LogManager.getInstance().log(
-                    "Phase 3b: Worker " + workerId + " - UAV " + job.getUavId() + " " +
-                    "elapsed=" + String.format("%.1f", elapsedTimeSec) + "s, " +
-                    "distance=" + String.format("%.2f", flightDistance) + "m"
-                );
-
-                // Phase 3b-1: シンプルな到着判定
-                if (flightDistance >= totalDistance) {
-                    LogManager.getInstance().log(
-                        "Phase 3b: Worker " + workerId + " - UAV " + job.getUavId() + " 目的地に到着"
-                    );
-
-                    // タイマーを停止
-                    scheduler.shutdown();
-
-                    // Phase 3b-2で完了通知（Pub/Sub）を実装予定
-                    LogManager.getInstance().log(
-                        "Phase 3b: Worker " + workerId + " - UAV " + job.getUavId() + " 処理完了"
-                    );
-                }
-
-            } catch (Exception e) {
-                LogManager.getInstance().error("Worker " + workerId + " - タイマー処理エラー", e);
-                scheduler.shutdown();
-            }
-        }, 0, UPDATE_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        LogManager.getInstance().log(
+            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() + " 処理完了"
+        );
     }
 
     /**
-     * Phase 3b-1: シンプルな距離計算
-     * 経路の各セグメント距離を仮定して計算
+     * 完了イベントをPub/Subで送信
+     * Phase 3b-2b: メインプロセスに完了を通知
      *
-     * @param job UAVジョブ
-     * @return 総距離（メートル）
+     * @param job 完了したジョブ
+     * @param totalDistance 総飛行距離
+     * @param actualFlightTime 実飛行時間
      */
-    private double calculateTotalDistance(UAVJob job) {
-        // Phase 3b-1: 仮の実装
-        // 各リンクの距離を100mと仮定
-        int[] path = job.getPath();
-        if (path == null || path.length < 2) {
-            return 0.0;
-        }
+    private void publishCompletionEvent(UAVJob job, double totalDistance, double actualFlightTime) {
+        UAVCompletionEvent event = new UAVCompletionEvent(
+            job.getUavId(),
+            job.getClientId(),
+            totalDistance,
+            actualFlightTime,
+            0.0,  // totalWaitingTime（Phase 3b-2bでは待機なし）
+            job.getPath(),
+            job.getSourceBeaconId(),
+            job.getDestinationBeaconId()
+        );
 
-        // セグメント数 = ノード数 - 1
-        int segmentCount = path.length - 1;
-
-        // 仮の距離（1セグメント = 100m）
-        double distancePerSegment = 100.0;
-
-        return segmentCount * distancePerSegment;
+        long listeners = completionTopic.publish(event);
+        LogManager.getInstance().log(
+            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() +
+            " 完了イベント送信 (listeners=" + listeners + ")"
+        );
     }
 
     /**

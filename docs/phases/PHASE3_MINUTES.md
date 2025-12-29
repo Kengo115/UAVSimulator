@@ -2,18 +2,19 @@
 
 **実施日**: 2025-12-28 〜 2025-12-29
 **担当者**: Claude (Sonnet 4.5 / Opus 4.5)
-**ステータス**: 🔄 部分完了（Phase 3a完了、Phase 3b-1完了、Phase 3b-2a完了、Phase 3b-2b以降は未着手）
+**ステータス**: 🔄 部分完了（Phase 3a完了、Phase 3b-1完了、Phase 3b-2a完了、Phase 3b-2b完了、Phase 3b-2c以降は未着手）
 
 ## 目次
 1. [Phase 3の概要](#phase-3の概要)
 2. [Phase 3a: リンク容量Redis移行](#phase-3a-リンク容量redis移行)
 3. [Phase 3b-1: ジョブキューとワーカーの基本実装](#phase-3b-1-ジョブキューとワーカーの基本実装)
 4. [Phase 3b-2a: イベントクラス枠組み作成](#phase-3b-2a-イベントクラス枠組み作成)
-5. [作成・修正したファイル](#作成修正したファイル)
-6. [Redis Key構造](#redis-key構造)
-7. [テスト結果](#テスト結果)
-8. [現在の制限事項と今後の課題](#現在の制限事項と今後の課題)
-9. [次のステップ](#次のステップ)
+5. [Phase 3b-2b: Worker単一リンク飛行](#phase-3b-2b-worker単一リンク飛行)
+6. [作成・修正したファイル](#作成修正したファイル)
+7. [Redis Key構造](#redis-key構造)
+8. [テスト結果](#テスト結果)
+9. [現在の制限事項と今後の課題](#現在の制限事項と今後の課題)
+10. [次のステップ](#次のステップ)
 
 ---
 
@@ -33,7 +34,7 @@ Phase 3は以下の3段階に分かれています：
 | **Phase 3a** | リンク容量Redis移行（二重書き込み） | ✅ 完了 |
 | **Phase 3b-1** | ジョブキューとワーカーの基本実装 | ✅ 完了 |
 | **Phase 3b-2a** | イベントクラス枠組み作成 | ✅ 完了 |
-| **Phase 3b-2b** | Worker単一リンク飛行 | ⬜ 未着手 |
+| **Phase 3b-2b** | Worker単一リンク飛行 | ✅ 完了 |
 | **Phase 3b-2c** | Worker複数リンク飛行 | ⬜ 未着手 |
 | **Phase 3b-2d** | 最初リンク待機・再開 | ⬜ 未着手 |
 | **Phase 3b-2e** | 途中リンク待機・再開 | ⬜ 未着手 |
@@ -513,6 +514,273 @@ public class WaitingUAVManager {
 
 ---
 
+## Phase 3b-2b: Worker単一リンク飛行
+
+### 実装方針
+**最もシンプルなケースでWorker処理を動作確認**
+
+単一リンク（0→1）の経路でUAVを飛行させ、以下を検証：
+1. Worker がジョブを取得して飛行処理
+2. Thread.sleep で飛行時間をシミュレート
+3. 完了イベントを Pub/Sub で送信
+4. メインプロセスのリスナーが完了イベントを受信
+
+### 実装した機能
+
+#### 1. UAVJob.java 修正（リンク距離情報追加）
+
+**追加フィールド**:
+```java
+// Phase 3b-2b: リンク距離情報
+private double[] linkDistances;        // 各リンクの距離（メートル）
+```
+
+**追加メソッド**:
+```java
+// 指定インデックスのリンク距離を取得
+public double getLinkDistance(int linkIndex) {
+    if (linkDistances == null || linkIndex < 0 || linkIndex >= linkDistances.length) {
+        return 0.0;
+    }
+    return linkDistances[linkIndex];
+}
+
+// 経路の総距離を計算
+public double getTotalDistance() {
+    if (linkDistances == null || linkDistances.length == 0) {
+        return 0.0;
+    }
+    double total = 0.0;
+    for (double distance : linkDistances) {
+        total += distance;
+    }
+    return total;
+}
+
+// 現在位置から目的地までの残り距離を計算
+public double getRemainingDistance() {
+    if (linkDistances == null || currentPathIndex >= linkDistances.length) {
+        return 0.0;
+    }
+    double remaining = 0.0;
+    for (int i = currentPathIndex; i < linkDistances.length; i++) {
+        remaining += linkDistances[i];
+    }
+    return remaining;
+}
+```
+
+---
+
+#### 2. UAVWorker.java 修正（飛行処理と完了イベント送信）
+
+**追加フィールド**:
+```java
+private RTopic completionTopic;  // Phase 3b-2b: 完了イベント送信用
+```
+
+**コンストラクタ変更**:
+```java
+// Phase 3b-2b: 完了イベント送信用トピック
+this.completionTopic = redisson.getTopic(UAVEventChannels.COMPLETION);
+```
+
+**processUAVJob() メソッド（Phase 3b-2b版）**:
+```java
+private void processUAVJob(UAVJob job) {
+    int[] path = job.getPath();
+    int fromNode = path[0];
+    int toNode = path[path.length - 1];
+
+    // 総飛行距離を取得（UAVJob.getTotalDistance()を使用）
+    double totalDistance = job.getTotalDistance();
+
+    // リンク距離が設定されていない場合は仮の値を使用（後方互換性）
+    if (totalDistance <= 0) {
+        totalDistance = (path.length - 1) * 100.0;  // 仮: 1リンク100m
+    }
+
+    // 飛行時間を計算
+    double flightTimeSeconds = totalDistance / job.getSpeed();
+
+    // 飛行をシミュレート（Thread.sleepで待機）
+    try {
+        long flightTimeMs = (long) (flightTimeSeconds * 1000);
+        Thread.sleep(flightTimeMs);
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+    }
+
+    // 完了イベントを送信
+    publishCompletionEvent(job, totalDistance, flightTimeSeconds);
+}
+```
+
+**publishCompletionEvent() メソッド（新規）**:
+```java
+private void publishCompletionEvent(UAVJob job, double totalDistance, double actualFlightTime) {
+    UAVCompletionEvent event = new UAVCompletionEvent(
+        job.getUavId(),
+        job.getClientId(),
+        totalDistance,
+        actualFlightTime,
+        0.0,  // totalWaitingTime（Phase 3b-2bでは待機なし）
+        job.getPath(),
+        job.getSourceBeaconId(),
+        job.getDestinationBeaconId()
+    );
+
+    long listeners = completionTopic.publish(event);
+    LogManager.getInstance().log(
+        "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() +
+        " 完了イベント送信 (listeners=" + listeners + ")"
+    );
+}
+```
+
+---
+
+#### 3. UAVCompletionListener.java（新規作成）
+
+**役割**: メインプロセスで完了イベントを受信
+
+**実装**:
+```java
+public class UAVCompletionListener {
+    private RedissonClient client;
+    private RTopic topic;
+    private int listenerId = -1;
+    private AtomicInteger completedCount = new AtomicInteger(0);
+
+    public UAVCompletionListener() {
+        this.client = RedisConnectionManager.getInstance().getClient();
+        this.topic = client.getTopic(UAVEventChannels.COMPLETION);
+    }
+
+    public void startListening() {
+        listenerId = topic.addListener(UAVCompletionEvent.class,
+            (channel, event) -> handleCompletionEvent(event));
+    }
+
+    private void handleCompletionEvent(UAVCompletionEvent event) {
+        int count = completedCount.incrementAndGet();
+
+        LogManager.getInstance().log(
+            "Phase 3b-2b: [メイン] UAV " + event.getUavId() + " 完了通知受信 " +
+            "(client=" + event.getClientId() + ", " +
+            "distance=" + event.getTotalDistance() + "m, " +
+            "time=" + event.getActualFlightTime() + "s, " +
+            "efficiency=" + (event.getFlightEfficiency() * 100) + "%, " +
+            "総完了数=" + count + ")"
+        );
+
+        // Phase 3b-2d以降: ここで容量回復と待機UAV再ジョブ化を行う
+    }
+
+    public void stopListening() {
+        if (topic != null && listenerId >= 0) {
+            topic.removeListener(listenerId);
+        }
+    }
+
+    public int getCompletedCount() {
+        return completedCount.get();
+    }
+}
+```
+
+---
+
+#### 4. SingleLinkFlightTest.java（新規作成）
+
+**役割**: 単一リンク飛行のE2Eテスト
+
+**テスト条件**:
+```java
+private static final int UAV_COUNT = 3;           // テストするUAV数
+private static final double LINK_DISTANCE = 50.0; // リンク距離（メートル）
+private static final double UAV_SPEED = 10.0;     // UAV速度（m/s）
+// 期待される飛行時間: 50m / 10m/s = 5秒
+```
+
+**テストフロー**:
+```
+1. Redis接続
+2. UAVCompletionListener開始
+3. ジョブキュークリア → 3件のジョブ投入
+4. UAVWorker起動（別スレッド）
+5. 完了待機（タイムアウト付き）
+6. 結果判定（3/3完了 = 成功）
+7. クリーンアップ
+```
+
+---
+
+### テスト結果
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 1（テストプロセス内）
+
+**テスト出力**:
+```
+=== Phase 3b-2b: 単一リンク飛行テスト ===
+
+テスト条件:
+  - UAV数: 3
+  - 経路: [0, 1] (単一リンク)
+  - リンク距離: 50.0m
+  - UAV速度: 10.0m/s
+  - 期待飛行時間: 5.0秒
+
+[1/5] Redis接続... ✓ 接続成功
+[2/5] 完了リスナー開始... ✓ リスナー開始
+[3/5] ジョブ投入... ✓ 3件のジョブを投入
+[4/5] Worker起動... ✓ Worker起動
+[5/5] 完了待機...
+  Phase 3b: ジョブ取得成功 - UAV 0 (client 1)
+  Phase 3b-2b: Worker test-worker - UAV 0 飛行開始 (0→1)
+  Phase 3b-2b: Worker test-worker - UAV 0 distance=50.00m, speed=10.00m/s, flightTime=5.00s
+  ...
+  Phase 3b-2b: Worker test-worker - UAV 0 飛行完了
+  Phase 3b-2b: Worker test-worker - UAV 0 完了イベント送信 (listeners=1)
+  Phase 3b-2b: [メイン] UAV 0 完了通知受信 (client=1, distance=50.00m, time=5.00s, efficiency=100.0%, 総完了数=1)
+  ...
+  Phase 3b-2b: [メイン] UAV 1 完了通知受信 (..., 総完了数=2)
+  ...
+  Phase 3b-2b: [メイン] UAV 2 完了通知受信 (..., 総完了数=3)
+
+=========================
+テスト結果: 3/3 完了
+✓ テスト成功！
+=========================
+```
+
+✅ **Worker が正しく飛行をシミュレート（Thread.sleep）**
+✅ **Pub/Sub で完了イベントが正しく送受信（listeners=1）**
+✅ **リスナーがイベントを受信してカウント更新**
+✅ **飛行時間が正確（50m / 10m/s = 5秒）**
+
+---
+
+### 注意事項（テスト実行時）
+
+**問題**: 以前のdocker-compose.ymlから作成された古いDockerワーカー（uav-worker-1/2/3）が同じジョブキューからジョブを取得していた
+
+**解決**: 古いDockerワーカーコンテナを削除
+```bash
+docker rm -f uav-worker-1 uav-worker-2 uav-worker-3
+```
+
+**現在のDocker構成**:
+- `uav-simulator-redis` - Redis 7.2-alpine
+- `uav-redis-commander` - Redis Commander（Web UI）
+- ワーカーはテスト時にプロセス内で起動（Dockerワーカーは不要時は起動しない）
+
+---
+
 ## 作成・修正したファイル
 
 ### Phase 3a: 新規作成
@@ -553,6 +821,20 @@ public class WaitingUAVManager {
 | 移動元 | 移動先 |
 |--------|--------|
 | `src/server/redis/RedisConnectionTest.java` | `src/test/RedisConnectionTest.java` |
+
+### Phase 3b-2b: 新規作成
+
+| ファイル | 役割 |
+|---------|------|
+| `src/server/redis/UAVCompletionListener.java` | 完了イベント受信リスナー |
+| `src/test/SingleLinkFlightTest.java` | 単一リンク飛行E2Eテスト |
+
+### Phase 3b-2b: 修正
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `src/server/redis/UAVJob.java` | linkDistances追加、getTotalDistance()等追加 |
+| `src/server/worker/UAVWorker.java` | Thread.sleep飛行、publishCompletionEvent()追加 |
 
 ---
 
@@ -774,38 +1056,70 @@ Phase 3b: Worker worker-1 - UAV 0 処理完了
 
 ---
 
+### Phase 3b-2b: 単一リンク飛行テスト
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 1（テストプロセス内）
+
+**テスト条件**:
+- UAV数: 3
+- 経路: [0, 1]（単一リンク）
+- リンク距離: 50.0m
+- UAV速度: 10.0m/s
+- 期待飛行時間: 5.0秒
+
+**テスト結果**:
+```
+テスト結果: 3/3 完了
+✓ テスト成功！
+```
+
+✅ **Worker が正しく飛行をシミュレート（Thread.sleep）**
+✅ **Pub/Sub で完了イベントが正しく送受信（listeners=1）**
+✅ **リスナーがイベントを受信してカウント更新**
+✅ **飛行時間が正確（50m / 10m/s = 5秒）**
+
+---
+
 ## 現在の制限事項と今後の課題
 
-### Phase 3b-1時点での制限
+### Phase 3b-2b時点での制限
 
-#### 1. 距離計算が仮実装
+#### 1. 単一リンクのみ対応 ✅ → Phase 3b-2cで対応予定
 ```java
-// 現在: 各リンク100mと仮定
-double distancePerSegment = 100.0;
-return segmentCount * distancePerSegment;
+// 現在: 全リンクを一括で飛行（Thread.sleep）
+Thread.sleep(flightTimeMs);
 
-// 本来必要: 実際のリンク距離を使用
-// → Phase 3b-2で実装予定
+// 今後: リンクごとに飛行してイベント送信
+// → Phase 3b-2cで実装予定
 ```
 
-#### 2. 完了通知が未実装
-```java
-// 現在: ログ出力のみ
-LogManager.log("UAV " + job.getUavId() + " 目的地に到着");
-
-// 本来必要: Pub/Subでメインプロセスに通知
-// → Phase 3b-2で実装予定
-```
-
-#### 3. メインプロセスとの連携なし
-- ワーカーは独立して動作
-- メインプロセスはジョブ投入のみ
-- 完了カウントや統計更新は行われない
-
-#### 4. 待機処理が未実装
+#### 2. 待機処理が未実装
 - 容量不足でリンクを通過できない場合の処理
 - 待機キューの管理
 - 容量回復時の再処理
+- → Phase 3b-2d/2eで実装予定
+
+#### 3. RouteSearcher統合が未実装
+- 現在はテストコードからジョブ投入
+- 実際の経路探索からのジョブ投入
+- → Phase 3b-2fで実装予定
+
+### 解決済みの課題（Phase 3b-2bで対応）
+
+#### ✅ 距離計算（Phase 3b-2bで実装）
+```java
+// UAVJob.linkDistances[] で実際のリンク距離を保持
+// getTotalDistance() で総距離を計算
+```
+
+#### ✅ 完了通知（Phase 3b-2bで実装）
+```java
+// UAVCompletionEvent をPub/Subで送信
+// UAVCompletionListener がメインプロセスで受信
+```
 
 ---
 
@@ -844,27 +1158,27 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 
 ## 次のステップ
 
-### Phase 3b-2b: Worker単一リンク飛行
+### Phase 3b-2c: Worker複数リンク飛行（次の作業）
 
-**目標**: 最もシンプルなケースでWorker処理を動作確認
+**目標**: 複数リンクの経路でWorker処理を動作確認
 
 **テスト条件**:
-- ノード: 2つのみ（0 → 1）
-- 経路: 単一リンク [0, 1]
+- ノード: 6つ（0 → 1 → 4 → 5）
+- 経路: 3リンク [0, 1, 4, 5]
 - UAV数: 5台
 - リンク容量: 100（待機が発生しない）
+- Worker数: 1
 
 **実装予定**:
-1. `UAVJob.java` にリンク距離情報を追加
-2. `UAVWorker.java` で実際の飛行時間を計算
-3. `UAVCompletionListener.java` で完了イベント受信
-4. Pub/Sub通信の動作確認
+1. `UAVWorker.java` で複数リンク対応（リンクごとにThread.sleep）
+2. `UAVLinkPassedListener.java` でリンク通過イベント受信
+3. リンク通過ごとにイベント送信
+4. 複数リンクテストの作成
 
-### Phase 3b-2c〜2f: 段階的な機能追加
+### Phase 3b-2d〜2f: 段階的な機能追加
 
 | フェーズ | 内容 |
 |---------|------|
-| **3b-2c** | 複数リンク飛行 + リンク通過イベント |
 | **3b-2d** | 最初のリンクでの待機・再開 |
 | **3b-2e** | 途中リンクでの待機・再開 |
 | **3b-2f** | RouteSearcher統合 + モード切り替え |
@@ -907,19 +1221,20 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 | **整合性検証** | UAV + 統計情報 | **+ リンク容量** |
 | **ジョブキュー** | なし | **基盤実装済み（jobs:uav）** |
 | **ワーカープロセス** | なし | **基盤実装済み** |
-| **イベント駆動** | なし | **Pub/Sub基盤実装済み** |
+| **イベント駆動** | なし | **Pub/Sub基盤実装済み + 完了イベント動作確認済み** |
 | **スケーラビリティ** | 単一プロセス | **並列処理の基盤あり** |
 
 ### 新規作成ファイル
 - ✅ `LinkCapacityManager.java`（容量保存）
 - ✅ `LinkCapacityReader.java`（容量読み取り・検証）
-- ✅ `UAVJob.java`（ジョブデータ）
+- ✅ `UAVJob.java`（ジョブデータ + リンク距離）
 - ✅ `UAVJobQueue.java`（ジョブキュー）
-- ✅ `UAVWorker.java`（ワーカープロセス）
+- ✅ `UAVWorker.java`（ワーカープロセス + 完了イベント送信）
 - ✅ `UAVEventChannels.java`（チャンネル名定数）
 - ✅ `UAVLinkPassedEvent.java`（リンク通過イベント）
 - ✅ `UAVCompletionEvent.java`（飛行完了イベント）
 - ✅ `WaitingUAVManager.java`（待機UAV管理・スタブ）
+- ✅ `UAVCompletionListener.java`（完了イベント受信）
 
 ### 修正ファイル
 - ✅ `CapacityManager.java`（二重書き込み追加）
@@ -929,14 +1244,17 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 - ✅ `src/test/RedisConnectionTest.java`（Redis接続テスト）
 - ✅ `src/test/UAVWorkerTest.java`（ワーカー基本機能テスト）
 - ✅ `src/test/UAVEventSerializationTest.java`（シリアライズテスト）
+- ✅ `src/test/SingleLinkFlightTest.java`（単一リンク飛行E2Eテスト）
 
 ### 整合性検証結果
 - ✅ **Phase 3a**: リンク容量 - 不整合なし
 - ✅ **Phase 3b-1**: ジョブキュー基本動作 - 正常
 - ✅ **Phase 3b-2a**: シリアライズ/Pub/Sub - 正常
+- ✅ **Phase 3b-2b**: 単一リンク飛行 - 3/3完了
 
 ---
 
 **Phase 3a/3b-1 完了日**: 2025-12-28
 **Phase 3b-2a 完了日**: 2025-12-29
-**次の作業**: Phase 3b-2b（Worker単一リンク飛行）
+**Phase 3b-2b 完了日**: 2025-12-29
+**次の作業**: Phase 3b-2c（Worker複数リンク飛行）

@@ -29,6 +29,9 @@ public class UAVJob implements Serializable {
     // 経路追跡
     private int currentPathIndex;          // 現在の経路インデックス（0から開始）
 
+    // Phase 3b-2b: リンク距離情報
+    private double[] linkDistances;        // 各リンクの距離（メートル）
+
     /**
      * デフォルトコンストラクタ（シリアライゼーション用）
      */
@@ -124,13 +127,56 @@ public class UAVJob implements Serializable {
         this.currentPathIndex = currentPathIndex;
     }
 
+    // Phase 3b-2b: リンク距離関連メソッド
+
+    public double[] getLinkDistances() {
+        return linkDistances;
+    }
+
+    public void setLinkDistances(double[] linkDistances) {
+        this.linkDistances = linkDistances;
+    }
+
     /**
-     * 経路の総距離を計算する（実装は後ほど）
-     * @return 総距離
+     * 指定インデックスのリンク距離を取得
+     * @param linkIndex リンクインデックス
+     * @return リンク距離（メートル）
+     */
+    public double getLinkDistance(int linkIndex) {
+        if (linkDistances == null || linkIndex < 0 || linkIndex >= linkDistances.length) {
+            return 0.0;
+        }
+        return linkDistances[linkIndex];
+    }
+
+    /**
+     * 経路の総距離を計算する
+     * @return 総距離（メートル）
      */
     public double getTotalDistance() {
-        // TODO: Phase 3b-1では未実装、Phase 3b-2で実装
-        return 0.0;
+        if (linkDistances == null || linkDistances.length == 0) {
+            return 0.0;
+        }
+        double total = 0.0;
+        for (double distance : linkDistances) {
+            total += distance;
+        }
+        return total;
+    }
+
+    /**
+     * 現在位置から目的地までの残り距離を計算
+     * @return 残り距離（メートル）
+     */
+    public double getRemainingDistance() {
+        if (linkDistances == null || currentPathIndex >= linkDistances.length) {
+            return 0.0;
+        }
+        double remaining = 0.0;
+        for (int i = currentPathIndex; i < linkDistances.length; i++) {
+            remaining += linkDistances[i];
+        }
+        return remaining;
     }
 
     @Override
@@ -139,11 +185,13 @@ public class UAVJob implements Serializable {
                 "uavId=" + uavId +
                 ", clientId=" + clientId +
                 ", path=" + Arrays.toString(path) +
+                ", linkDistances=" + Arrays.toString(linkDistances) +
                 ", speed=" + speed +
                 ", startTime=" + startTime +
                 ", sourceBeaconId=" + sourceBeaconId +
                 ", destinationBeaconId=" + destinationBeaconId +
                 ", currentPathIndex=" + currentPathIndex +
+                ", totalDistance=" + getTotalDistance() +
                 '}';
     }
 }
