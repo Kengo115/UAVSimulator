@@ -9,6 +9,7 @@ import server.redis.UAVCompletionEvent;
 import server.redis.UAVEventChannels;
 import server.redis.UAVJob;
 import server.redis.UAVJobQueue;
+import server.redis.UAVLinkPassedEvent;
 import server.util.LogManager;
 
 import java.util.concurrent.TimeUnit;
@@ -16,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * UAVワーカープロセス
- * Phase 3b-2b: 単一リンク飛行処理と完了イベント送信
+ * Phase 3b-2c: 複数リンク飛行処理とリンク通過イベント送信
  *
  * 各ワーカーは独立したJVMプロセスとして動作し、
  * Redisジョブキューからジョブを取得してUAVを処理する
@@ -25,7 +26,8 @@ public class UAVWorker {
 
     private UAVJobQueue jobQueue;
     private RedissonClient redisson;
-    private RTopic completionTopic;  // Phase 3b-2b: 完了イベント送信用
+    private RTopic completionTopic;   // 完了イベント送信用
+    private RTopic linkPassedTopic;   // Phase 3b-2c: リンク通過イベント送信用
     private String workerId;
     private AtomicBoolean running = new AtomicBoolean(true);
 
@@ -43,11 +45,12 @@ public class UAVWorker {
             if (connectionManager.isConnected()) {
                 this.redisson = connectionManager.getClient();
                 this.jobQueue = new UAVJobQueue();
-                // Phase 3b-2b: 完了イベント送信用トピック
+                // イベント送信用トピック
                 this.completionTopic = redisson.getTopic(UAVEventChannels.COMPLETION);
-                LogManager.getInstance().log("Phase 3b-2b: UAV Worker " + workerId + " initialized");
+                this.linkPassedTopic = redisson.getTopic(UAVEventChannels.LINK_PASSED);
+                LogManager.getInstance().log("Phase 3b-2c: UAV Worker " + workerId + " initialized");
             } else {
-                LogManager.getInstance().log("Phase 3b-2b: Redis未接続のため、Worker " + workerId + " は起動できません");
+                LogManager.getInstance().log("Phase 3b-2c: Redis未接続のため、Worker " + workerId + " は起動できません");
                 throw new RuntimeException("Redis connection failed");
             }
         } catch (Exception e) {
@@ -91,46 +94,77 @@ public class UAVWorker {
 
     /**
      * UAVジョブを処理する
-     * Phase 3b-2b: 単一リンク飛行処理と完了イベント送信
+     * Phase 3b-2c: 複数リンク飛行処理とリンク通過イベント送信
      *
      * @param job UAVジョブ
      */
     private void processUAVJob(UAVJob job) {
         int[] path = job.getPath();
-        int fromNode = path[0];
-        int toNode = path[path.length - 1];
+        int sourceNode = path[0];
+        int destNode = path[path.length - 1];
 
         LogManager.getInstance().log(
-            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() +
-            " 飛行開始 (" + fromNode + "→" + toNode + ")"
+            "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
+            " 飛行開始 (" + sourceNode + "→" + destNode + ", " + (path.length - 1) + "リンク)"
         );
 
-        // 総飛行距離を取得（UAVJob.getTotalDistance()を使用）
+        // 総飛行距離を取得
         double totalDistance = job.getTotalDistance();
 
         // リンク距離が設定されていない場合は仮の値を使用（後方互換性）
         if (totalDistance <= 0) {
             totalDistance = (path.length - 1) * 100.0;  // 仮: 1リンク100m
             LogManager.getInstance().log(
-                "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() +
+                "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
                 " リンク距離未設定のため仮の値を使用: " + totalDistance + "m"
             );
         }
 
-        // 飛行時間を計算
-        double flightTimeSeconds = totalDistance / job.getSpeed();
+        // リンクごとに飛行処理
+        double elapsedFlightTime = 0.0;
+        int currentLinkIndex = 0;
 
-        LogManager.getInstance().log(
-            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() + " " +
-            "distance=" + String.format("%.2f", totalDistance) + "m, " +
-            "speed=" + String.format("%.2f", job.getSpeed()) + "m/s, " +
-            "flightTime=" + String.format("%.2f", flightTimeSeconds) + "s"
-        );
-
-        // 飛行をシミュレート（Thread.sleepで待機）
         try {
-            long flightTimeMs = (long) (flightTimeSeconds * 1000);
-            Thread.sleep(flightTimeMs);
+            while (currentLinkIndex < path.length - 1) {
+                int fromNode = path[currentLinkIndex];
+                int toNode = path[currentLinkIndex + 1];
+
+                // このリンクの距離を取得
+                double linkDistance = job.getLinkDistance(currentLinkIndex);
+                if (linkDistance <= 0) {
+                    linkDistance = 100.0;  // 仮の値
+                }
+
+                // 飛行時間を計算
+                double linkFlightTime = linkDistance / job.getSpeed();
+
+                LogManager.getInstance().log(
+                    "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
+                    " 飛行中 " + fromNode + "→" + toNode +
+                    " (" + String.format("%.1f", linkDistance) + "m, " +
+                    String.format("%.2f", linkFlightTime) + "s)"
+                );
+
+                // このリンクを飛行（Thread.sleepで待機）
+                long flightTimeMs = (long) (linkFlightTime * 1000);
+                Thread.sleep(flightTimeMs);
+
+                elapsedFlightTime += linkFlightTime;
+
+                // 次のリンク情報を計算
+                int nextFromNode = -1;
+                int nextToNode = -1;
+                if (currentLinkIndex + 1 < path.length - 1) {
+                    nextFromNode = path[currentLinkIndex + 1];
+                    nextToNode = path[currentLinkIndex + 2];
+                }
+
+                // リンク通過イベントを送信
+                publishLinkPassedEvent(job, fromNode, toNode, nextFromNode, nextToNode,
+                                       currentLinkIndex, elapsedFlightTime);
+
+                currentLinkIndex++;
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             LogManager.getInstance().error("Worker " + workerId + " - 飛行中に割り込み", e);
@@ -139,20 +173,57 @@ public class UAVWorker {
 
         // 飛行完了
         LogManager.getInstance().log(
-            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() + " 飛行完了"
+            "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() + " 飛行完了" +
+            " (総距離=" + String.format("%.1f", totalDistance) + "m, " +
+            "総時間=" + String.format("%.2f", elapsedFlightTime) + "s)"
         );
 
         // 完了イベントを送信
-        publishCompletionEvent(job, totalDistance, flightTimeSeconds);
+        publishCompletionEvent(job, totalDistance, elapsedFlightTime);
 
         LogManager.getInstance().log(
-            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() + " 処理完了"
+            "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() + " 処理完了"
+        );
+    }
+
+    /**
+     * リンク通過イベントをPub/Subで送信
+     * Phase 3b-2c: メインプロセスにリンク通過を通知
+     *
+     * @param job ジョブ
+     * @param passedFromNode 通過したリンクの始点
+     * @param passedToNode 通過したリンクの終点
+     * @param nextFromNode 次のリンクの始点（-1 = なし）
+     * @param nextToNode 次のリンクの終点（-1 = なし）
+     * @param currentLinkIndex 通過したリンクのインデックス
+     * @param elapsedFlightTime 経過飛行時間
+     */
+    private void publishLinkPassedEvent(UAVJob job, int passedFromNode, int passedToNode,
+                                        int nextFromNode, int nextToNode,
+                                        int currentLinkIndex, double elapsedFlightTime) {
+        UAVLinkPassedEvent event = new UAVLinkPassedEvent(
+            job.getUavId(),
+            job.getClientId(),
+            passedFromNode,
+            passedToNode,
+            nextFromNode,
+            nextToNode,
+            job.getPath(),
+            currentLinkIndex,
+            elapsedFlightTime
+        );
+
+        long listeners = linkPassedTopic.publish(event);
+        LogManager.getInstance().log(
+            "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
+            " リンク通過イベント送信 " + passedFromNode + "→" + passedToNode +
+            " (listeners=" + listeners + ")"
         );
     }
 
     /**
      * 完了イベントをPub/Subで送信
-     * Phase 3b-2b: メインプロセスに完了を通知
+     * メインプロセスに完了を通知
      *
      * @param job 完了したジョブ
      * @param totalDistance 総飛行距離
@@ -164,7 +235,7 @@ public class UAVWorker {
             job.getClientId(),
             totalDistance,
             actualFlightTime,
-            0.0,  // totalWaitingTime（Phase 3b-2bでは待機なし）
+            0.0,  // totalWaitingTime（Phase 3b-2cでは待機なし）
             job.getPath(),
             job.getSourceBeaconId(),
             job.getDestinationBeaconId()
@@ -172,7 +243,7 @@ public class UAVWorker {
 
         long listeners = completionTopic.publish(event);
         LogManager.getInstance().log(
-            "Phase 3b-2b: Worker " + workerId + " - UAV " + job.getUavId() +
+            "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
             " 完了イベント送信 (listeners=" + listeners + ")"
         );
     }

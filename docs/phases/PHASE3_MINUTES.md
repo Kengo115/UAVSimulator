@@ -2,7 +2,7 @@
 
 **実施日**: 2025-12-28 〜 2025-12-29
 **担当者**: Claude (Sonnet 4.5 / Opus 4.5)
-**ステータス**: 🔄 部分完了（Phase 3a完了、Phase 3b-1完了、Phase 3b-2a完了、Phase 3b-2b完了、Phase 3b-2c以降は未着手）
+**ステータス**: 🔄 部分完了（Phase 3a完了、Phase 3b-1完了、Phase 3b-2a完了、Phase 3b-2b完了、Phase 3b-2c完了、Phase 3b-2d以降は未着手）
 
 ## 目次
 1. [Phase 3の概要](#phase-3の概要)
@@ -10,11 +10,12 @@
 3. [Phase 3b-1: ジョブキューとワーカーの基本実装](#phase-3b-1-ジョブキューとワーカーの基本実装)
 4. [Phase 3b-2a: イベントクラス枠組み作成](#phase-3b-2a-イベントクラス枠組み作成)
 5. [Phase 3b-2b: Worker単一リンク飛行](#phase-3b-2b-worker単一リンク飛行)
-6. [作成・修正したファイル](#作成修正したファイル)
-7. [Redis Key構造](#redis-key構造)
-8. [テスト結果](#テスト結果)
-9. [現在の制限事項と今後の課題](#現在の制限事項と今後の課題)
-10. [次のステップ](#次のステップ)
+6. [Phase 3b-2c: Worker複数リンク飛行](#phase-3b-2c-worker複数リンク飛行)
+7. [作成・修正したファイル](#作成修正したファイル)
+8. [Redis Key構造](#redis-key構造)
+9. [テスト結果](#テスト結果)
+10. [現在の制限事項と今後の課題](#現在の制限事項と今後の課題)
+11. [次のステップ](#次のステップ)
 
 ---
 
@@ -35,7 +36,7 @@ Phase 3は以下の3段階に分かれています：
 | **Phase 3b-1** | ジョブキューとワーカーの基本実装 | ✅ 完了 |
 | **Phase 3b-2a** | イベントクラス枠組み作成 | ✅ 完了 |
 | **Phase 3b-2b** | Worker単一リンク飛行 | ✅ 完了 |
-| **Phase 3b-2c** | Worker複数リンク飛行 | ⬜ 未着手 |
+| **Phase 3b-2c** | Worker複数リンク飛行 | ✅ 完了 |
 | **Phase 3b-2d** | 最初リンク待機・再開 | ⬜ 未着手 |
 | **Phase 3b-2e** | 途中リンク待機・再開 | ⬜ 未着手 |
 | **Phase 3b-2f** | RouteSearcher統合 | ⬜ 未着手 |
@@ -781,6 +782,256 @@ docker rm -f uav-worker-1 uav-worker-2 uav-worker-3
 
 ---
 
+## Phase 3b-2c: Worker複数リンク飛行
+
+### 実装方針
+**複数リンク経路でのWorker処理を検証**
+
+Phase 3b-2bでは単一リンク（0→1）のみでしたが、Phase 3b-2cでは複数リンクを順番に飛行し、各リンク通過時にイベントを送信します。
+
+### テスト条件
+
+| 項目 | 値 |
+|------|-----|
+| ノード数 | 6つ |
+| 経路 | `[0, 1, 4, 5]`（3リンク） |
+| リンク距離 | [50.0, 75.0, 60.0]（合計185m） |
+| UAV数 | 5台 |
+| UAV速度 | 10.0 m/s |
+| リンク容量 | 100（待機が発生しない） |
+| Worker数 | 1 |
+| 期待飛行時間 | 18.5秒/台 |
+
+### Phase 3b-2b との差分
+
+| 項目 | Phase 3b-2b（単一リンク） | Phase 3b-2c（複数リンク） |
+|------|--------------------------|--------------------------|
+| 経路 | `[0, 1]`（1リンク） | `[0, 1, 4, 5]`（3リンク） |
+| 飛行処理 | 全体を一括 `Thread.sleep` | リンクごとに `Thread.sleep` |
+| イベント | 完了イベントのみ | **リンク通過イベント + 完了イベント** |
+| リスナー | `UAVCompletionListener` | `UAVCompletionListener` + **`UAVLinkPassedListener`** |
+
+### 実装した機能
+
+#### 1. UAVWorker.java 修正（複数リンク対応）
+
+**追加フィールド**:
+```java
+private RTopic linkPassedTopic;   // Phase 3b-2c: リンク通過イベント送信用
+```
+
+**コンストラクタ変更**:
+```java
+// イベント送信用トピック
+this.completionTopic = redisson.getTopic(UAVEventChannels.COMPLETION);
+this.linkPassedTopic = redisson.getTopic(UAVEventChannels.LINK_PASSED);
+```
+
+**processUAVJob() メソッド（Phase 3b-2c版）**:
+```java
+private void processUAVJob(UAVJob job) {
+    int[] path = job.getPath();
+    int sourceNode = path[0];
+    int destNode = path[path.length - 1];
+
+    // リンクごとに飛行処理
+    double elapsedFlightTime = 0.0;
+    int currentLinkIndex = 0;
+
+    while (currentLinkIndex < path.length - 1) {
+        int fromNode = path[currentLinkIndex];
+        int toNode = path[currentLinkIndex + 1];
+
+        // このリンクの距離を取得
+        double linkDistance = job.getLinkDistance(currentLinkIndex);
+
+        // 飛行時間を計算
+        double linkFlightTime = linkDistance / job.getSpeed();
+
+        // このリンクを飛行（Thread.sleepで待機）
+        Thread.sleep((long)(linkFlightTime * 1000));
+        elapsedFlightTime += linkFlightTime;
+
+        // 次のリンク情報を計算
+        int nextFromNode = -1;
+        int nextToNode = -1;
+        if (currentLinkIndex + 1 < path.length - 1) {
+            nextFromNode = path[currentLinkIndex + 1];
+            nextToNode = path[currentLinkIndex + 2];
+        }
+
+        // リンク通過イベントを送信
+        publishLinkPassedEvent(job, fromNode, toNode, nextFromNode, nextToNode,
+                               currentLinkIndex, elapsedFlightTime);
+
+        currentLinkIndex++;
+    }
+
+    // 完了イベントを送信
+    publishCompletionEvent(job, totalDistance, elapsedFlightTime);
+}
+```
+
+**publishLinkPassedEvent() メソッド（新規）**:
+```java
+private void publishLinkPassedEvent(UAVJob job, int passedFromNode, int passedToNode,
+                                    int nextFromNode, int nextToNode,
+                                    int currentLinkIndex, double elapsedFlightTime) {
+    UAVLinkPassedEvent event = new UAVLinkPassedEvent(
+        job.getUavId(),
+        job.getClientId(),
+        passedFromNode,
+        passedToNode,
+        nextFromNode,
+        nextToNode,
+        job.getPath(),
+        currentLinkIndex,
+        elapsedFlightTime
+    );
+
+    long listeners = linkPassedTopic.publish(event);
+    LogManager.getInstance().log(
+        "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
+        " リンク通過イベント送信 " + passedFromNode + "→" + passedToNode +
+        " (listeners=" + listeners + ")"
+    );
+}
+```
+
+---
+
+#### 2. UAVLinkPassedListener.java（新規作成）
+
+**役割**: メインプロセスでリンク通過イベントを受信
+
+**実装**:
+```java
+public class UAVLinkPassedListener {
+    private RedissonClient client;
+    private RTopic topic;
+    private int listenerId = -1;
+    private AtomicInteger linkPassedCount = new AtomicInteger(0);
+
+    public UAVLinkPassedListener() {
+        this.client = RedisConnectionManager.getInstance().getClient();
+        this.topic = client.getTopic(UAVEventChannels.LINK_PASSED);
+    }
+
+    public void startListening() {
+        listenerId = topic.addListener(UAVLinkPassedEvent.class,
+            (channel, event) -> handleLinkPassedEvent(event));
+    }
+
+    private void handleLinkPassedEvent(UAVLinkPassedEvent event) {
+        int count = linkPassedCount.incrementAndGet();
+
+        String nextLinkInfo = event.isLastLink() ? "最終リンク" :
+            event.getNextFromNode() + "→" + event.getNextToNode();
+
+        LogManager.getInstance().log(
+            "Phase 3b-2c: [メイン] UAV " + event.getUavId() + " リンク通過 " +
+            event.getPassedFromNode() + "→" + event.getPassedToNode() + " " +
+            "(client=" + event.getClientId() + ", " +
+            "経過=" + event.getElapsedFlightTime() + "s, " +
+            "次=" + nextLinkInfo + ", " +
+            "総通過数=" + count + ")"
+        );
+
+        // Phase 3b-2d以降: ここで容量回復と待機UAV再ジョブ化を行う
+    }
+
+    public void stopListening() {
+        if (topic != null && listenerId >= 0) {
+            topic.removeListener(listenerId);
+        }
+    }
+
+    public int getLinkPassedCount() {
+        return linkPassedCount.get();
+    }
+}
+```
+
+---
+
+#### 3. MultiLinkFlightTest.java（新規作成）
+
+**役割**: 複数リンク飛行のE2Eテスト
+
+**テストフロー**:
+```
+1. Redis接続
+2. UAVCompletionListener + UAVLinkPassedListener 開始
+3. ジョブキュークリア → 5件のジョブ投入
+4. UAVWorker起動（別スレッド）
+5. 完了待機（タイムアウト付き）
+6. 結果判定（5/5完了 + 15/15リンク通過 = 成功）
+7. クリーンアップ
+```
+
+---
+
+### テスト結果
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 1（テストプロセス内）
+
+**テスト出力**:
+```
+=== Phase 3b-2c: 複数リンク飛行テスト ===
+
+テスト条件:
+  - UAV数: 5
+  - 経路: [0, 1, 4, 5] (3リンク)
+  - リンク距離: [50.0, 75.0, 60.0] (合計185.0m)
+  - UAV速度: 10.0m/s
+  - 期待飛行時間: 18.5秒/台
+
+[1/5] Redis接続... ✓ 接続成功
+[2/5] リスナー開始... ✓ 完了リスナー + リンク通過リスナー開始
+[3/5] ジョブ投入... ✓ 5件のジョブを投入
+[4/5] Worker起動... ✓ Worker起動
+[5/5] 完了待機...
+
+Phase 3b-2c: Worker test-worker - UAV 0 飛行開始 (0→5, 3リンク)
+Phase 3b-2c: Worker test-worker - UAV 0 飛行中 0→1 (50.0m, 5.00s)
+Phase 3b-2c: Worker test-worker - UAV 0 リンク通過イベント送信 0→1 (listeners=1)
+Phase 3b-2c: [メイン] UAV 0 リンク通過 0→1 (client=1, 経過=5.00s, 次=1→4, 総通過数=1)
+Phase 3b-2c: Worker test-worker - UAV 0 飛行中 1→4 (75.0m, 7.50s)
+Phase 3b-2c: Worker test-worker - UAV 0 リンク通過イベント送信 1→4 (listeners=1)
+Phase 3b-2c: [メイン] UAV 0 リンク通過 1→4 (client=1, 経過=12.50s, 次=4→5, 総通過数=2)
+Phase 3b-2c: Worker test-worker - UAV 0 飛行中 4→5 (60.0m, 6.00s)
+Phase 3b-2c: Worker test-worker - UAV 0 リンク通過イベント送信 4→5 (listeners=1)
+Phase 3b-2c: [メイン] UAV 0 リンク通過 4→5 (client=1, 経過=18.50s, 次=最終リンク, 総通過数=3)
+Phase 3b-2c: Worker test-worker - UAV 0 飛行完了 (総距離=185.0m, 総時間=18.50s)
+Phase 3b-2c: Worker test-worker - UAV 0 完了イベント送信 (listeners=1)
+Phase 3b-2b: [メイン] UAV 0 完了通知受信 (client=1, distance=185.00m, time=18.50s, efficiency=100.0%, 総完了数=1)
+...
+（UAV 1〜4 も同様）
+...
+
+=========================
+テスト結果:
+  完了UAV: 5/5
+  リンク通過イベント: 15/15
+✓ テスト成功！
+=========================
+```
+
+### 検証ポイント
+
+| 項目 | 結果 |
+|------|------|
+| ✅ リンクごとの飛行時間 | 正確（0→1: 5秒, 1→4: 7.5秒, 4→5: 6秒） |
+| ✅ リンク通過イベント | 各リンク通過後に送信（listeners=1） |
+| ✅ イベント受信 | メインプロセスで15回全て受信 |
+| ✅ イベント順序 | 0→1, 1→4, 4→5, 完了 の順序で正しく受信 |
+| ✅ 5台全完了 | 全UAVが正常に完了 |
+
+---
+
 ## 作成・修正したファイル
 
 ### Phase 3a: 新規作成
@@ -835,6 +1086,19 @@ docker rm -f uav-worker-1 uav-worker-2 uav-worker-3
 |---------|---------|
 | `src/server/redis/UAVJob.java` | linkDistances追加、getTotalDistance()等追加 |
 | `src/server/worker/UAVWorker.java` | Thread.sleep飛行、publishCompletionEvent()追加 |
+
+### Phase 3b-2c: 新規作成
+
+| ファイル | 役割 |
+|---------|------|
+| `src/server/redis/UAVLinkPassedListener.java` | リンク通過イベント受信リスナー |
+| `src/test/MultiLinkFlightTest.java` | 複数リンク飛行E2Eテスト |
+
+### Phase 3b-2c: 修正
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `src/server/worker/UAVWorker.java` | 複数リンク対応、publishLinkPassedEvent()追加 |
 
 ---
 
@@ -1083,17 +1347,49 @@ Phase 3b: Worker worker-1 - UAV 0 処理完了
 
 ---
 
+### Phase 3b-2c: 複数リンク飛行テスト
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 1（テストプロセス内）
+
+**テスト条件**:
+- UAV数: 5
+- 経路: [0, 1, 4, 5]（3リンク）
+- リンク距離: [50.0, 75.0, 60.0]（合計185.0m）
+- UAV速度: 10.0m/s
+- 期待飛行時間: 18.5秒/台
+
+**テスト結果**:
+```
+テスト結果:
+  完了UAV: 5/5
+  リンク通過イベント: 15/15
+✓ テスト成功！
+```
+
+✅ **リンクごとの飛行時間が正確（0→1: 5秒, 1→4: 7.5秒, 4→5: 6秒）**
+✅ **リンク通過イベントが各リンク通過後に送信（listeners=1）**
+✅ **メインプロセスで15回全て受信**
+✅ **イベント順序が正しい（0→1, 1→4, 4→5, 完了）**
+✅ **5台全UAVが正常に完了**
+
+---
+
 ## 現在の制限事項と今後の課題
 
-### Phase 3b-2b時点での制限
+### Phase 3b-2c時点での制限
 
-#### 1. 単一リンクのみ対応 ✅ → Phase 3b-2cで対応予定
+#### 1. ~~単一リンクのみ対応~~ ✅ Phase 3b-2cで解決済み
 ```java
-// 現在: 全リンクを一括で飛行（Thread.sleep）
-Thread.sleep(flightTimeMs);
-
-// 今後: リンクごとに飛行してイベント送信
-// → Phase 3b-2cで実装予定
+// Phase 3b-2c: リンクごとに飛行してイベント送信
+while (currentLinkIndex < path.length - 1) {
+    Thread.sleep(linkFlightTimeMs);
+    publishLinkPassedEvent(...);
+    currentLinkIndex++;
+}
+publishCompletionEvent(...);
 ```
 
 #### 2. 待機処理が未実装
@@ -1158,28 +1454,27 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 
 ## 次のステップ
 
-### Phase 3b-2c: Worker複数リンク飛行（次の作業）
+### Phase 3b-2d: 最初リンク待機・再開（次の作業）
 
-**目標**: 複数リンクの経路でWorker処理を動作確認
+**目標**: 最初のリンクで容量不足時の待機・再開処理を実装
 
-**テスト条件**:
-- ノード: 6つ（0 → 1 → 4 → 5）
+**テスト条件（予定）**:
+- ノード: 6つ
 - 経路: 3リンク [0, 1, 4, 5]
-- UAV数: 5台
-- リンク容量: 100（待機が発生しない）
+- UAV数: 5〜10台
+- リンク容量: 2〜3（待機が発生する）
 - Worker数: 1
 
 **実装予定**:
-1. `UAVWorker.java` で複数リンク対応（リンクごとにThread.sleep）
-2. `UAVLinkPassedListener.java` でリンク通過イベント受信
-3. リンク通過ごとにイベント送信
-4. 複数リンクテストの作成
+1. `WaitingUAVManager.java` の本実装（Redis RDeque使用）
+2. 最初のリンク進入時の容量チェック・待機登録
+3. `UAVLinkPassedListener` での容量回復・待機UAV再ジョブ化
+4. 待機→再開テストの作成
 
-### Phase 3b-2d〜2f: 段階的な機能追加
+### Phase 3b-2e〜2f: 段階的な機能追加
 
 | フェーズ | 内容 |
 |---------|------|
-| **3b-2d** | 最初のリンクでの待機・再開 |
 | **3b-2e** | 途中リンクでの待機・再開 |
 | **3b-2f** | RouteSearcher統合 + モード切り替え |
 
@@ -1221,7 +1516,7 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 | **整合性検証** | UAV + 統計情報 | **+ リンク容量** |
 | **ジョブキュー** | なし | **基盤実装済み（jobs:uav）** |
 | **ワーカープロセス** | なし | **基盤実装済み** |
-| **イベント駆動** | なし | **Pub/Sub基盤実装済み + 完了イベント動作確認済み** |
+| **イベント駆動** | なし | **Pub/Sub基盤実装済み + 完了/リンク通過イベント動作確認済み** |
 | **スケーラビリティ** | 単一プロセス | **並列処理の基盤あり** |
 
 ### 新規作成ファイル
@@ -1229,12 +1524,13 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 - ✅ `LinkCapacityReader.java`（容量読み取り・検証）
 - ✅ `UAVJob.java`（ジョブデータ + リンク距離）
 - ✅ `UAVJobQueue.java`（ジョブキュー）
-- ✅ `UAVWorker.java`（ワーカープロセス + 完了イベント送信）
+- ✅ `UAVWorker.java`（ワーカープロセス + 完了/リンク通過イベント送信）
 - ✅ `UAVEventChannels.java`（チャンネル名定数）
 - ✅ `UAVLinkPassedEvent.java`（リンク通過イベント）
 - ✅ `UAVCompletionEvent.java`（飛行完了イベント）
 - ✅ `WaitingUAVManager.java`（待機UAV管理・スタブ）
 - ✅ `UAVCompletionListener.java`（完了イベント受信）
+- ✅ `UAVLinkPassedListener.java`（リンク通過イベント受信）
 
 ### 修正ファイル
 - ✅ `CapacityManager.java`（二重書き込み追加）
@@ -1245,16 +1541,19 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 - ✅ `src/test/UAVWorkerTest.java`（ワーカー基本機能テスト）
 - ✅ `src/test/UAVEventSerializationTest.java`（シリアライズテスト）
 - ✅ `src/test/SingleLinkFlightTest.java`（単一リンク飛行E2Eテスト）
+- ✅ `src/test/MultiLinkFlightTest.java`（複数リンク飛行E2Eテスト）
 
 ### 整合性検証結果
 - ✅ **Phase 3a**: リンク容量 - 不整合なし
 - ✅ **Phase 3b-1**: ジョブキュー基本動作 - 正常
 - ✅ **Phase 3b-2a**: シリアライズ/Pub/Sub - 正常
 - ✅ **Phase 3b-2b**: 単一リンク飛行 - 3/3完了
+- ✅ **Phase 3b-2c**: 複数リンク飛行 - 5/5完了、15/15リンク通過
 
 ---
 
 **Phase 3a/3b-1 完了日**: 2025-12-28
 **Phase 3b-2a 完了日**: 2025-12-29
 **Phase 3b-2b 完了日**: 2025-12-29
-**次の作業**: Phase 3b-2c（Worker複数リンク飛行）
+**Phase 3b-2c 完了日**: 2025-12-29
+**次の作業**: Phase 3b-2d（最初リンク待機・再開）
