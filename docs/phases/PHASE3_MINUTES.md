@@ -2,7 +2,7 @@
 
 **実施日**: 2025-12-28 〜 2025-12-29
 **担当者**: Claude (Sonnet 4.5 / Opus 4.5)
-**ステータス**: 🔄 部分完了（Phase 3a完了、Phase 3b-1完了、Phase 3b-2a完了、Phase 3b-2b完了、Phase 3b-2c完了、Phase 3b-2d以降は未着手）
+**ステータス**: 🔄 部分完了（Phase 3a完了、Phase 3b-1完了、Phase 3b-2a〜2d完了、Phase 3b-2e以降は未着手）
 
 ## 目次
 1. [Phase 3の概要](#phase-3の概要)
@@ -11,11 +11,12 @@
 4. [Phase 3b-2a: イベントクラス枠組み作成](#phase-3b-2a-イベントクラス枠組み作成)
 5. [Phase 3b-2b: Worker単一リンク飛行](#phase-3b-2b-worker単一リンク飛行)
 6. [Phase 3b-2c: Worker複数リンク飛行](#phase-3b-2c-worker複数リンク飛行)
-7. [作成・修正したファイル](#作成修正したファイル)
-8. [Redis Key構造](#redis-key構造)
-9. [テスト結果](#テスト結果)
-10. [現在の制限事項と今後の課題](#現在の制限事項と今後の課題)
-11. [次のステップ](#次のステップ)
+7. [Phase 3b-2d: 最初リンク待機・再開](#phase-3b-2d-最初リンク待機再開)
+8. [作成・修正したファイル](#作成修正したファイル)
+9. [Redis Key構造](#redis-key構造)
+10. [テスト結果](#テスト結果)
+11. [現在の制限事項と今後の課題](#現在の制限事項と今後の課題)
+12. [次のステップ](#次のステップ)
 
 ---
 
@@ -37,7 +38,7 @@ Phase 3は以下の3段階に分かれています：
 | **Phase 3b-2a** | イベントクラス枠組み作成 | ✅ 完了 |
 | **Phase 3b-2b** | Worker単一リンク飛行 | ✅ 完了 |
 | **Phase 3b-2c** | Worker複数リンク飛行 | ✅ 完了 |
-| **Phase 3b-2d** | 最初リンク待機・再開 | ⬜ 未着手 |
+| **Phase 3b-2d** | 最初リンク待機・再開 | ✅ 完了 |
 | **Phase 3b-2e** | 途中リンク待機・再開 | ⬜ 未着手 |
 | **Phase 3b-2f** | RouteSearcher統合 | ⬜ 未着手 |
 | **Phase 3b-3** | 統合テスト・安定化 | ⬜ 未着手 |
@@ -1032,6 +1033,296 @@ Phase 3b-2b: [メイン] UAV 0 完了通知受信 (client=1, distance=185.00m, t
 
 ---
 
+## Phase 3b-2d: 最初リンク待機・再開
+
+### 実装方針
+**リンク容量制限と待機キューによる流量制御**
+
+Phase 3b-2cでは容量制限なし（capacity=100）でしたが、Phase 3b-2dでは最初のリンクに容量制限を設け、容量不足時の待機・再開処理を実装します。
+
+### テスト条件
+
+| 項目 | 値 |
+|------|-----|
+| ノード数 | 6つ |
+| 経路 | `[0, 1, 4, 5]`（3リンク） |
+| リンク距離 | [50.0, 75.0, 60.0]（合計185m） |
+| UAV数 | 5台 |
+| UAV速度 | 10.0 m/s |
+| **最初のリンク容量** | **2**（待機が発生） |
+| 他のリンク容量 | 100（待機が発生しない） |
+| Worker数 | **5（並列処理）** |
+| 期待飛行時間 | 18.5秒/台 |
+| 期待待機数 | 3台（5台 - 容量2） |
+
+### Phase 3b-2c との差分
+
+| 項目 | Phase 3b-2c | Phase 3b-2d |
+|------|------------|------------|
+| リンク容量 | 100（無制限） | **最初のリンク: 2** |
+| Worker数 | 1 | **5（並列）** |
+| 容量チェック | なし | **tryConsumeCapacity()** |
+| 待機処理 | なし | **待機キュー登録** |
+| 容量回復 | なし | **recoverCapacity()** |
+| 再ジョブ化 | なし | **待機UAV再ジョブ化** |
+
+### 実装した機能
+
+#### 1. WaitingUAVManager.java 本実装（スタブから変更）
+
+**役割**: Redis RDequeを使用したリンク別待機キュー（FIFO）管理
+
+**主要メソッド**:
+```java
+// 待機UAVをリンク別キューに登録（FIFO）
+public void enqueue(int fromNode, int toNode, UAVJob job) {
+    String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
+    RDeque<UAVJob> queue = client.getDeque(key);
+    queue.addLast(job);
+}
+
+// 待機UAVをリンク別キューから取り出し（FIFO）
+public UAVJob dequeue(int fromNode, int toNode) {
+    String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
+    RDeque<UAVJob> queue = client.getDeque(key);
+    return queue.pollFirst();
+}
+
+// 指定リンクに待機UAVがいるか確認
+public boolean hasWaitingUAV(int fromNode, int toNode) {
+    String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
+    RDeque<UAVJob> queue = client.getDeque(key);
+    return !queue.isEmpty();
+}
+
+// 待機キュー長を取得
+public int getWaitingCount(int fromNode, int toNode) { ... }
+
+// 待機キューをクリア（リンク指定）
+public void clear(int fromNode, int toNode) { ... }
+
+// 全待機キューをクリア（シミュレーションリセット用）
+public void clearAll() {
+    client.getKeys().deleteByPattern(UAVEventChannels.WAITING_QUEUE_PREFIX + "*");
+}
+```
+
+---
+
+#### 2. LinkCapacityManager.java 追加メソッド
+
+**追加メソッド（3つ）**:
+```java
+/**
+ * リンク容量を消費する（アトミック操作）
+ * 1 UAV = 1 容量として消費
+ * 容量が1未満の場合は消費せずfalseを返す
+ */
+public boolean tryConsumeCapacity(int srcNode, int dstNode) {
+    String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+    RAtomicDouble capacity = client.getAtomicDouble(key);
+
+    // アトミックにデクリメント
+    double newCapacity = capacity.addAndGet(-1.0);
+
+    if (newCapacity >= 0) {
+        // 成功: 容量確保できた
+        return true;
+    } else {
+        // 失敗: 容量不足 → 戻す
+        capacity.addAndGet(1.0);
+        return false;
+    }
+}
+
+/**
+ * リンク容量を回復する（アトミック操作）
+ * UAVがリンクを通過した際に容量を回復
+ */
+public double recoverCapacity(int srcNode, int dstNode) {
+    String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+    RAtomicDouble capacity = client.getAtomicDouble(key);
+    return capacity.addAndGet(1.0);
+}
+
+/**
+ * 現在のリンク容量を取得する
+ */
+public double getCapacity(int srcNode, int dstNode) {
+    String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+    RAtomicDouble capacity = client.getAtomicDouble(key);
+    return capacity.get();
+}
+```
+
+**アトミック操作パターン（案A）**:
+- `tryConsumeCapacity()`: 消費 → 負なら戻す（楽観的ロック）
+- Luaスクリプトを使わずにRedisson APIで実装
+- 複数ワーカー間での競合を防止
+
+---
+
+#### 3. UAVWorker.java 修正（容量チェック・待機登録）
+
+**追加フィールド**:
+```java
+private LinkCapacityManager capacityManager;   // Phase 3b-2d: 容量管理
+private WaitingUAVManager waitingManager;      // Phase 3b-2d: 待機UAV管理
+```
+
+**processUAVJob() メソッド（Phase 3b-2d版）**:
+```java
+private void processUAVJob(UAVJob job) {
+    int[] path = job.getPath();
+    int firstLinkFrom = path[0];
+    int firstLinkTo = path[1];
+
+    // Phase 3b-2d: 最初のリンクの容量チェック
+    if (!capacityManager.tryConsumeCapacity(firstLinkFrom, firstLinkTo)) {
+        // 容量不足 → 待機キューに登録して処理終了
+        LogManager.getInstance().log(
+            "Phase 3b-2d: Worker " + workerId + " - UAV " + job.getUavId() +
+            " 容量不足のため待機 (link " + firstLinkFrom + "→" + firstLinkTo + ")"
+        );
+        waitingManager.enqueue(firstLinkFrom, firstLinkTo, job);
+        return;
+    }
+
+    // 容量確保成功 → 飛行開始
+    // ... (以下、Phase 3b-2cと同様の飛行処理)
+}
+```
+
+---
+
+#### 4. UAVLinkPassedListener.java 修正（容量回復・再ジョブ化）
+
+**追加フィールド**:
+```java
+private LinkCapacityManager capacityManager;
+private WaitingUAVManager waitingManager;
+private UAVJobQueue jobQueue;
+private AtomicInteger reEnqueuedCount = new AtomicInteger(0);  // 再ジョブ化数
+```
+
+**handleLinkPassedEvent() メソッド（Phase 3b-2d版）**:
+```java
+private void handleLinkPassedEvent(UAVLinkPassedEvent event) {
+    int count = linkPassedCount.incrementAndGet();
+
+    int passedFromNode = event.getPassedFromNode();
+    int passedToNode = event.getPassedToNode();
+
+    // ログ出力（省略）
+
+    // Phase 3b-2d: 容量回復
+    double newCapacity = capacityManager.recoverCapacity(passedFromNode, passedToNode);
+
+    // Phase 3b-2d: 待機UAVがいれば再ジョブ化
+    if (waitingManager.hasWaitingUAV(passedFromNode, passedToNode)) {
+        UAVJob waitingJob = waitingManager.dequeue(passedFromNode, passedToNode);
+        if (waitingJob != null) {
+            // ジョブキューに再投入
+            boolean enqueued = jobQueue.enqueueJob(waitingJob);
+            if (enqueued) {
+                int reEnqueued = reEnqueuedCount.incrementAndGet();
+                LogManager.getInstance().log(
+                    "Phase 3b-2d: [メイン] 待機UAV " + waitingJob.getUavId() +
+                    " を再ジョブ化 (link " + passedFromNode + "→" + passedToNode +
+                    ", 総再ジョブ化数=" + reEnqueued + ")"
+                );
+            }
+        }
+    }
+}
+```
+
+---
+
+#### 5. FirstLinkWaitingTest.java（新規作成）
+
+**役割**: 最初リンク待機・再開のE2Eテスト
+
+**テストフロー**:
+```
+1. Redis接続
+2. リンク容量初期化（最初のリンク: 2、他: 100）
+3. 待機キュークリア
+4. リスナー開始（完了リスナー + リンク通過リスナー）
+5. ジョブキュークリア → 5件のジョブ投入
+6. 5 Worker並列起動
+7. 完了待機（タイムアウト付き）
+8. 結果判定（5/5完了 + 15/15リンク通過 + 3/3再ジョブ化 = 成功）
+9. クリーンアップ
+```
+
+**並列Worker起動の実装**:
+```java
+ExecutorService workerExecutor = Executors.newFixedThreadPool(UAV_COUNT);
+UAVWorker[] workers = new UAVWorker[UAV_COUNT];
+
+for (int i = 0; i < UAV_COUNT; i++) {
+    final UAVWorker testWorker = new UAVWorker("worker-" + i);
+    workers[i] = testWorker;
+    workerExecutor.submit(() -> testWorker.start());
+}
+```
+
+---
+
+### テスト結果
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 5（並列）
+
+**テスト出力**:
+```
+=== Phase 3b-2d: 最初リンク待機・再開テスト ===
+
+テスト条件:
+  - UAV数: 5
+  - 経路: [0, 1, 4, 5] (3リンク)
+  - リンク距離: [50.0, 75.0, 60.0] (合計185.0m)
+  - UAV速度: 10.0m/s
+  - 最初のリンク(0→1)容量: 2
+  - 期待: 2台が即飛行、3台が待機→順次飛行
+
+[1/6] Redis接続... ✓ 接続成功
+[2/6] リンク容量初期化... ✓ link[0][1].capacity = 2
+[3/6] リスナー開始... ✓ 完了リスナー + リンク通過リスナー開始
+[4/6] ジョブ投入... ✓ 5件のジョブを投入
+[5/6] Worker起動 (5台並列)... ✓ 5 Workerを起動
+[6/6] 完了待機...
+  ...
+  待機中... 完了数: 5/5, リンク通過数: 15, 再ジョブ化数: 3, 待機中: 0, 容量[0→1]: 2 (経過: 56秒)
+
+=========================
+テスト結果:
+  完了UAV: 5/5
+  リンク通過イベント: 15/15
+  再ジョブ化数: 3/3
+✓ テスト成功！
+  - 待機→再開フローが正常動作
+=========================
+```
+
+### 検証ポイント
+
+| 項目 | 結果 |
+|------|------|
+| ✅ 容量制限 | 最初のリンク容量2が機能 |
+| ✅ 容量消費 | tryConsumeCapacity()で正常消費 |
+| ✅ 待機登録 | 容量不足時にwaitingManager.enqueue()実行 |
+| ✅ 容量回復 | リンク通過時にrecoverCapacity()実行 |
+| ✅ 待機UAV再ジョブ化 | 3台が待機→再ジョブ化 |
+| ✅ 全UAV完了 | 5/5完了（待機含め） |
+| ✅ リンク通過イベント | 15/15（5台×3リンク）|
+| ✅ 並列Worker | 5 Worker並列でジョブ取得競合なし |
+
+---
+
 ## 作成・修正したファイル
 
 ### Phase 3a: 新規作成
@@ -1099,6 +1390,21 @@ Phase 3b-2b: [メイン] UAV 0 完了通知受信 (client=1, distance=185.00m, t
 | ファイル | 変更内容 |
 |---------|---------|
 | `src/server/worker/UAVWorker.java` | 複数リンク対応、publishLinkPassedEvent()追加 |
+
+### Phase 3b-2d: 新規作成
+
+| ファイル | 役割 |
+|---------|------|
+| `src/test/FirstLinkWaitingTest.java` | 最初リンク待機・再開E2Eテスト |
+
+### Phase 3b-2d: 修正
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `src/server/redis/WaitingUAVManager.java` | スタブ→本実装（Redis RDeque使用） |
+| `src/server/redis/LinkCapacityManager.java` | tryConsumeCapacity(), recoverCapacity(), getCapacity()追加 |
+| `src/server/worker/UAVWorker.java` | 最初リンク容量チェック・待機登録追加 |
+| `src/server/redis/UAVLinkPassedListener.java` | 容量回復・待機UAV再ジョブ化追加 |
 
 ---
 
@@ -1377,9 +1683,42 @@ Phase 3b: Worker worker-1 - UAV 0 処理完了
 
 ---
 
+### Phase 3b-2d: 最初リンク待機・再開テスト
+
+**テスト環境**:
+- Redis: 7.2-alpine (Docker)
+- Redisson: 3.24.3
+- Worker: 5（並列）
+
+**テスト条件**:
+- UAV数: 5
+- 経路: [0, 1, 4, 5]（3リンク）
+- リンク距離: [50.0, 75.0, 60.0]（合計185.0m）
+- UAV速度: 10.0m/s
+- 最初のリンク(0→1)容量: 2
+- 期待待機数: 3台
+
+**テスト結果**:
+```
+テスト結果:
+  完了UAV: 5/5
+  リンク通過イベント: 15/15
+  再ジョブ化数: 3/3
+✓ テスト成功！
+  - 待機→再開フローが正常動作
+```
+
+✅ **容量制限（2）が機能し、3台が待機**
+✅ **tryConsumeCapacity()でアトミックな容量消費**
+✅ **recoverCapacity()でリンク通過時の容量回復**
+✅ **待機UAV再ジョブ化で全5台が完了**
+✅ **5 Worker並列でジョブ取得競合なし**
+
+---
+
 ## 現在の制限事項と今後の課題
 
-### Phase 3b-2c時点での制限
+### Phase 3b-2d時点での制限
 
 #### 1. ~~単一リンクのみ対応~~ ✅ Phase 3b-2cで解決済み
 ```java
@@ -1392,13 +1731,26 @@ while (currentLinkIndex < path.length - 1) {
 publishCompletionEvent(...);
 ```
 
-#### 2. 待機処理が未実装
-- 容量不足でリンクを通過できない場合の処理
-- 待機キューの管理
-- 容量回復時の再処理
-- → Phase 3b-2d/2eで実装予定
+#### 2. ~~最初のリンク待機処理が未実装~~ ✅ Phase 3b-2dで解決済み
+```java
+// Phase 3b-2d: 容量チェック→待機→容量回復→再ジョブ化
+if (!capacityManager.tryConsumeCapacity(firstLinkFrom, firstLinkTo)) {
+    waitingManager.enqueue(firstLinkFrom, firstLinkTo, job);
+    return;
+}
+// リンク通過時
+capacityManager.recoverCapacity(passedFromNode, passedToNode);
+if (waitingManager.hasWaitingUAV(...)) {
+    jobQueue.enqueueJob(waitingManager.dequeue(...));
+}
+```
 
-#### 3. RouteSearcher統合が未実装
+#### 3. 途中リンク待機処理が未実装
+- 最初のリンクのみ容量チェック・待機登録を実装
+- 途中リンク（2番目以降）での容量チェック・待機は未実装
+- → Phase 3b-2eで実装予定
+
+#### 4. RouteSearcher統合が未実装
 - 現在はテストコードからジョブ投入
 - 実際の経路探索からのジョブ投入
 - → Phase 3b-2fで実装予定
@@ -1454,28 +1806,27 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 
 ## 次のステップ
 
-### Phase 3b-2d: 最初リンク待機・再開（次の作業）
+### Phase 3b-2e: 途中リンク待機・再開（次の作業）
 
-**目標**: 最初のリンクで容量不足時の待機・再開処理を実装
+**目標**: 途中のリンク（2番目以降）で容量不足時の待機・再開処理を実装
 
 **テスト条件（予定）**:
 - ノード: 6つ
 - 経路: 3リンク [0, 1, 4, 5]
 - UAV数: 5〜10台
-- リンク容量: 2〜3（待機が発生する）
-- Worker数: 1
+- 途中のリンク容量: 2〜3（待機が発生する）
+- Worker数: 5（並列）
 
 **実装予定**:
-1. `WaitingUAVManager.java` の本実装（Redis RDeque使用）
-2. 最初のリンク進入時の容量チェック・待機登録
-3. `UAVLinkPassedListener` での容量回復・待機UAV再ジョブ化
-4. 待機→再開テストの作成
+1. リンク飛行中の次リンク容量事前チェック
+2. 途中リンクでの容量不足時の待機処理
+3. UAVJob に待機位置（currentPathIndex）を保存
+4. 途中リンク待機→再開テストの作成
 
-### Phase 3b-2e〜2f: 段階的な機能追加
+### Phase 3b-2f: RouteSearcher統合
 
 | フェーズ | 内容 |
 |---------|------|
-| **3b-2e** | 途中リンクでの待機・再開 |
 | **3b-2f** | RouteSearcher統合 + モード切り替え |
 
 ### イベント駆動アーキテクチャの概要
@@ -1528,9 +1879,9 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 - ✅ `UAVEventChannels.java`（チャンネル名定数）
 - ✅ `UAVLinkPassedEvent.java`（リンク通過イベント）
 - ✅ `UAVCompletionEvent.java`（飛行完了イベント）
-- ✅ `WaitingUAVManager.java`（待機UAV管理・スタブ）
+- ✅ `WaitingUAVManager.java`（待機UAV管理・本実装）
 - ✅ `UAVCompletionListener.java`（完了イベント受信）
-- ✅ `UAVLinkPassedListener.java`（リンク通過イベント受信）
+- ✅ `UAVLinkPassedListener.java`（リンク通過イベント受信 + 容量回復・再ジョブ化）
 
 ### 修正ファイル
 - ✅ `CapacityManager.java`（二重書き込み追加）
@@ -1542,6 +1893,7 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 - ✅ `src/test/UAVEventSerializationTest.java`（シリアライズテスト）
 - ✅ `src/test/SingleLinkFlightTest.java`（単一リンク飛行E2Eテスト）
 - ✅ `src/test/MultiLinkFlightTest.java`（複数リンク飛行E2Eテスト）
+- ✅ `src/test/FirstLinkWaitingTest.java`（最初リンク待機・再開E2Eテスト）
 
 ### 整合性検証結果
 - ✅ **Phase 3a**: リンク容量 - 不整合なし
@@ -1549,6 +1901,7 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 - ✅ **Phase 3b-2a**: シリアライズ/Pub/Sub - 正常
 - ✅ **Phase 3b-2b**: 単一リンク飛行 - 3/3完了
 - ✅ **Phase 3b-2c**: 複数リンク飛行 - 5/5完了、15/15リンク通過
+- ✅ **Phase 3b-2d**: 最初リンク待機・再開 - 5/5完了、15/15リンク通過、3/3再ジョブ化
 
 ---
 
@@ -1556,4 +1909,5 @@ Phase 3b-2の実装を試みましたが、以下の問題が発生しました�
 **Phase 3b-2a 完了日**: 2025-12-29
 **Phase 3b-2b 完了日**: 2025-12-29
 **Phase 3b-2c 完了日**: 2025-12-29
-**次の作業**: Phase 3b-2d（最初リンク待機・再開）
+**Phase 3b-2d 完了日**: 2025-12-29
+**次の作業**: Phase 3b-2e（途中リンク待機・再開）

@@ -6,7 +6,7 @@ import server.util.LogManager;
 
 /**
  * 待機UAV管理クラス
- * Phase 3b-2a: スタブ実装（ロジックなし）
+ * Phase 3b-2d: Redis RDequeを使用した本実装
  *
  * リンク別の待機キュー（FIFO）を管理する
  * 待機キーの形式: waiting:link:{fromNode}:{toNode}
@@ -35,14 +35,19 @@ public class WaitingUAVManager {
      * @param job 待機するジョブ
      */
     public void enqueue(int fromNode, int toNode, UAVJob job) {
-        // Phase 3b-2a: スタブ実装（ログ出力のみ）
-        LogManager.getInstance().log("[STUB] WaitingUAVManager.enqueue: " +
-                "UAV " + job.getUavId() + " を待機キュー (link " + fromNode + "→" + toNode + ") に追加");
+        if (client == null) {
+            LogManager.getInstance().error("WaitingUAVManager.enqueue: Redis未接続");
+            return;
+        }
 
-        // TODO: Phase 3b-2d で実装
-        // String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
-        // RDeque<UAVJob> queue = client.getDeque(key);
-        // queue.addLast(job);
+        String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
+        RDeque<UAVJob> queue = client.getDeque(key);
+        queue.addLast(job);
+
+        LogManager.getInstance().log(
+            "Phase 3b-2d: UAV " + job.getUavId() + " を待機キュー (" +
+            fromNode + "→" + toNode + ") に追加 (待機数=" + queue.size() + ")"
+        );
     }
 
     /**
@@ -53,16 +58,23 @@ public class WaitingUAVManager {
      * @return 待機していたジョブ、なければnull
      */
     public UAVJob dequeue(int fromNode, int toNode) {
-        // Phase 3b-2a: スタブ実装（nullを返す）
-        LogManager.getInstance().log("[STUB] WaitingUAVManager.dequeue: " +
-                "link " + fromNode + "→" + toNode + " から取り出し試行");
+        if (client == null) {
+            LogManager.getInstance().error("WaitingUAVManager.dequeue: Redis未接続");
+            return null;
+        }
 
-        // TODO: Phase 3b-2d で実装
-        // String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
-        // RDeque<UAVJob> queue = client.getDeque(key);
-        // return queue.pollFirst();
+        String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
+        RDeque<UAVJob> queue = client.getDeque(key);
+        UAVJob job = queue.pollFirst();
 
-        return null;
+        if (job != null) {
+            LogManager.getInstance().log(
+                "Phase 3b-2d: UAV " + job.getUavId() + " を待機キュー (" +
+                fromNode + "→" + toNode + ") から取り出し (残り待機数=" + queue.size() + ")"
+            );
+        }
+
+        return job;
     }
 
     /**
@@ -73,16 +85,13 @@ public class WaitingUAVManager {
      * @return 待機UAVがいる場合true
      */
     public boolean hasWaitingUAV(int fromNode, int toNode) {
-        // Phase 3b-2a: スタブ実装（常にfalse）
-        LogManager.getInstance().log("[STUB] WaitingUAVManager.hasWaitingUAV: " +
-                "link " + fromNode + "→" + toNode + " を確認");
+        if (client == null) {
+            return false;
+        }
 
-        // TODO: Phase 3b-2d で実装
-        // String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
-        // RDeque<UAVJob> queue = client.getDeque(key);
-        // return !queue.isEmpty();
-
-        return false;
+        String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
+        RDeque<UAVJob> queue = client.getDeque(key);
+        return !queue.isEmpty();
     }
 
     /**
@@ -93,13 +102,13 @@ public class WaitingUAVManager {
      * @return 待機UAV数
      */
     public int getWaitingCount(int fromNode, int toNode) {
-        // Phase 3b-2a: スタブ実装（常に0）
-        // TODO: Phase 3b-2d で実装
-        // String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
-        // RDeque<UAVJob> queue = client.getDeque(key);
-        // return queue.size();
+        if (client == null) {
+            return 0;
+        }
 
-        return 0;
+        String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
+        RDeque<UAVJob> queue = client.getDeque(key);
+        return queue.size();
     }
 
     /**
@@ -109,14 +118,18 @@ public class WaitingUAVManager {
      * @param toNode リンクの終点ノード
      */
     public void clear(int fromNode, int toNode) {
-        // Phase 3b-2a: スタブ実装（ログ出力のみ）
-        LogManager.getInstance().log("[STUB] WaitingUAVManager.clear: " +
-                "link " + fromNode + "→" + toNode + " をクリア");
+        if (client == null) {
+            return;
+        }
 
-        // TODO: Phase 3b-2d で実装
-        // String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
-        // RDeque<UAVJob> queue = client.getDeque(key);
-        // queue.clear();
+        String key = UAVEventChannels.getWaitingQueueKey(fromNode, toNode);
+        RDeque<UAVJob> queue = client.getDeque(key);
+        int count = queue.size();
+        queue.clear();
+
+        LogManager.getInstance().log(
+            "Phase 3b-2d: 待機キュー (" + fromNode + "→" + toNode + ") をクリア (削除数=" + count + ")"
+        );
     }
 
     /**
@@ -124,11 +137,14 @@ public class WaitingUAVManager {
      * シミュレーションリセット時に使用
      */
     public void clearAll() {
-        // Phase 3b-2a: スタブ実装（ログ出力のみ）
-        LogManager.getInstance().log("[STUB] WaitingUAVManager.clearAll: 全待機キューをクリア");
+        if (client == null) {
+            return;
+        }
 
-        // TODO: Phase 3b-2d で実装
-        // client.getKeys().deleteByPattern(UAVEventChannels.WAITING_QUEUE_PREFIX + "*");
+        long deletedCount = client.getKeys().deleteByPattern(UAVEventChannels.WAITING_QUEUE_PREFIX + "*");
+        LogManager.getInstance().log(
+            "Phase 3b-2d: 全待機キューをクリア (削除キー数=" + deletedCount + ")"
+        );
     }
 
     /**

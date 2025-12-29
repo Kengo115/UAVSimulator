@@ -238,6 +238,105 @@ public class LinkCapacityManager {
     }
 
     /**
+     * リンク容量を消費する（アトミック操作）
+     * Phase 3b-2d: 容量チェック + 消費を行う
+     *
+     * 1 UAV = 1 容量として消費
+     * 容量が1未満の場合は消費せずfalseを返す
+     *
+     * @param srcNode 開始ノード
+     * @param dstNode 終了ノード
+     * @return 容量消費に成功した場合true、容量不足の場合false
+     */
+    public boolean tryConsumeCapacity(int srcNode, int dstNode) {
+        if (!redisEnabled) {
+            return false;
+        }
+
+        try {
+            String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+            RAtomicDouble capacity = client.getAtomicDouble(key);
+
+            // アトミックにデクリメント
+            double newCapacity = capacity.addAndGet(-1.0);
+
+            if (newCapacity >= 0) {
+                // 成功: 容量確保できた
+                LogManager.getInstance().log(
+                    "Phase 3b-2d: link[" + srcNode + "][" + dstNode + "] 容量消費成功 " +
+                    (newCapacity + 1) + " → " + newCapacity
+                );
+                return true;
+            } else {
+                // 失敗: 容量不足 → 戻す
+                capacity.addAndGet(1.0);
+                LogManager.getInstance().log(
+                    "Phase 3b-2d: link[" + srcNode + "][" + dstNode + "] 容量不足 (現在=" +
+                    (newCapacity + 1) + ")"
+                );
+                return false;
+            }
+        } catch (Exception e) {
+            LogManager.getInstance().error("容量消費エラー: link[" + srcNode + "][" + dstNode + "]", e);
+            return false;
+        }
+    }
+
+    /**
+     * リンク容量を回復する（アトミック操作）
+     * Phase 3b-2d: UAVがリンクを通過した際に容量を回復
+     *
+     * 1 UAV = 1 容量として回復
+     *
+     * @param srcNode 開始ノード
+     * @param dstNode 終了ノード
+     * @return 回復後の容量
+     */
+    public double recoverCapacity(int srcNode, int dstNode) {
+        if (!redisEnabled) {
+            return 0.0;
+        }
+
+        try {
+            String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+            RAtomicDouble capacity = client.getAtomicDouble(key);
+            double newCapacity = capacity.addAndGet(1.0);
+
+            LogManager.getInstance().log(
+                "Phase 3b-2d: link[" + srcNode + "][" + dstNode + "] 容量回復 " +
+                (newCapacity - 1) + " → " + newCapacity
+            );
+            return newCapacity;
+        } catch (Exception e) {
+            LogManager.getInstance().error("容量回復エラー: link[" + srcNode + "][" + dstNode + "]", e);
+            return 0.0;
+        }
+    }
+
+    /**
+     * 現在のリンク容量を取得する
+     * Phase 3b-2d: 容量確認用
+     *
+     * @param srcNode 開始ノード
+     * @param dstNode 終了ノード
+     * @return 現在の容量
+     */
+    public double getCapacity(int srcNode, int dstNode) {
+        if (!redisEnabled) {
+            return 0.0;
+        }
+
+        try {
+            String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+            RAtomicDouble capacity = client.getAtomicDouble(key);
+            return capacity.get();
+        } catch (Exception e) {
+            LogManager.getInstance().error("容量取得エラー: link[" + srcNode + "][" + dstNode + "]", e);
+            return 0.0;
+        }
+    }
+
+    /**
      * Redis機能が有効かどうかを確認する
      *
      * @return 有効な場合true

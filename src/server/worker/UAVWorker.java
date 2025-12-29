@@ -4,12 +4,14 @@ import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
 import org.redisson.Redisson;
+import server.redis.LinkCapacityManager;
 import server.redis.RedisConnectionManager;
 import server.redis.UAVCompletionEvent;
 import server.redis.UAVEventChannels;
 import server.redis.UAVJob;
 import server.redis.UAVJobQueue;
 import server.redis.UAVLinkPassedEvent;
+import server.redis.WaitingUAVManager;
 import server.util.LogManager;
 
 import java.util.concurrent.TimeUnit;
@@ -17,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * UAVワーカープロセス
- * Phase 3b-2c: 複数リンク飛行処理とリンク通過イベント送信
+ * Phase 3b-2d: 最初リンク容量チェック・待機登録対応
  *
  * 各ワーカーは独立したJVMプロセスとして動作し、
  * Redisジョブキューからジョブを取得してUAVを処理する
@@ -28,6 +30,8 @@ public class UAVWorker {
     private RedissonClient redisson;
     private RTopic completionTopic;   // 完了イベント送信用
     private RTopic linkPassedTopic;   // Phase 3b-2c: リンク通過イベント送信用
+    private LinkCapacityManager capacityManager;   // Phase 3b-2d: 容量管理
+    private WaitingUAVManager waitingManager;      // Phase 3b-2d: 待機UAV管理
     private String workerId;
     private AtomicBoolean running = new AtomicBoolean(true);
 
@@ -48,9 +52,12 @@ public class UAVWorker {
                 // イベント送信用トピック
                 this.completionTopic = redisson.getTopic(UAVEventChannels.COMPLETION);
                 this.linkPassedTopic = redisson.getTopic(UAVEventChannels.LINK_PASSED);
-                LogManager.getInstance().log("Phase 3b-2c: UAV Worker " + workerId + " initialized");
+                // Phase 3b-2d: 容量管理・待機UAV管理
+                this.capacityManager = new LinkCapacityManager();
+                this.waitingManager = new WaitingUAVManager();
+                LogManager.getInstance().log("Phase 3b-2d: UAV Worker " + workerId + " initialized");
             } else {
-                LogManager.getInstance().log("Phase 3b-2c: Redis未接続のため、Worker " + workerId + " は起動できません");
+                LogManager.getInstance().log("Phase 3b-2d: Redis未接続のため、Worker " + workerId + " は起動できません");
                 throw new RuntimeException("Redis connection failed");
             }
         } catch (Exception e) {
@@ -94,7 +101,7 @@ public class UAVWorker {
 
     /**
      * UAVジョブを処理する
-     * Phase 3b-2c: 複数リンク飛行処理とリンク通過イベント送信
+     * Phase 3b-2d: 最初リンク容量チェック・待機登録対応
      *
      * @param job UAVジョブ
      */
@@ -102,9 +109,23 @@ public class UAVWorker {
         int[] path = job.getPath();
         int sourceNode = path[0];
         int destNode = path[path.length - 1];
+        int firstLinkFrom = path[0];
+        int firstLinkTo = path[1];
 
+        // Phase 3b-2d: 最初のリンクの容量チェック
+        if (!capacityManager.tryConsumeCapacity(firstLinkFrom, firstLinkTo)) {
+            // 容量不足 → 待機キューに登録して処理終了
+            LogManager.getInstance().log(
+                "Phase 3b-2d: Worker " + workerId + " - UAV " + job.getUavId() +
+                " 容量不足のため待機 (link " + firstLinkFrom + "→" + firstLinkTo + ")"
+            );
+            waitingManager.enqueue(firstLinkFrom, firstLinkTo, job);
+            return;
+        }
+
+        // 容量確保成功 → 飛行開始
         LogManager.getInstance().log(
-            "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
+            "Phase 3b-2d: Worker " + workerId + " - UAV " + job.getUavId() +
             " 飛行開始 (" + sourceNode + "→" + destNode + ", " + (path.length - 1) + "リンク)"
         );
 
@@ -115,7 +136,7 @@ public class UAVWorker {
         if (totalDistance <= 0) {
             totalDistance = (path.length - 1) * 100.0;  // 仮: 1リンク100m
             LogManager.getInstance().log(
-                "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
+                "Phase 3b-2d: Worker " + workerId + " - UAV " + job.getUavId() +
                 " リンク距離未設定のため仮の値を使用: " + totalDistance + "m"
             );
         }
@@ -139,7 +160,7 @@ public class UAVWorker {
                 double linkFlightTime = linkDistance / job.getSpeed();
 
                 LogManager.getInstance().log(
-                    "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() +
+                    "Phase 3b-2d: Worker " + workerId + " - UAV " + job.getUavId() +
                     " 飛行中 " + fromNode + "→" + toNode +
                     " (" + String.format("%.1f", linkDistance) + "m, " +
                     String.format("%.2f", linkFlightTime) + "s)"
@@ -173,7 +194,7 @@ public class UAVWorker {
 
         // 飛行完了
         LogManager.getInstance().log(
-            "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() + " 飛行完了" +
+            "Phase 3b-2d: Worker " + workerId + " - UAV " + job.getUavId() + " 飛行完了" +
             " (総距離=" + String.format("%.1f", totalDistance) + "m, " +
             "総時間=" + String.format("%.2f", elapsedFlightTime) + "s)"
         );
@@ -182,7 +203,7 @@ public class UAVWorker {
         publishCompletionEvent(job, totalDistance, elapsedFlightTime);
 
         LogManager.getInstance().log(
-            "Phase 3b-2c: Worker " + workerId + " - UAV " + job.getUavId() + " 処理完了"
+            "Phase 3b-2d: Worker " + workerId + " - UAV " + job.getUavId() + " 処理完了"
         );
     }
 
