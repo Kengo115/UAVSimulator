@@ -1,4 +1,4 @@
-.PHONY: up down restart run compile clean status logs
+.PHONY: up down restart run compile clean status logs kill-old
 
 # Dockerコンテナを起動
 up:
@@ -35,14 +35,20 @@ compile:
 	mvn compile
 
 # シミュレータを実行（コンパイル後）
-run: compile
+run: compile kill-old
 	@echo "UAVシミュレータを起動します..."
 	mvn exec:java -Dexec.mainClass="controller.BoundaryController"
 
 # シミュレータを実行（コンパイルなし）
-run-quick:
+run-quick: kill-old
 	@echo "UAVシミュレータを起動します..."
 	mvn exec:java -Dexec.mainClass="controller.BoundaryController"
+
+# 古いシミュレータプロセスを終了
+kill-old:
+	@echo "古いシミュレータプロセスを確認..."
+	@pkill -f "controller.BoundaryController" 2>/dev/null && echo "✓ 古いプロセスを終了しました" || echo "  古いプロセスはありません"
+	@sleep 1
 
 # ビルド成果物をクリーンアップ
 clean:
@@ -67,12 +73,14 @@ help:
 	@echo "  make logs        - Redisコンテナのログを表示"
 	@echo "  make redis-clear - Redisデータをクリア"
 	@echo "  make compile     - プロジェクトをコンパイル"
-	@echo "  make run         - シミュレータを実行（コンパイル込み）"
-	@echo "  make run-quick   - シミュレータを実行（コンパイルなし）"
+	@echo "  make run         - シミュレータを実行（コンパイル込み、古いプロセス自動終了）"
+	@echo "  make run-quick   - シミュレータを実行（コンパイルなし、古いプロセス自動終了）"
+	@echo "  make kill-old    - 古いシミュレータプロセスを終了"
 	@echo "  make clean       - ビルド成果物をクリーンアップ"
 	@echo "  make help        - このヘルプを表示"
 	@echo ""
 	@echo "典型的な使用例:"
 	@echo "  1. make up       # Redisを起動"
-	@echo "  2. make run      # シミュレータを実行"
-	@echo "  3. make down     # 終了時にRedisを停止"
+	@echo "  2. make run      # シミュレータを実行（Ctrl+Cで終了可能）"
+	@echo "  3. make run      # 再実行OK（古いプロセスは自動終了）"
+	@echo "  4. make down     # 終了時にRedisを停止"
