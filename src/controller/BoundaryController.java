@@ -676,9 +676,9 @@ public class BoundaryController {
                     System.err.println("ファイル書き込みエラー: " + e.getMessage());
                 }
 
-                // 次のクライアント生成まで40秒待機
+                // 次のクライアント生成まで30秒待機
                 if (i < clientCount - 1) { // 最後のクライアント以外
-                    Thread.sleep(40000); // 40秒待機
+                    Thread.sleep(30000); // 30秒待機
                 }
             }
 

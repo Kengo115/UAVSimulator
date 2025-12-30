@@ -1,6 +1,7 @@
 package server.uav;
 
 import client.ClientController;
+import controller.BoundaryController;
 import item.BeaconCluster;
 import item.Uav;
 import server.redis.UAVStateValidator;
@@ -58,8 +59,10 @@ public class UAVFlyScheduler {
                     server.controller.ServerController.flyUAV(clientController, flyingUavQueue, uavQueue);
 
                     // Phase 1 & Phase 2: 5回に1回、整合性チェックと統計情報保存
+                    // Phase 3b-12: メモリモード時はスキップ
                     updateCounter++;
-                    if (updateCounter % VALIDATION_INTERVAL == 0) {
+                    if (updateCounter % VALIDATION_INTERVAL == 0
+                        && BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
                         // Phase 1: UAV状態の整合性チェック
                         validateAllUAVStates(flyingUavQueue, uavQueue);
 

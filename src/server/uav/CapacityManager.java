@@ -1,11 +1,13 @@
 package server.uav;
 
+import controller.BoundaryController;
 import item.Link;
 import server.redis.LinkCapacityManager;
 
 /**
  * UAVの容量管理を行うクラス
  * Phase 3a: メモリとRedisの二重書き込み
+ * Phase 3b-12: メモリモード時はRedis書き込みをスキップ
  */
 public class CapacityManager {
 
@@ -42,6 +44,9 @@ public class CapacityManager {
         }
 
         // [新規] Phase 3a: Redisにも同じ内容を保存（二重書き込み）
-        linkCapacityManager.updateAllCapacities(link, flyingUAV, node);
+        // Phase 3b-12: Redisモードの場合のみ実行
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            linkCapacityManager.updateAllCapacities(link, flyingUAV, node);
+        }
     }
 }

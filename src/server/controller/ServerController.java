@@ -2,6 +2,7 @@ package server.controller;
 
 import client.Client;
 import client.ClientController;
+import controller.BoundaryController;
 import item.Beacon;
 import item.BeaconCluster;
 import item.Link;
@@ -207,9 +208,9 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
-        LinkCapacityManager capacityManager = new LinkCapacityManager();
-        if (capacityManager.isEnabled()) {
+        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
             capacityManager.syncCapacitiesToMemory(link, node);
         }
 
@@ -252,9 +253,9 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
-        LinkCapacityManager capacityManager = new LinkCapacityManager();
-        if (capacityManager.isEnabled()) {
+        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
             capacityManager.syncCapacitiesToMemory(link, node);
         }
 
@@ -288,9 +289,9 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
-        LinkCapacityManager capacityManager = new LinkCapacityManager();
-        if (capacityManager.isEnabled()) {
+        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
             capacityManager.syncCapacitiesToMemory(link, node);
         }
 
@@ -324,9 +325,9 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
-        LinkCapacityManager capacityManager = new LinkCapacityManager();
-        if (capacityManager.isEnabled()) {
+        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
             capacityManager.syncCapacitiesToMemory(link, node);
         }
 
@@ -360,9 +361,9 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
-        LinkCapacityManager capacityManager = new LinkCapacityManager();
-        if (capacityManager.isEnabled()) {
+        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
             capacityManager.syncCapacitiesToMemory(link, node);
         }
 

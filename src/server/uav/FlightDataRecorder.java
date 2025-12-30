@@ -84,11 +84,13 @@ public class FlightDataRecorder {
 
     /**
      * Phase 2: UAVの飛行経路をRedisに保存する
+     * Phase 3b-12: メモリモード時はスキップ
      * @param uav UAV
      * @param method メソッド名
      */
     private static void saveRouteToRedis(Uav uav, String method) {
-        if (!redisEnabled) {
+        // Phase 3b-12: メモリモード時はRedis書き込みをスキップ
+        if (!redisEnabled || BoundaryController.getCurrentWorkerMode() != BoundaryController.WorkerMode.REDIS) {
             return;
         }
 
@@ -150,12 +152,14 @@ public class FlightDataRecorder {
 
     /**
      * Phase 2: フライトデータをRedisに保存する
+     * Phase 3b-12: メモリモード時はスキップ
      * @param clientController クライアントコントローラー
      * @param uav UAV
      * @param totalPathDistance 総経路距離
      */
     private static void saveFlightDataToRedis(ClientController clientController, Uav uav, double totalPathDistance) {
-        if (!redisEnabled) {
+        // Phase 3b-12: メモリモード時はRedis書き込みをスキップ
+        if (!redisEnabled || BoundaryController.getCurrentWorkerMode() != BoundaryController.WorkerMode.REDIS) {
             return;
         }
 

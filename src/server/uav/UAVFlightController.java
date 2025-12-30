@@ -1,6 +1,7 @@
 package server.uav;
 
 import client.ClientController;
+import controller.BoundaryController;
 import item.BeaconCluster;
 import item.Link;
 import item.Uav;
@@ -93,8 +94,10 @@ public class UAVFlightController {
         CapacityManager.updateCapacity(flyingUAV, link, node);
 
         // Phase 3a: リンク容量の整合性チェック（5回に1回）
+        // Phase 3b-12: メモリモード時はスキップ
         capacityValidationCounter++;
-        if (capacityValidationCounter % CAPACITY_VALIDATION_INTERVAL == 0) {
+        if (capacityValidationCounter % CAPACITY_VALIDATION_INTERVAL == 0
+            && BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
             linkCapacityReader.validateCapacity(link, flyingUAV, node);
         }
 
