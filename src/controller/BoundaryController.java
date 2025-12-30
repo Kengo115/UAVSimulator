@@ -15,7 +15,9 @@ import server.util.LogManager;
 import server.worker.AsyncUAVWorker;
 
 import java.io.*;
+import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -39,7 +41,9 @@ public class BoundaryController {
     Flow flow;
 
     // Phase 3b-6: Redisベースワーカー用
-    private static AsyncUAVWorker asyncWorker;
+    // Phase 3b-10: 4ワーカー固定
+    private static final int WORKER_COUNT = 4;
+    private static List<AsyncUAVWorker> asyncWorkers = new ArrayList<>();
     private static ExecutorService workerExecutor;
     private static UAVCompletionListener completionListener;
     private static FlightScheduler flightScheduler;
@@ -132,7 +136,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 40; // + (int)(Math.random() * 20);
+            int uavNum = 20; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -149,7 +153,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 10; // + (int)(Math.random() * 20);
+            int uavNum = 20; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -166,7 +170,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 10; // + (int)(Math.random() * 20);
+            int uavNum = 20; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -354,10 +358,15 @@ public class BoundaryController {
             completionListener = new UAVCompletionListener();
             completionListener.startListening();
 
-            // AsyncUAVWorkerをバックグラウンドで起動
-            workerExecutor = Executors.newSingleThreadExecutor();
-            asyncWorker = new AsyncUAVWorker("main-async-worker");
-            workerExecutor.submit(() -> asyncWorker.start());
+            // Phase 3b-10: AsyncUAVWorker x4をバックグラウンドで起動
+            workerExecutor = Executors.newFixedThreadPool(WORKER_COUNT);
+            asyncWorkers.clear();
+            for (int i = 0; i < WORKER_COUNT; i++) {
+                AsyncUAVWorker worker = new AsyncUAVWorker("async-worker-" + (i + 1));
+                asyncWorkers.add(worker);
+                workerExecutor.submit(() -> worker.start());
+            }
+            LogManager.getInstance().log("Phase 3b-10: " + WORKER_COUNT + "ワーカーを起動しました");
 
             // ジョブキューをクリア
             UAVJobQueue jobQueue = new UAVJobQueue();
@@ -370,7 +379,7 @@ public class BoundaryController {
             // リンク容量をRedisに初期化
             initializeLinkCapacities();
 
-            System.out.println("✓ Redisワーカーを起動しました (セッションID: " + currentSessionId + ")");
+            System.out.println("✓ Redisワーカーを起動しました (workers=" + WORKER_COUNT + ", セッションID: " + currentSessionId + ")");
             LogManager.getInstance().log("Phase 3b-6: Redisワーカー初期化完了");
 
         } catch (Exception e) {
@@ -418,9 +427,13 @@ public class BoundaryController {
      */
     private static void shutdownRedisWorker() {
         try {
-            if (asyncWorker != null) {
-                asyncWorker.stop();
+            // Phase 3b-10: 全ワーカーを停止
+            for (AsyncUAVWorker worker : asyncWorkers) {
+                if (worker != null) {
+                    worker.stop();
+                }
             }
+            asyncWorkers.clear();
 
             if (workerExecutor != null) {
                 workerExecutor.shutdownNow();
@@ -433,9 +446,9 @@ public class BoundaryController {
 
             FlightScheduler.resetInstance();
 
-            LogManager.getInstance().log("Phase 3b-6: Redisワーカーをシャットダウンしました");
+            LogManager.getInstance().log("Phase 3b-10: " + WORKER_COUNT + "ワーカーをシャットダウンしました");
         } catch (Exception e) {
-            LogManager.getInstance().error("Phase 3b-6: Redisワーカーシャットダウンエラー", e);
+            LogManager.getInstance().error("Phase 3b-10: Redisワーカーシャットダウンエラー", e);
         }
     }
 

@@ -10,10 +10,12 @@ import java.io.IOException;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 飛行スケジューラ
  * Phase 3b-3: イベントスケジューリング方式による非同期飛行管理
+ * Phase 3b-10: スレッドプール・オートスケーリング
  *
  * リンク通過時刻を事前計算し、ScheduledExecutorServiceで
  * 正確なタイミングでイベントを発火させる
@@ -22,7 +24,7 @@ public class FlightScheduler {
 
     private static FlightScheduler instance;
 
-    private ScheduledExecutorService scheduler;
+    private ScheduledThreadPoolExecutor scheduler;
     private LinkCapacityManager capacityManager;
     private WaitingUAVManager waitingManager;
     private UAVJobQueue jobQueue;
@@ -41,8 +43,21 @@ public class FlightScheduler {
     // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
     private String currentSessionId;
 
-    // スレッドプールサイズ（イベント処理は瞬時なので少数で十分）
-    private static final int SCHEDULER_POOL_SIZE = 8;
+    // Phase 3b-10: オートスケーリング設定
+    private static final int MIN_POOL_SIZE = 16;
+    private static final int MAX_POOL_SIZE = 32;
+    private static final int SCALE_STEP = 4;
+    private static final double SCALE_UP_THRESHOLD = 0.9;    // 90%でスケールアップ
+    private static final double SCALE_DOWN_THRESHOLD = 0.5;  // 50%未満でスケールダウン
+    private static final int SCALE_DOWN_DELAY_SECONDS = 30;  // 30秒継続でスケールダウン
+    private static final int MONITOR_INTERVAL_MS = 1000;     // 監視間隔1秒
+
+    // オートスケーリング用
+    private ScheduledExecutorService monitorExecutor;
+    private AtomicLong lowUsageStartTime = new AtomicLong(0);
+
+    // スレッドプールサイズ（初期値、後方互換性のため残す）
+    private static final int SCHEDULER_POOL_SIZE = MIN_POOL_SIZE;
 
     /**
      * シングルトンインスタンス取得
@@ -62,7 +77,7 @@ public class FlightScheduler {
             RedisConnectionManager connectionManager = RedisConnectionManager.getInstance();
             if (connectionManager.isConnected()) {
                 this.client = connectionManager.getClient();
-                this.scheduler = Executors.newScheduledThreadPool(SCHEDULER_POOL_SIZE);
+                this.scheduler = new ScheduledThreadPoolExecutor(MIN_POOL_SIZE);
                 this.capacityManager = new LinkCapacityManager();
                 this.waitingManager = new WaitingUAVManager();
                 this.jobQueue = new UAVJobQueue();
@@ -71,7 +86,11 @@ public class FlightScheduler {
                 this.linkPassedTopic = client.getTopic(UAVEventChannels.LINK_PASSED);
                 this.completionTopic = client.getTopic(UAVEventChannels.COMPLETION);
 
-                LogManager.getInstance().log("Phase 3b-3: FlightScheduler initialized (poolSize=" + SCHEDULER_POOL_SIZE + ")");
+                // Phase 3b-10: オートスケーリング監視開始
+                startAutoScalingMonitor();
+
+                LogManager.getInstance().log("Phase 3b-10: FlightScheduler initialized (poolSize=" + MIN_POOL_SIZE +
+                    ", autoScaling=" + MIN_POOL_SIZE + "-" + MAX_POOL_SIZE + ")");
             } else {
                 throw new RuntimeException("Redis connection required");
             }
@@ -87,7 +106,7 @@ public class FlightScheduler {
     public FlightScheduler(RedissonClient client, LinkCapacityManager capacityManager,
                            WaitingUAVManager waitingManager, UAVJobQueue jobQueue) {
         this.client = client;
-        this.scheduler = Executors.newScheduledThreadPool(SCHEDULER_POOL_SIZE);
+        this.scheduler = new ScheduledThreadPoolExecutor(MIN_POOL_SIZE);
         this.capacityManager = capacityManager;
         this.waitingManager = waitingManager;
         this.jobQueue = jobQueue;
@@ -97,7 +116,10 @@ public class FlightScheduler {
             this.completionTopic = client.getTopic(UAVEventChannels.COMPLETION);
         }
 
-        LogManager.getInstance().log("Phase 3b-3: FlightScheduler initialized (test mode)");
+        // テストモードでもオートスケーリング有効
+        startAutoScalingMonitor();
+
+        LogManager.getInstance().log("Phase 3b-10: FlightScheduler initialized (test mode, autoScaling enabled)");
     }
 
     /**
@@ -118,7 +140,7 @@ public class FlightScheduler {
         activeFlights.incrementAndGet();
 
         LogManager.getInstance().log(
-            "Phase 3b-3: UAV " + job.getUavId() + " 飛行開始 " +
+            "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 飛行開始 " +
             "(path=" + formatPath(job.getPath()) + ", linkIndex=" + linkIndex +
             ", 累積待機=" + String.format("%.2f", job.getTotalWaitingTime()) + "s)"
         );
@@ -145,7 +167,7 @@ public class FlightScheduler {
         int toNode = path[linkIndex + 1];
 
         LogManager.getInstance().log(
-            "Phase 3b-3: UAV " + job.getUavId() + " リンク " + fromNode + "→" + toNode +
+            "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " リンク " + fromNode + "→" + toNode +
             " スケジュール (" + String.format("%.2f", distance) + "m, " +
             String.format("%.2f", flightTimeSec) + "s後)"
         );
@@ -177,7 +199,7 @@ public class FlightScheduler {
         int count = linkPassedCount.incrementAndGet();
 
         LogManager.getInstance().log(
-            "Phase 3b-3: UAV " + job.getUavId() + " リンク通過 " + fromNode + "→" + toNode +
+            "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " リンク通過 " + fromNode + "→" + toNode +
             " (経過=" + String.format("%.2f", job.getElapsedFlightTime()) + "s, 総通過数=" + count + ")"
         );
 
@@ -193,7 +215,7 @@ public class FlightScheduler {
             if (waitingJob != null) {
                 jobQueue.enqueueJob(waitingJob);
                 LogManager.getInstance().log(
-                    "Phase 3b-3: 待機UAV " + waitingJob.getUavId() +
+                    "Phase 3b-3: 待機 client" + waitingJob.getClientId() + " UAV" + waitingJob.getUavId() +
                     " を再ジョブ化 (link " + fromNode + "→" + toNode + ")"
                 );
             }
@@ -242,7 +264,7 @@ public class FlightScheduler {
         activeFlights.decrementAndGet();
 
         LogManager.getInstance().log(
-            "Phase 3b-3: UAV " + job.getUavId() + " 途中待機 " +
+            "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 途中待機 " +
             "(link " + fromNode + "→" + toNode + ", linkIndex=" + waitingLinkIndex + ")"
         );
     }
@@ -262,7 +284,7 @@ public class FlightScheduler {
         double totalTime = job.getTotalTime();                 // 合計時間
 
         LogManager.getInstance().log(
-            "Phase 3b-3: UAV " + job.getUavId() + " 飛行完了 " +
+            "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 飛行完了 " +
             "(総距離=" + String.format("%.2f", job.getTotalDistance()) + "m, " +
             "飛行時間=" + String.format("%.2f", realFlightTime) + "s, " +
             "待機時間=" + String.format("%.2f", waitingTime) + "s, " +
@@ -402,12 +424,12 @@ public class FlightScheduler {
         String jobSessionId = job.getSessionId();
         if (jobSessionId == null) {
             // 古い形式のジョブは拒否
-            LogManager.getInstance().log("Phase 3b-8: セッションIDなしのジョブを拒否 (UAV " + job.getUavId() + ")");
+            LogManager.getInstance().log("Phase 3b-8: セッションIDなしのジョブを拒否 (client" + job.getClientId() + " UAV" + job.getUavId() + ")");
             skippedJobs.incrementAndGet();
             return false;
         }
         if (!currentSessionId.equals(jobSessionId)) {
-            LogManager.getInstance().log("Phase 3b-8: 別セッションのジョブを拒否 (UAV " + job.getUavId() +
+            LogManager.getInstance().log("Phase 3b-8: 別セッションのジョブを拒否 (client" + job.getClientId() + " UAV" + job.getUavId() +
                 ", expected=" + currentSessionId + ", got=" + jobSessionId + ")");
             skippedJobs.incrementAndGet();
             return false;
@@ -422,10 +444,110 @@ public class FlightScheduler {
         return skippedJobs.get();
     }
 
+    // Phase 3b-10: オートスケーリング関連メソッド
+
+    /**
+     * オートスケーリング監視を開始
+     */
+    private void startAutoScalingMonitor() {
+        monitorExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "FlightScheduler-AutoScaler");
+            t.setDaemon(true);
+            return t;
+        });
+
+        monitorExecutor.scheduleAtFixedRate(
+            this::checkAndScale,
+            MONITOR_INTERVAL_MS,
+            MONITOR_INTERVAL_MS,
+            TimeUnit.MILLISECONDS
+        );
+
+        LogManager.getInstance().log("Phase 3b-10: オートスケーリング監視開始 (間隔=" + MONITOR_INTERVAL_MS + "ms)");
+    }
+
+    /**
+     * スレッドプールのスケーリングをチェック・実行
+     */
+    private void checkAndScale() {
+        try {
+            int currentPoolSize = scheduler.getCorePoolSize();
+            int activeCount = scheduler.getActiveCount();
+            double usage = (double) activeCount / currentPoolSize;
+
+            // スケールアップ判定
+            if (usage >= SCALE_UP_THRESHOLD && currentPoolSize < MAX_POOL_SIZE) {
+                int newSize = Math.min(currentPoolSize + SCALE_STEP, MAX_POOL_SIZE);
+                scheduler.setCorePoolSize(newSize);
+                lowUsageStartTime.set(0);  // 低使用率カウンタをリセット
+                LogManager.getInstance().log(
+                    "Phase 3b-10: スケールアップ " + currentPoolSize + " → " + newSize +
+                    " (使用率=" + String.format("%.1f", usage * 100) + "%)"
+                );
+                return;
+            }
+
+            // スケールダウン判定
+            if (usage < SCALE_DOWN_THRESHOLD && currentPoolSize > MIN_POOL_SIZE) {
+                long now = System.currentTimeMillis();
+                long lowUsageStart = lowUsageStartTime.get();
+
+                if (lowUsageStart == 0) {
+                    // 低使用率開始時刻を記録
+                    lowUsageStartTime.set(now);
+                } else if (now - lowUsageStart >= SCALE_DOWN_DELAY_SECONDS * 1000L) {
+                    // 30秒継続したのでスケールダウン
+                    int newSize = Math.max(currentPoolSize - SCALE_STEP, MIN_POOL_SIZE);
+                    scheduler.setCorePoolSize(newSize);
+                    lowUsageStartTime.set(0);  // カウンタをリセット
+                    LogManager.getInstance().log(
+                        "Phase 3b-10: スケールダウン " + currentPoolSize + " → " + newSize +
+                        " (使用率=" + String.format("%.1f", usage * 100) + "%, " +
+                        SCALE_DOWN_DELAY_SECONDS + "秒継続)"
+                    );
+                }
+            } else {
+                // 使用率が閾値を超えたらカウンタをリセット
+                lowUsageStartTime.set(0);
+            }
+        } catch (Exception e) {
+            LogManager.getInstance().error("Phase 3b-10: オートスケーリングエラー", e);
+        }
+    }
+
+    /**
+     * 現在のスレッドプールサイズを取得
+     */
+    public int getCurrentPoolSize() {
+        return scheduler.getCorePoolSize();
+    }
+
+    /**
+     * アクティブスレッド数を取得
+     */
+    public int getActiveThreadCount() {
+        return scheduler.getActiveCount();
+    }
+
+    /**
+     * スレッドプール使用率を取得
+     */
+    public double getPoolUsage() {
+        int poolSize = scheduler.getCorePoolSize();
+        int active = scheduler.getActiveCount();
+        return poolSize > 0 ? (double) active / poolSize : 0.0;
+    }
+
     /**
      * スケジューラを停止
      */
     public void shutdown() {
+        // オートスケーリング監視を停止
+        if (monitorExecutor != null && !monitorExecutor.isShutdown()) {
+            monitorExecutor.shutdown();
+            LogManager.getInstance().log("Phase 3b-10: オートスケーリング監視停止");
+        }
+
         if (scheduler != null && !scheduler.isShutdown()) {
             scheduler.shutdown();
             try {
@@ -435,7 +557,7 @@ public class FlightScheduler {
             } catch (InterruptedException e) {
                 scheduler.shutdownNow();
             }
-            LogManager.getInstance().log("Phase 3b-3: FlightScheduler shutdown");
+            LogManager.getInstance().log("Phase 3b-10: FlightScheduler shutdown (最終poolSize=" + scheduler.getCorePoolSize() + ")");
         }
     }
 
