@@ -14,6 +14,7 @@ import server.route.ExtendedPhysarumSolverRouteSearcher;
 import server.route.HybridPhysarumSolverRouteSearcher;
 import server.route.PhysarumSolverRouteSearcher;
 import server.route.RouteSearcher;
+import server.redis.LinkCapacityManager;
 import server.uav.CapacityManager;
 import server.uav.FlightDataRecorder;
 import server.uav.UAVFlightController;
@@ -206,6 +207,12 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
+        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
+        LinkCapacityManager capacityManager = new LinkCapacityManager();
+        if (capacityManager.isEnabled()) {
+            capacityManager.syncCapacitiesToMemory(link, node);
+        }
+
         // 隣接行列の更新
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
@@ -245,6 +252,12 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
+        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
+        LinkCapacityManager capacityManager = new LinkCapacityManager();
+        if (capacityManager.isEnabled()) {
+            capacityManager.syncCapacitiesToMemory(link, node);
+        }
+
         // PhysarumSolver法による経路探索
         physarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
@@ -273,6 +286,12 @@ public class ServerController {
         // 飛行中のUAVがある場合、UAVFlySchedulerを停止
         if (!flyingUavQueue.isEmpty()) {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
+        }
+
+        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
+        LinkCapacityManager capacityManager = new LinkCapacityManager();
+        if (capacityManager.isEnabled()) {
+            capacityManager.syncCapacitiesToMemory(link, node);
         }
 
         // ExtendedPhysarumSolver法による経路探索
@@ -305,6 +324,12 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
+        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
+        LinkCapacityManager capacityManager = new LinkCapacityManager();
+        if (capacityManager.isEnabled()) {
+            capacityManager.syncCapacitiesToMemory(link, node);
+        }
+
         // ハイブリッドPhysarumSolver法による経路探索
         hybridPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
@@ -333,6 +358,12 @@ public class ServerController {
         // 飛行中のUAVがある場合、UAVFlySchedulerを停止
         if (!flyingUavQueue.isEmpty()) {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
+        }
+
+        // Phase 3b-11: Redisモードの場合、経路探索前にRedisの容量をメモリに同期
+        LinkCapacityManager capacityManager = new LinkCapacityManager();
+        if (capacityManager.isEnabled()) {
+            capacityManager.syncCapacitiesToMemory(link, node);
         }
 
         // バイナリサーチExtendedPhysarumSolver法による経路探索

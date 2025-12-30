@@ -394,4 +394,36 @@ public class LinkCapacityManager {
     public boolean isEnabled() {
         return redisEnabled;
     }
+
+    /**
+     * Redisの容量をメモリ（link配列）に同期する
+     * Phase 3b-11: 経路探索前にRedisの最新容量をlinkに反映
+     *
+     * @param link リンク情報配列
+     * @param node ノード数
+     */
+    public void syncCapacitiesToMemory(Link[][] link, int node) {
+        if (!redisEnabled) {
+            return;
+        }
+
+        try {
+            int synced = 0;
+            for (int i = 0; i < node; i++) {
+                for (int j = 0; j < node; j++) {
+                    if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY) {
+                        double redisCapacity = getCapacity(i, j);
+                        link[i][j].setCapacity(redisCapacity);
+                        synced++;
+                    }
+                }
+            }
+
+            LogManager.getInstance().log(
+                "Phase 3b-11: Redis→メモリ容量同期完了 (" + synced + " リンク)"
+            );
+        } catch (Exception e) {
+            LogManager.getInstance().error("Phase 3b-11: 容量同期エラー", e);
+        }
+    }
 }
