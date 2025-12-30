@@ -2,10 +2,13 @@ package server.route;
 
 import client.Client;
 import client.ClientController;
+import controller.BoundaryController;
 import item.BeaconCluster;
 import item.Link;
 import item.Uav;
 import server.controller.ServerController;
+import server.redis.UAVJob;
+import server.redis.UAVJobQueue;
 import server.util.LogManager;
 import server.util.MathUtils;
 import server.util.ResultOutputManager;
@@ -315,6 +318,173 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
      * @param uavQueue 待機中のUAVキュー
      */
     protected void runUAVFlow(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
+        // Phase 3b-6: WorkerModeに応じて処理を分岐
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            runUAVFlowRedis(startNode, goalNode, requiredUAVs, client);
+        } else {
+            runUAVFlowMemory(startNode, goalNode, requiredUAVs, client, flyingUavQueue, uavQueue);
+        }
+    }
+
+    /**
+     * Phase 3b-6: Redis経由でUAVジョブを投入する
+     */
+    protected void runUAVFlowRedis(int startNode, int goalNode, int requiredUAVs, Client client) {
+        LogManager.getInstance().log("Phase 3b-6: Redisモードでジョブ投入 (" + requiredUAVs + "機) [" + getRouteRecordTag() + "]");
+
+        UAVJobQueue jobQueue = new UAVJobQueue();
+        int clientId = client.getId();
+        double speed = client.getFlow().getUav(0).getSpeed();
+
+        UAV_count = 0;
+        boolean flowAvailable = true;
+
+        while (UAV_count < requiredUAVs && flowAvailable) {
+            min_Flow = 100;
+
+            int[] path = new int[20];
+            int pathIndex = 0;
+            path[pathIndex++] = startNode;
+            maxPathIndex = pathIndex;
+
+            int flow = explorePath(startNode, startNode, goalNode, path, pathIndex, 0);
+
+            if (flow > 0) {
+                int pathLength = maxPathIndex;
+                int[] pathArray = Arrays.copyOf(path, pathLength);
+
+                // リンク距離を計算
+                double[] linkDistances = calculateLinkDistances(pathArray);
+
+                for (int f = 0; f < flow && UAV_count < requiredUAVs; f++) {
+                    Uav uav = client.getFlow().getUav(UAV_count);
+                    int uavId = uav.getId();
+
+                    // UAVJobを作成
+                    UAVJob job = new UAVJob(
+                        uavId,
+                        clientId,
+                        pathArray,
+                        speed,
+                        System.currentTimeMillis(),
+                        startNode,
+                        goalNode
+                    );
+                    job.setLinkDistances(linkDistances);
+
+                    // キューに投入
+                    jobQueue.enqueueJob(job);
+                    LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + Arrays.toString(pathArray) + ")");
+
+                    UAV_count++;
+                }
+            } else {
+                flowAvailable = false;
+            }
+        }
+
+        if (!flowAvailable && UAV_count < requiredUAVs) {
+            int needUAV = requiredUAVs - UAV_count;
+            LogManager.getInstance().log("Phase 3b-6: 残り" + needUAV + "台のUAVを再割り当てします。");
+            adjustRemainingFlowRedis(needUAV, startNode, goalNode, client, jobQueue);
+        }
+
+        LogManager.getInstance().log("Phase 3b-6: 全" + UAV_count + "件のジョブを投入しました");
+    }
+
+    /**
+     * Phase 3b-6: リンク距離を計算する
+     */
+    protected double[] calculateLinkDistances(int[] path) {
+        double[] distances = new double[path.length - 1];
+        for (int i = 0; i < path.length - 1; i++) {
+            int from = path[i];
+            int to = path[i + 1];
+            distances[i] = link[from][to].getDistance();
+        }
+        return distances;
+    }
+
+    /**
+     * Phase 3b-6: 残りのUAVをRedis経由で再割り当てする
+     */
+    protected void adjustRemainingFlowRedis(int needUAV, int startNode, int goalNode, Client client, UAVJobQueue jobQueue) {
+        int clientId = client.getId();
+        double speed = client.getFlow().getUav(0).getSpeed();
+
+        // 簡易的な経路を探索（Dijkstra的なアプローチ）
+        int[] simplePath = findSimplePath(startNode, goalNode);
+        if (simplePath == null || simplePath.length < 2) {
+            LogManager.getInstance().error("Phase 3b-6: 再割り当て用の経路が見つかりませんでした");
+            return;
+        }
+
+        double[] linkDistances = calculateLinkDistances(simplePath);
+
+        for (int i = 0; i < needUAV; i++) {
+            Uav uav = client.getFlow().getUav(UAV_count);
+            int uavId = uav.getId();
+
+            UAVJob job = new UAVJob(
+                uavId,
+                clientId,
+                simplePath,
+                speed,
+                System.currentTimeMillis(),
+                startNode,
+                goalNode
+            );
+            job.setLinkDistances(linkDistances);
+
+            jobQueue.enqueueJob(job);
+            LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " 再割り当てジョブ投入完了");
+
+            UAV_count++;
+        }
+    }
+
+    /**
+     * Phase 3b-6: 簡易的な経路探索（再割り当て用）
+     */
+    protected int[] findSimplePath(int start, int goal) {
+        // BFSで最短経路を探索
+        boolean[] visited = new boolean[node];
+        int[] parent = new int[node];
+        Arrays.fill(parent, -1);
+
+        java.util.Queue<Integer> queue = new java.util.LinkedList<>();
+        queue.add(start);
+        visited[start] = true;
+
+        while (!queue.isEmpty()) {
+            int current = queue.poll();
+            if (current == goal) {
+                // 経路を復元
+                java.util.List<Integer> pathList = new java.util.ArrayList<>();
+                int at = goal;
+                while (at != -1) {
+                    pathList.add(0, at);
+                    at = parent[at];
+                }
+                return pathList.stream().mapToInt(Integer::intValue).toArray();
+            }
+
+            for (int next = 0; next < node; next++) {
+                if (adjMatrix[current][next] == 1 && !visited[next]) {
+                    visited[next] = true;
+                    parent[next] = current;
+                    queue.add(next);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 従来のメモリベースUAV処理
+     */
+    protected void runUAVFlowMemory(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
         UAV_count = 0;
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         CountDownLatch latch = new CountDownLatch(requiredUAVs);

@@ -125,6 +125,23 @@ public class ServerController {
     }
 
     /**
+     * Phase 3b-6: リンク情報を取得する
+     * @param from 始点ノード
+     * @param to 終点ノード
+     * @return リンク情報（存在しない場合はnull）
+     */
+    public Link getLink(int from, int to) {
+        if (from >= 0 && from < node && to >= 0 && to < node) {
+            Link l = link[from][to];
+            // 隣接していない場合はnullを返す
+            if (adjMatrix[from][to] == 1) {
+                return l;
+            }
+        }
+        return null;
+    }
+
+    /**
      * フィールドをすべてリセットする
      */
     public void reset() {
