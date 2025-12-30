@@ -208,10 +208,16 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
         if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
             LinkCapacityManager capacityManager = new LinkCapacityManager();
-            capacityManager.syncCapacitiesToMemory(link, node);
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
         }
 
         // 隣接行列の更新
@@ -253,10 +259,16 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
         if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
             LinkCapacityManager capacityManager = new LinkCapacityManager();
-            capacityManager.syncCapacitiesToMemory(link, node);
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
         }
 
         // PhysarumSolver法による経路探索
@@ -289,10 +301,16 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
         if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
             LinkCapacityManager capacityManager = new LinkCapacityManager();
-            capacityManager.syncCapacitiesToMemory(link, node);
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
         }
 
         // ExtendedPhysarumSolver法による経路探索
@@ -325,10 +343,16 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
         if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
             LinkCapacityManager capacityManager = new LinkCapacityManager();
-            capacityManager.syncCapacitiesToMemory(link, node);
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
         }
 
         // ハイブリッドPhysarumSolver法による経路探索
@@ -361,10 +385,16 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
-        // Phase 3b-11: Redisモードの場合のみ、経路探索前にRedisの容量をメモリに同期
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
         if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
             LinkCapacityManager capacityManager = new LinkCapacityManager();
-            capacityManager.syncCapacitiesToMemory(link, node);
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
         }
 
         // バイナリサーチExtendedPhysarumSolver法による経路探索

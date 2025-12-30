@@ -278,6 +278,8 @@ public class LinkCapacityManager {
      * 1 UAV = 1 容量として消費
      * 容量が1未満の場合は消費せずfalseを返す
      *
+     * 双方向リンク対応: 順方向と逆方向の両方の容量を消費
+     *
      * @param srcNode 開始ノード
      * @param dstNode 終了ノード
      * @return 容量消費に成功した場合true、容量不足の場合false
@@ -288,21 +290,30 @@ public class LinkCapacityManager {
         }
 
         try {
-            String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+            String forwardKey = "link:" + srcNode + ":" + dstNode + ":capacity";
 
-            // Luaスクリプトで原子的にチェック→消費
+            // 順方向: Luaスクリプトで原子的にチェック→消費
             Long result = script.eval(
                 RScript.Mode.READ_WRITE,
                 CONSUME_CAPACITY_SCRIPT,
                 RScript.ReturnType.INTEGER,
-                Collections.singletonList(key)
+                Collections.singletonList(forwardKey)
             );
 
             boolean success = (result != null && result == 1);
 
             if (success) {
+                // 双方向リンク対応: 逆方向も消費
+                String reverseKey = "link:" + dstNode + ":" + srcNode + ":capacity";
+                script.eval(
+                    RScript.Mode.READ_WRITE,
+                    CONSUME_CAPACITY_SCRIPT,
+                    RScript.ReturnType.INTEGER,
+                    Collections.singletonList(reverseKey)
+                );
+
                 LogManager.getInstance().log(
-                    "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量消費成功（Lua原子操作）"
+                    "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量消費成功（双方向、Lua原子操作）"
                 );
             } else {
                 LogManager.getInstance().log(
@@ -323,6 +334,8 @@ public class LinkCapacityManager {
      *
      * 1 UAV = 1 容量として回復
      *
+     * 双方向リンク対応: 順方向と逆方向の両方の容量を回復
+     *
      * @param srcNode 開始ノード
      * @param dstNode 終了ノード
      * @return 回復後の容量
@@ -333,14 +346,14 @@ public class LinkCapacityManager {
         }
 
         try {
-            String key = "link:" + srcNode + ":" + dstNode + ":capacity";
+            String forwardKey = "link:" + srcNode + ":" + dstNode + ":capacity";
 
-            // Luaスクリプトで原子的に回復
+            // 順方向: Luaスクリプトで原子的に回復
             Object result = script.eval(
                 RScript.Mode.READ_WRITE,
                 RECOVER_CAPACITY_SCRIPT,
                 RScript.ReturnType.VALUE,
-                Collections.singletonList(key)
+                Collections.singletonList(forwardKey)
             );
 
             // 結果を適切にdoubleに変換
@@ -353,8 +366,17 @@ public class LinkCapacityManager {
                 newCapacity = 0.0;
             }
 
+            // 双方向リンク対応: 逆方向も回復
+            String reverseKey = "link:" + dstNode + ":" + srcNode + ":capacity";
+            script.eval(
+                RScript.Mode.READ_WRITE,
+                RECOVER_CAPACITY_SCRIPT,
+                RScript.ReturnType.VALUE,
+                Collections.singletonList(reverseKey)
+            );
+
             LogManager.getInstance().log(
-                "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量回復 → " + newCapacity + "（Lua原子操作）"
+                "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量回復 → " + newCapacity + "（双方向、Lua原子操作）"
             );
             return newCapacity;
         } catch (Exception e) {
@@ -424,6 +446,40 @@ public class LinkCapacityManager {
             );
         } catch (Exception e) {
             LogManager.getInstance().error("Phase 3b-11: 容量同期エラー", e);
+        }
+    }
+
+    /**
+     * メモリ（link配列）の容量をRedisに同期する
+     * 初期化時に使用：Redis側にキーが存在しない場合、メモリの値で初期化
+     *
+     * @param link リンク情報配列
+     * @param node ノード数
+     */
+    public void initializeCapacitiesToRedis(Link[][] link, int node) {
+        if (!redisEnabled) {
+            return;
+        }
+
+        try {
+            int initialized = 0;
+            for (int i = 0; i < node; i++) {
+                for (int j = 0; j < node; j++) {
+                    if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY) {
+                        // 初期容量をRedisに保存
+                        saveInitCapacity(i, j, link[i][j].getInitCapacity());
+                        // 現在容量（=初期容量）をRedisに保存
+                        saveCapacity(i, j, link[i][j].getCapacity());
+                        initialized++;
+                    }
+                }
+            }
+
+            LogManager.getInstance().log(
+                "Phase 3b-11: メモリ→Redis容量初期化完了 (" + initialized + " リンク)"
+            );
+        } catch (Exception e) {
+            LogManager.getInstance().error("Phase 3b-11: 容量初期化エラー", e);
         }
     }
 }

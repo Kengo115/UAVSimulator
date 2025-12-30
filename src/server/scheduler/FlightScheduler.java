@@ -206,10 +206,10 @@ public class FlightScheduler {
         // 2. リンク通過イベントを送信（Pub/Sub）
         publishLinkPassedEvent(job, fromNode, toNode, linkIndex);
 
-        // 3. 容量回復
+        // 3. 容量回復（順方向・逆方向両方）
         double newCapacity = capacityManager.recoverCapacity(fromNode, toNode);
 
-        // 4. 待機UAVがいれば再ジョブ化
+        // 4. 待機UAVがいれば再ジョブ化（順方向）
         if (waitingManager.hasWaitingUAV(fromNode, toNode)) {
             UAVJob waitingJob = waitingManager.dequeue(fromNode, toNode);
             if (waitingJob != null) {
@@ -221,13 +221,25 @@ public class FlightScheduler {
             }
         }
 
-        // 5. 最終リンクか判定
+        // 5. 待機UAVがいれば再ジョブ化（逆方向：双方向リンク対応）
+        if (waitingManager.hasWaitingUAV(toNode, fromNode)) {
+            UAVJob waitingJob = waitingManager.dequeue(toNode, fromNode);
+            if (waitingJob != null) {
+                jobQueue.enqueueJob(waitingJob);
+                LogManager.getInstance().log(
+                    "Phase 3b-3: 待機 client" + waitingJob.getClientId() + " UAV" + waitingJob.getUavId() +
+                    " を再ジョブ化 (link " + toNode + "→" + fromNode + ", 逆方向リンク回復)"
+                );
+            }
+        }
+
+        // 6. 最終リンクか判定
         if (linkIndex >= path.length - 2) {
             onFlightCompleted(job);
             return;
         }
 
-        // 6. 次のリンクの容量チェック
+        // 7. 次のリンクの容量チェック
         int nextFrom = path[linkIndex + 1];
         int nextTo = path[linkIndex + 2];
 
@@ -237,7 +249,7 @@ public class FlightScheduler {
             return;
         }
 
-        // 7. 次のリンク飛行をスケジュール
+        // 8. 次のリンク飛行をスケジュール
         job.setCurrentLinkStartTime(System.currentTimeMillis());
         scheduleNextLink(job, linkIndex + 1);
     }

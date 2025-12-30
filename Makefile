@@ -58,7 +58,7 @@ clean:
 # Redisデータをクリア
 redis-clear:
 	@echo "Redisデータをクリアします..."
-	docker exec chworkforce-redis-1 redis-cli FLUSHALL
+	docker exec uav-simulator-redis redis-cli FLUSHALL
 	@echo "✓ Redisデータがクリアされました"
 
 # ヘルプ

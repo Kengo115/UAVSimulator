@@ -132,15 +132,16 @@ public class FlightDataRecorder {
         long flightTime = clientController.getFlightTime();
         long UAV_flightTime = uav.getFlightTime();
         long UAV_waitingTime = uav.getWaitingTime();
+        long UAV_totalTime = UAV_flightTime + UAV_waitingTime;
 
         try (FileWriter writer = new FileWriter(filePath, true)) {
             File file = new File(filePath);
             if (file.length() == 0) {
-                writer.write("source,dist,passedTime,UAV_flightTime,UAV_waitingTime,ClientID,UAVID,speed,distance,path\n");
+                writer.write("source,dist,passedTime,UAV_flightTime,UAV_waitingTime,UAV_totalTime,ClientID,UAVID,speed,distance,path\n");
             }
             String pathString = Arrays.stream(uav.getPath()).mapToObj(String::valueOf).collect(Collectors.joining("-"));
-            writer.write(String.format("%d,%d,%d,%d,%d,%d,%d,%f,%f,%s\n",
-                    uav.getSource().getId(), uav.getDistination().getId(), flightTime, UAV_flightTime, UAV_waitingTime,
+            writer.write(String.format("%d,%d,%d,%d,%d,%d,%d,%d,%f,%f,%s\n",
+                    uav.getSource().getId(), uav.getDistination().getId(), flightTime, UAV_flightTime, UAV_waitingTime, UAV_totalTime,
                     uav.getClientId(), uav.getId(), uav.getSpeed(), totalPathDistance, pathString));
         } catch (IOException e) {
             System.err.println("ファイル書き込みエラー: " + e.getMessage());
@@ -170,6 +171,7 @@ public class FlightDataRecorder {
             long flightTime = clientController.getFlightTime();
             long UAV_flightTime = uav.getFlightTime();
             long UAV_waitingTime = uav.getWaitingTime();
+            long UAV_totalTime = UAV_flightTime + UAV_waitingTime;
             String pathString = Arrays.stream(uav.getPath()).mapToObj(String::valueOf).collect(Collectors.joining("-"));
 
             map.put("sourceBeaconId", uav.getSource().getId());
@@ -177,6 +179,7 @@ public class FlightDataRecorder {
             map.put("passedTime", flightTime);
             map.put("uavFlightTime", UAV_flightTime);
             map.put("uavWaitingTime", UAV_waitingTime);
+            map.put("uavTotalTime", UAV_totalTime);
             map.put("clientId", uav.getClientId());
             map.put("uavId", uav.getId());
             map.put("speed", uav.getSpeed());
