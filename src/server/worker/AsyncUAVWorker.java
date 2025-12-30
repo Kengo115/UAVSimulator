@@ -104,6 +104,14 @@ public class AsyncUAVWorker {
      * @param job UAVジョブ
      */
     private void processJob(UAVJob job) {
+        // Phase 3b-8: セッションID検証
+        if (!flightScheduler.isValidSession(job)) {
+            LogManager.getInstance().log(
+                "Phase 3b-8: Worker " + workerId + " 別セッションのジョブをスキップ (UAV " + job.getUavId() + ")"
+            );
+            return;
+        }
+
         int[] path = job.getPath();
         int startIndex = job.getCurrentPathIndex();
         int fromNode = path[startIndex];
@@ -119,6 +127,8 @@ public class AsyncUAVWorker {
 
         if (!acquired) {
             // 容量不足 → 待機キューへ
+            // Phase 3b-9: 待機開始時刻を記録
+            job.startWaiting();
             waitingManager.enqueue(fromNode, toNode, job);
             LogManager.getInstance().log(
                 "Phase 3b-3: Worker " + workerId + " UAV " + job.getUavId() +

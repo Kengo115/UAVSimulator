@@ -17,6 +17,7 @@ import server.worker.AsyncUAVWorker;
 import java.io.*;
 import java.util.LinkedList;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -42,6 +43,9 @@ public class BoundaryController {
     private static ExecutorService workerExecutor;
     private static UAVCompletionListener completionListener;
     private static FlightScheduler flightScheduler;
+
+    // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
+    private static String currentSessionId;
 
     String filePath = "src/result/practice.net";
 
@@ -337,9 +341,14 @@ public class BoundaryController {
      */
     private static void initializeRedisWorker() {
         try {
+            // Phase 3b-8: セッションIDを生成（古いプロセスからのジョブを無視するため）
+            currentSessionId = UUID.randomUUID().toString().substring(0, 8);
+            LogManager.getInstance().log("Phase 3b-8: 新しいセッションID生成: " + currentSessionId);
+
             // FlightSchedulerを初期化
             flightScheduler = FlightScheduler.getInstance();
             flightScheduler.resetCounters();
+            flightScheduler.setSessionId(currentSessionId);
 
             // 完了リスナーを開始
             completionListener = new UAVCompletionListener();
@@ -361,7 +370,7 @@ public class BoundaryController {
             // リンク容量をRedisに初期化
             initializeLinkCapacities();
 
-            System.out.println("✓ Redisワーカーを起動しました");
+            System.out.println("✓ Redisワーカーを起動しました (セッションID: " + currentSessionId + ")");
             LogManager.getInstance().log("Phase 3b-6: Redisワーカー初期化完了");
 
         } catch (Exception e) {
@@ -369,6 +378,14 @@ public class BoundaryController {
             LogManager.getInstance().error("Phase 3b-6: Redisワーカー初期化失敗", e);
             setWorkerMode(WorkerMode.MEMORY);
         }
+    }
+
+    /**
+     * Phase 3b-8: 現在のセッションIDを取得する
+     * @return セッションID（Redisモードでない場合はnull）
+     */
+    public static String getCurrentSessionId() {
+        return currentSessionId;
     }
 
     /**

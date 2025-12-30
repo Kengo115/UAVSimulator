@@ -4,6 +4,9 @@ import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import server.redis.*;
 import server.util.LogManager;
+import server.util.ResultOutputManager;
+
+import java.io.IOException;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,6 +36,10 @@ public class FlightScheduler {
     private AtomicInteger activeFlights = new AtomicInteger(0);
     private AtomicInteger completedFlights = new AtomicInteger(0);
     private AtomicInteger linkPassedCount = new AtomicInteger(0);
+    private AtomicInteger skippedJobs = new AtomicInteger(0);
+
+    // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
+    private String currentSessionId;
 
     // スレッドプールサイズ（イベント処理は瞬時なので少数で十分）
     private static final int SCHEDULER_POOL_SIZE = 8;
@@ -101,6 +108,9 @@ public class FlightScheduler {
     public void startFlight(UAVJob job) {
         int linkIndex = job.getCurrentPathIndex();
 
+        // Phase 3b-9: 待機中だった場合は待機時間を確定
+        job.endWaiting();
+
         // 飛行開始時刻を記録
         job.setCurrentLinkStartTime(System.currentTimeMillis());
 
@@ -109,7 +119,8 @@ public class FlightScheduler {
 
         LogManager.getInstance().log(
             "Phase 3b-3: UAV " + job.getUavId() + " 飛行開始 " +
-            "(path=" + formatPath(job.getPath()) + ", linkIndex=" + linkIndex + ")"
+            "(path=" + formatPath(job.getPath()) + ", linkIndex=" + linkIndex +
+            ", 累積待機=" + String.format("%.2f", job.getTotalWaitingTime()) + "s)"
         );
 
         // 最初のリンク飛行をスケジュール
@@ -221,6 +232,9 @@ public class FlightScheduler {
         // 再開位置を記録
         job.setCurrentPathIndex(waitingLinkIndex);
 
+        // Phase 3b-9: 待機開始時刻を記録
+        job.startWaiting();
+
         // 待機キューに登録
         waitingManager.enqueue(fromNode, toNode, job);
 
@@ -242,12 +256,28 @@ public class FlightScheduler {
         activeFlights.decrementAndGet();
         int completed = completedFlights.incrementAndGet();
 
+        // Phase 3b-9: 時間情報を取得
+        double realFlightTime = job.getElapsedFlightTime();   // 純粋な飛行時間
+        double waitingTime = job.getTotalWaitingTime();        // 待機時間
+        double totalTime = job.getTotalTime();                 // 合計時間
+
         LogManager.getInstance().log(
             "Phase 3b-3: UAV " + job.getUavId() + " 飛行完了 " +
             "(総距離=" + String.format("%.2f", job.getTotalDistance()) + "m, " +
-            "総時間=" + String.format("%.2f", job.getElapsedFlightTime()) + "s, " +
+            "飛行時間=" + String.format("%.2f", realFlightTime) + "s, " +
+            "待機時間=" + String.format("%.2f", waitingTime) + "s, " +
+            "合計=" + String.format("%.2f", totalTime) + "s, " +
             "総完了数=" + completed + ")"
         );
+
+        // Phase 3b-7: 結果ファイルに出力
+        try {
+            // clientIdをrunCounterとして使用（各事業者ごとにディレクトリ分け）
+            int runCounter = job.getClientId();
+            ResultOutputManager.outputFlightTimeResult(job, runCounter);
+        } catch (IOException e) {
+            LogManager.getInstance().error("Phase 3b-7: 結果ファイル出力エラー", e);
+        }
 
         // 完了イベント送信
         publishCompletionEvent(job);
@@ -337,6 +367,59 @@ public class FlightScheduler {
         activeFlights.set(0);
         completedFlights.set(0);
         linkPassedCount.set(0);
+        skippedJobs.set(0);
+    }
+
+    // Phase 3b-8: セッションID関連メソッド
+
+    /**
+     * セッションIDを設定
+     * @param sessionId セッションID
+     */
+    public void setSessionId(String sessionId) {
+        this.currentSessionId = sessionId;
+        LogManager.getInstance().log("Phase 3b-8: セッションID設定: " + sessionId);
+    }
+
+    /**
+     * 現在のセッションIDを取得
+     * @return セッションID
+     */
+    public String getSessionId() {
+        return currentSessionId;
+    }
+
+    /**
+     * ジョブが現在のセッションに属するか検証
+     * @param job UAVジョブ
+     * @return 現在のセッションに属する場合はtrue
+     */
+    public boolean isValidSession(UAVJob job) {
+        if (currentSessionId == null) {
+            // セッションIDが未設定の場合は全て許可（後方互換性）
+            return true;
+        }
+        String jobSessionId = job.getSessionId();
+        if (jobSessionId == null) {
+            // 古い形式のジョブは拒否
+            LogManager.getInstance().log("Phase 3b-8: セッションIDなしのジョブを拒否 (UAV " + job.getUavId() + ")");
+            skippedJobs.incrementAndGet();
+            return false;
+        }
+        if (!currentSessionId.equals(jobSessionId)) {
+            LogManager.getInstance().log("Phase 3b-8: 別セッションのジョブを拒否 (UAV " + job.getUavId() +
+                ", expected=" + currentSessionId + ", got=" + jobSessionId + ")");
+            skippedJobs.incrementAndGet();
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * スキップされたジョブ数を取得
+     */
+    public int getSkippedJobs() {
+        return skippedJobs.get();
     }
 
     /**

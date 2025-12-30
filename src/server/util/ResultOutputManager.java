@@ -5,10 +5,13 @@ import controller.BoundaryController;
 import item.Beacon;
 import item.BeaconCluster;
 import item.Link;
+import server.redis.UAVJob;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 
 /**
  * 結果出力を管理するクラス
@@ -335,5 +338,151 @@ public class ResultOutputManager {
                 writer.write(String.format("%d,%.4f,%.4f,%.4f,%.4f\n", ct, route1, route2, route3, route4));
             }
         }
+    }
+
+    /**
+     * Phase 3b-9: Redisモード用のtime結果を出力する（UAVJobから時間情報を取得）
+     * @param job UAVジョブ
+     * @param runCounter 実行カウンター（クライアント番号）
+     * @throws IOException 入出力例外
+     */
+    public static void outputFlightTimeResult(UAVJob job, int runCounter) throws IOException {
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("time", runCounter);
+        String filename = dirPath + "/flight_times.csv";
+
+        // ディレクトリが存在しない場合は作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+
+        // 経路を文字列に変換
+        String pathString = Arrays.stream(job.getPath())
+            .mapToObj(String::valueOf)
+            .collect(Collectors.joining("-"));
+
+        // Phase 3b-9: 時間情報を取得
+        double realFlightTime = job.getElapsedFlightTime();    // 純粋な飛行時間
+        double waitingTime = job.getTotalWaitingTime();         // 待機時間
+        double flightTime = job.getTotalTime();                 // 合計時間（飛行＋待機）
+
+        try (FileWriter writer = new FileWriter(filename, true)) {
+            File file = new File(filename);
+            if (file.length() == 0) {
+                // Phase 3b-9: ヘッダーを更新
+                writer.write("source,dest,flightTime,realFlightTime,waitingTime,clientId,uavId,speed,distance,path\n");
+            }
+            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
+                job.getSourceBeaconId(),
+                job.getDestinationBeaconId(),
+                flightTime,         // 合計時間（飛行＋待機）
+                realFlightTime,     // 純粋な飛行時間
+                waitingTime,        // 待機時間
+                job.getClientId(),
+                job.getUavId(),
+                job.getSpeed(),
+                job.getTotalDistance(),
+                pathString));
+        }
+
+        LogManager.getInstance().log("Phase 3b-9: UAV" + job.getUavId() +
+            " 飛行結果保存 (合計=" + String.format("%.2f", flightTime) +
+            "s, 飛行=" + String.format("%.2f", realFlightTime) +
+            "s, 待機=" + String.format("%.2f", waitingTime) + "s)");
+    }
+
+    /**
+     * Phase 3b-7: Redisモード用のtime結果を出力する（後方互換性用）
+     * @param job UAVジョブ
+     * @param elapsedFlightTime 飛行時間（秒）
+     * @param waitingTime 待機時間（秒）
+     * @param runCounter 実行カウンター（クライアント番号）
+     * @throws IOException 入出力例外
+     * @deprecated Phase 3b-9以降は outputFlightTimeResult(UAVJob, int) を使用してください
+     */
+    @Deprecated
+    public static void outputFlightTimeResult(UAVJob job, double elapsedFlightTime, double waitingTime, int runCounter) throws IOException {
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("time", runCounter);
+        String filename = dirPath + "/flight_times.csv";
+
+        // ディレクトリが存在しない場合は作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+
+        // 経路を文字列に変換
+        String pathString = Arrays.stream(job.getPath())
+            .mapToObj(String::valueOf)
+            .collect(Collectors.joining("-"));
+
+        double flightTime = elapsedFlightTime + waitingTime; // 合計時間
+
+        try (FileWriter writer = new FileWriter(filename, true)) {
+            File file = new File(filename);
+            if (file.length() == 0) {
+                writer.write("source,dest,flightTime,realFlightTime,waitingTime,clientId,uavId,speed,distance,path\n");
+            }
+            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
+                job.getSourceBeaconId(),
+                job.getDestinationBeaconId(),
+                flightTime,
+                elapsedFlightTime,
+                waitingTime,
+                job.getClientId(),
+                job.getUavId(),
+                job.getSpeed(),
+                job.getTotalDistance(),
+                pathString));
+        }
+
+        LogManager.getInstance().log("Phase 3b-7: UAV" + job.getUavId() + " 飛行結果をファイルに保存しました");
+    }
+
+    /**
+     * Phase 3b-7: Redisモード用のflow結果を出力する
+     * @param jobs 完了したジョブリスト
+     * @param runCounter 実行カウンター
+     * @throws IOException 入出力例外
+     */
+    public static void outputFlowSummary(java.util.List<UAVJob> jobs, int runCounter) throws IOException {
+        if (jobs == null || jobs.isEmpty()) return;
+
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("flow", runCounter);
+        String filename = dirPath + "/flow_summary.txt";
+
+        // ディレクトリが存在しない場合は作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+
+        // ソース・シンクを取得（最初のジョブから）
+        UAVJob firstJob = jobs.get(0);
+
+        try (FileWriter writer = new FileWriter(filename)) {
+            writer.write(String.format("%d,%d,%d\n",
+                jobs.size(),
+                firstJob.getSourceBeaconId(),
+                firstJob.getDestinationBeaconId()));
+            writer.write("uavId,clientId,path,distance,flightTime\n");
+
+            for (UAVJob job : jobs) {
+                String pathString = Arrays.stream(job.getPath())
+                    .mapToObj(String::valueOf)
+                    .collect(Collectors.joining("-"));
+                writer.write(String.format("%d,%d,%s,%.2f,%.2f\n",
+                    job.getUavId(),
+                    job.getClientId(),
+                    pathString,
+                    job.getTotalDistance(),
+                    job.getElapsedFlightTime()));
+            }
+        }
+
+        LogManager.getInstance().log("Phase 3b-7: フローサマリーをファイルに保存しました (" + jobs.size() + "件)");
     }
 }

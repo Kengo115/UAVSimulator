@@ -160,12 +160,15 @@ public class DijkstraRouteSearcher implements RouteSearcher {
 
     /**
      * Phase 3b-6: Redis経由でUAVジョブを投入する
+     * Dijkstraでは全UAVが同一経路のため、同一の一ホップ目リンクを使用
+     * そのため全UAVを2秒間隔で投入
      * @param client クライアント
      * @param path 経路
      * @param requiredUAVs 必要なUAV数
      */
     private void runUAVFlowRedis(Client client, int[] path, int requiredUAVs) {
-        LogManager.getInstance().log("Phase 3b-6: Redisモードでジョブ投入 (" + requiredUAVs + "機)");
+        String firstLink = path[0] + "-" + path[1];
+        LogManager.getInstance().log("Phase 3b-6: Redisモードでジョブ投入 (" + requiredUAVs + "機, 一ホップ目: " + firstLink + ", 2秒間隔)");
 
         // リンク距離を計算
         double[] linkDistances = calculateLinkDistances(path);
@@ -178,31 +181,53 @@ public class DijkstraRouteSearcher implements RouteSearcher {
         int sourceBeaconId = path[0];
         int destinationBeaconId = path[path.length - 1];
 
-        // UAVの速度を取得（最初のUAVから取得）
-        double speed = client.getFlow().getUav(0).getSpeed();
+        // メモリベースと同様に2秒間隔でジョブ投入するためのスケジューラ
+        ScheduledExecutorService enqueueScheduler = Executors.newScheduledThreadPool(1);
 
         for (int f = 0; f < requiredUAVs; f++) {
             Uav uav = client.getFlow().getUav(f);
             int uavId = uav.getId();
+            // 各UAVの個別速度を使用（8~16 m/sのランダム値）
+            double uavSpeed = uav.getSpeed();
+            final int finalF = f;
 
-            // UAVJobを作成
-            UAVJob job = new UAVJob(
-                uavId,
-                clientId,
-                path,
-                speed,
-                System.currentTimeMillis(),
-                sourceBeaconId,
-                destinationBeaconId
-            );
-            job.setLinkDistances(linkDistances);
+            // 2秒間隔でジョブ投入をスケジュール
+            enqueueScheduler.schedule(() -> {
+                // UAVJobを作成（投入時刻を開始時刻として設定）
+                UAVJob job = new UAVJob(
+                    uavId,
+                    clientId,
+                    path,
+                    uavSpeed,
+                    System.currentTimeMillis(),
+                    sourceBeaconId,
+                    destinationBeaconId
+                );
+                job.setLinkDistances(linkDistances);
+                // Phase 3b-8: セッションIDを設定
+                job.setSessionId(BoundaryController.getCurrentSessionId());
 
-            // キューに投入
-            jobQueue.enqueueJob(job);
-            LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了");
+                // キューに投入
+                jobQueue.enqueueJob(job);
+                LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + formatPath(path) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
+            }, finalF * 2, TimeUnit.SECONDS);
         }
 
-        LogManager.getInstance().log("Phase 3b-6: 全" + requiredUAVs + "件のジョブを投入しました");
+        LogManager.getInstance().log("Phase 3b-6: 全" + requiredUAVs + "件のジョブを2秒間隔でスケジュールしました");
+    }
+
+    /**
+     * 経路を文字列に整形
+     */
+    private String formatPath(int[] path) {
+        if (path == null || path.length == 0) return "[]";
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < path.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(path[i]);
+        }
+        sb.append("]");
+        return sb.toString();
     }
 
     /**

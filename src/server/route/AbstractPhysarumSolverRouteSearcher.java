@@ -15,6 +15,8 @@ import server.util.ResultOutputManager;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -328,16 +330,23 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
 
     /**
      * Phase 3b-6: Redis経由でUAVジョブを投入する
+     * 同一の一ホップ目リンクを飛行するUAVは2秒間隔で投入
+     * 異なるリンクを飛行するUAVは同時に投入可能
      */
     protected void runUAVFlowRedis(int startNode, int goalNode, int requiredUAVs, Client client) {
         LogManager.getInstance().log("Phase 3b-6: Redisモードでジョブ投入 (" + requiredUAVs + "機) [" + getRouteRecordTag() + "]");
 
         UAVJobQueue jobQueue = new UAVJobQueue();
         int clientId = client.getId();
-        double speed = client.getFlow().getUav(0).getSpeed();
+
+        // 同一リンクごとに2秒間隔でジョブ投入するためのスケジューラ
+        ScheduledExecutorService enqueueScheduler = Executors.newScheduledThreadPool(1);
 
         UAV_count = 0;
         boolean flowAvailable = true;
+
+        // 一ホップ目リンクごとの投入順序を管理（キー: "from-to"）
+        Map<String, Integer> linkEnqueueOrder = new HashMap<>();
 
         while (UAV_count < requiredUAVs && flowAvailable) {
             min_Flow = 100;
@@ -353,28 +362,46 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 int pathLength = maxPathIndex;
                 int[] pathArray = Arrays.copyOf(path, pathLength);
 
+                // 一ホップ目リンクのキーを作成
+                String firstLinkKey = pathArray[0] + "-" + pathArray[1];
+
                 // リンク距離を計算
                 double[] linkDistances = calculateLinkDistances(pathArray);
 
                 for (int f = 0; f < flow && UAV_count < requiredUAVs; f++) {
                     Uav uav = client.getFlow().getUav(UAV_count);
                     int uavId = uav.getId();
+                    // 各UAVの個別速度を使用（8~16 m/sのランダム値）
+                    double uavSpeed = uav.getSpeed();
 
-                    // UAVJobを作成
-                    UAVJob job = new UAVJob(
-                        uavId,
-                        clientId,
-                        pathArray,
-                        speed,
-                        System.currentTimeMillis(),
-                        startNode,
-                        goalNode
-                    );
-                    job.setLinkDistances(linkDistances);
+                    // このリンクの現在の投入順序を取得・更新
+                    int currentOrder = linkEnqueueOrder.getOrDefault(firstLinkKey, 0);
+                    linkEnqueueOrder.put(firstLinkKey, currentOrder + 1);
 
-                    // キューに投入
-                    jobQueue.enqueueJob(job);
-                    LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + Arrays.toString(pathArray) + ")");
+                    final int delaySeconds = currentOrder * 2;
+                    final int[] finalPathArray = pathArray;
+                    final double[] finalLinkDistances = linkDistances;
+
+                    // 同一リンクのUAVは2秒間隔でジョブ投入をスケジュール
+                    enqueueScheduler.schedule(() -> {
+                        // UAVJobを作成（投入時刻を開始時刻として設定）
+                        UAVJob job = new UAVJob(
+                            uavId,
+                            clientId,
+                            finalPathArray,
+                            uavSpeed,
+                            System.currentTimeMillis(),
+                            startNode,
+                            goalNode
+                        );
+                        job.setLinkDistances(finalLinkDistances);
+                        // Phase 3b-8: セッションIDを設定
+                        job.setSessionId(BoundaryController.getCurrentSessionId());
+
+                        // キューに投入
+                        jobQueue.enqueueJob(job);
+                        LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + Arrays.toString(finalPathArray) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
+                    }, delaySeconds, TimeUnit.SECONDS);
 
                     UAV_count++;
                 }
@@ -386,10 +413,10 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         if (!flowAvailable && UAV_count < requiredUAVs) {
             int needUAV = requiredUAVs - UAV_count;
             LogManager.getInstance().log("Phase 3b-6: 残り" + needUAV + "台のUAVを再割り当てします。");
-            adjustRemainingFlowRedis(needUAV, startNode, goalNode, client, jobQueue);
+            adjustRemainingFlowRedis(needUAV, startNode, goalNode, client, jobQueue, enqueueScheduler, linkEnqueueOrder);
         }
 
-        LogManager.getInstance().log("Phase 3b-6: 全" + UAV_count + "件のジョブを投入しました");
+        LogManager.getInstance().log("Phase 3b-6: 全" + UAV_count + "件のジョブをスケジュールしました");
     }
 
     /**
@@ -407,10 +434,12 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
 
     /**
      * Phase 3b-6: 残りのUAVをRedis経由で再割り当てする
+     * 同一リンクのUAVは2秒間隔でジョブを投入
      */
-    protected void adjustRemainingFlowRedis(int needUAV, int startNode, int goalNode, Client client, UAVJobQueue jobQueue) {
+    protected void adjustRemainingFlowRedis(int needUAV, int startNode, int goalNode, Client client,
+                                            UAVJobQueue jobQueue, ScheduledExecutorService enqueueScheduler,
+                                            Map<String, Integer> linkEnqueueOrder) {
         int clientId = client.getId();
-        double speed = client.getFlow().getUav(0).getSpeed();
 
         // 簡易的な経路を探索（Dijkstra的なアプローチ）
         int[] simplePath = findSimplePath(startNode, goalNode);
@@ -419,25 +448,43 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             return;
         }
 
+        // 一ホップ目リンクのキーを作成
+        String firstLinkKey = simplePath[0] + "-" + simplePath[1];
+
         double[] linkDistances = calculateLinkDistances(simplePath);
 
         for (int i = 0; i < needUAV; i++) {
             Uav uav = client.getFlow().getUav(UAV_count);
             int uavId = uav.getId();
+            // 各UAVの個別速度を使用（8~16 m/sのランダム値）
+            double uavSpeed = uav.getSpeed();
 
-            UAVJob job = new UAVJob(
-                uavId,
-                clientId,
-                simplePath,
-                speed,
-                System.currentTimeMillis(),
-                startNode,
-                goalNode
-            );
-            job.setLinkDistances(linkDistances);
+            // このリンクの現在の投入順序を取得・更新
+            int currentOrder = linkEnqueueOrder.getOrDefault(firstLinkKey, 0);
+            linkEnqueueOrder.put(firstLinkKey, currentOrder + 1);
 
-            jobQueue.enqueueJob(job);
-            LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " 再割り当てジョブ投入完了");
+            final int delaySeconds = currentOrder * 2;
+            final int[] finalSimplePath = simplePath;
+            final double[] finalLinkDistances = linkDistances;
+
+            // 同一リンクのUAVは2秒間隔でジョブ投入をスケジュール
+            enqueueScheduler.schedule(() -> {
+                UAVJob job = new UAVJob(
+                    uavId,
+                    clientId,
+                    finalSimplePath,
+                    uavSpeed,
+                    System.currentTimeMillis(),
+                    startNode,
+                    goalNode
+                );
+                job.setLinkDistances(finalLinkDistances);
+                // Phase 3b-8: セッションIDを設定
+                job.setSessionId(BoundaryController.getCurrentSessionId());
+
+                jobQueue.enqueueJob(job);
+                LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " 再割り当てジョブ投入完了 (速度: " + String.format("%.2f", uavSpeed) + "m/s)");
+            }, delaySeconds, TimeUnit.SECONDS);
 
             UAV_count++;
         }

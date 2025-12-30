@@ -33,8 +33,15 @@ public class UAVJob implements Serializable {
     private double[] linkDistances;        // 各リンクの距離（メートル）
 
     // Phase 3b-3: 非同期スケジューリング用
-    private double elapsedFlightTime;      // 経過飛行時間（秒）
+    private double elapsedFlightTime;      // 経過飛行時間（秒）- 純粋な飛行時間のみ
     private long currentLinkStartTime;     // 現在のリンク飛行開始時刻（ミリ秒）
+
+    // Phase 3b-9: 待機時間追跡用
+    private double totalWaitingTime;       // 累積待機時間（秒）
+    private long waitingStartTime;         // 待機開始時刻（ミリ秒）
+
+    // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
+    private String sessionId;
 
     /**
      * デフォルトコンストラクタ（シリアライゼーション用）
@@ -157,6 +164,58 @@ public class UAVJob implements Serializable {
         this.currentLinkStartTime = currentLinkStartTime;
     }
 
+    // Phase 3b-9: 待機時間関連メソッド
+
+    public double getTotalWaitingTime() {
+        return totalWaitingTime;
+    }
+
+    public void setTotalWaitingTime(double totalWaitingTime) {
+        this.totalWaitingTime = totalWaitingTime;
+    }
+
+    /**
+     * 待機時間を加算
+     * @param time 加算する時間（秒）
+     */
+    public void addWaitingTime(double time) {
+        this.totalWaitingTime += time;
+    }
+
+    public long getWaitingStartTime() {
+        return waitingStartTime;
+    }
+
+    public void setWaitingStartTime(long waitingStartTime) {
+        this.waitingStartTime = waitingStartTime;
+    }
+
+    /**
+     * 待機を開始（現在時刻を記録）
+     */
+    public void startWaiting() {
+        this.waitingStartTime = System.currentTimeMillis();
+    }
+
+    /**
+     * 待機を終了し、待機時間を加算
+     */
+    public void endWaiting() {
+        if (waitingStartTime > 0) {
+            double waitingSeconds = (System.currentTimeMillis() - waitingStartTime) / 1000.0;
+            this.totalWaitingTime += waitingSeconds;
+            this.waitingStartTime = 0;
+        }
+    }
+
+    /**
+     * 総経過時間（飛行時間＋待機時間）を取得
+     * @return 総経過時間（秒）
+     */
+    public double getTotalTime() {
+        return elapsedFlightTime + totalWaitingTime;
+    }
+
     // Phase 3b-2b: リンク距離関連メソッド
 
     public double[] getLinkDistances() {
@@ -207,6 +266,16 @@ public class UAVJob implements Serializable {
             remaining += linkDistances[i];
         }
         return remaining;
+    }
+
+    // Phase 3b-8: セッションID関連メソッド
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
     }
 
     @Override
