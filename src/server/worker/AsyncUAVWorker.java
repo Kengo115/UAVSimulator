@@ -107,7 +107,7 @@ public class AsyncUAVWorker {
         // Phase 3b-8: セッションID検証
         if (!flightScheduler.isValidSession(job)) {
             LogManager.getInstance().log(
-                "Phase 3b-8: Worker " + workerId + " 別セッションのジョブをスキップ (UAV " + job.getUavId() + ")"
+                "Phase 3b-8: Worker " + workerId + " 別セッションのジョブをスキップ (client" + job.getClientId() + " UAV" + job.getUavId() + ")"
             );
             return;
         }
@@ -118,7 +118,7 @@ public class AsyncUAVWorker {
         int toNode = path[startIndex + 1];
 
         LogManager.getInstance().log(
-            "Phase 3b-3: Worker " + workerId + " ジョブ取得 UAV " + job.getUavId() +
+            "Phase 3b-3: Worker " + workerId + " ジョブ取得 client" + job.getClientId() + " UAV" + job.getUavId() +
             " (linkIndex=" + startIndex + ", link=" + fromNode + "→" + toNode + ")"
         );
 
@@ -131,7 +131,7 @@ public class AsyncUAVWorker {
             job.startWaiting();
             waitingManager.enqueue(fromNode, toNode, job);
             LogManager.getInstance().log(
-                "Phase 3b-3: Worker " + workerId + " UAV " + job.getUavId() +
+                "Phase 3b-3: Worker " + workerId + " client" + job.getClientId() + " UAV" + job.getUavId() +
                 " 容量不足、待機 (link=" + fromNode + "→" + toNode + ")"
             );
             return;

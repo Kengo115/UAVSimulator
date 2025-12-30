@@ -45,7 +45,7 @@ public class WaitingUAVManager {
         queue.addLast(job);
 
         LogManager.getInstance().log(
-            "Phase 3b-2d: UAV " + job.getUavId() + " を待機キュー (" +
+            "Phase 3b-2d: client" + job.getClientId() + " UAV" + job.getUavId() + " を待機キュー (" +
             fromNode + "→" + toNode + ") に追加 (待機数=" + queue.size() + ")"
         );
     }
@@ -69,7 +69,7 @@ public class WaitingUAVManager {
 
         if (job != null) {
             LogManager.getInstance().log(
-                "Phase 3b-2d: UAV " + job.getUavId() + " を待機キュー (" +
+                "Phase 3b-2d: client" + job.getClientId() + " UAV" + job.getUavId() + " を待機キュー (" +
                 fromNode + "→" + toNode + ") から取り出し (残り待機数=" + queue.size() + ")"
             );
         }

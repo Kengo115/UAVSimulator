@@ -56,13 +56,13 @@ public class UAVJobQueue {
         try {
             boolean added = queue.offer(job);
             if (added) {
-                LogManager.getInstance().log("Phase 3b: ジョブ投入成功 - UAV " + job.getUavId() + " (client " + job.getClientId() + ")");
+                LogManager.getInstance().log("Phase 3b: ジョブ投入成功 - client" + job.getClientId() + " UAV" + job.getUavId());
             } else {
-                LogManager.getInstance().log("Phase 3b: ジョブ投入失敗 - UAV " + job.getUavId());
+                LogManager.getInstance().log("Phase 3b: ジョブ投入失敗 - client" + job.getClientId() + " UAV" + job.getUavId());
             }
             return added;
         } catch (Exception e) {
-            LogManager.getInstance().error("ジョブ投入エラー: UAV " + job.getUavId(), e);
+            LogManager.getInstance().error("ジョブ投入エラー: client" + job.getClientId() + " UAV" + job.getUavId(), e);
             return false;
         }
     }
@@ -85,7 +85,7 @@ public class UAVJobQueue {
         try {
             UAVJob job = queue.poll(timeout, unit);
             if (job != null) {
-                LogManager.getInstance().log("Phase 3b: ジョブ取得成功 - UAV " + job.getUavId() + " (client " + job.getClientId() + ")");
+                LogManager.getInstance().log("Phase 3b: ジョブ取得成功 - client" + job.getClientId() + " UAV" + job.getUavId());
             }
             return job;
         } catch (InterruptedException e) {
