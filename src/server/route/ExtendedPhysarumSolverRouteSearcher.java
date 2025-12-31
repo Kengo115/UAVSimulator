@@ -50,7 +50,7 @@ public class ExtendedPhysarumSolverRouteSearcher extends AbstractPhysarumSolverR
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF) {
                     // tanhを使用して容量制約を考慮
-                    link[i][j].setD_tubeThickness(link[i][j].getD_tubeThickness() + 
+                    link[i][j].setD_tubeThickness(link[i][j].getD_tubeThickness() +
                         (D_tubeThickness_deltaT[i][j]) * Math.tanh((link[i][j].getCapacity() - Math.abs(link[i][j].getQ_tubeFlow())) * coefficient_tanh));
                 }
             }

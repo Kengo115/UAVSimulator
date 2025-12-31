@@ -1,20 +1,28 @@
 package server.uav;
 
+import controller.BoundaryController;
 import item.Link;
+import server.redis.LinkCapacityManager;
 
 /**
  * UAVの容量管理を行うクラス
+ * Phase 3a: メモリとRedisの二重書き込み
+ * Phase 3b-12: メモリモード時はRedis書き込みをスキップ
  */
 public class CapacityManager {
 
+    // Phase 3a: Redis容量管理
+    private static LinkCapacityManager linkCapacityManager = new LinkCapacityManager();
+
     /**
      * 管の容量を更新する
+     * Phase 3a: メモリとRedisの両方を更新（二重書き込み）
      * @param flyingUAV 飛行中のUAV配列
      * @param link リンク情報
      * @param node ノード数
      */
     public static void updateCapacity(int[][] flyingUAV, Link[][] link, int node) {
-        // Capacityを初期値に戻す
+        // [既存] Capacityを初期値に戻す（メモリ）
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY) {
@@ -23,8 +31,8 @@ public class CapacityManager {
                 }
             }
         }
-        
-        // 各リンクの初期容量から飛行中のUAV分を減少
+
+        // [既存] 各リンクの初期容量から飛行中のUAV分を減少（メモリ）
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY && flyingUAV[i][j] > 0) {
@@ -33,6 +41,12 @@ public class CapacityManager {
                     link[j][i].setCapacity(Math.max(0, newCapacity));
                 }
             }
+        }
+
+        // [新規] Phase 3a: Redisにも同じ内容を保存（二重書き込み）
+        // Phase 3b-12: Redisモードの場合のみ実行
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            linkCapacityManager.updateAllCapacities(link, flyingUAV, node);
         }
     }
 }

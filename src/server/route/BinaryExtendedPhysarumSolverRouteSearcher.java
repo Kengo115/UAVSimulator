@@ -10,6 +10,7 @@ import server.util.ICCGSolver;
 import server.util.LogManager;
 import server.util.MathUtils;
 import server.util.ResultOutputManager;
+import controller.BoundaryController;
 
 import java.io.IOException;
 import java.util.Queue;
@@ -23,14 +24,14 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
     // 定数
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
-    private static final int MAX_ITERATIONS = 10000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 500; // 収束判定用の連続安定回数
+    private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
+    private static final int REQUIRED_STABLE_ITERATIONS = 200; // 収束判定用の連続安定回数
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 30; // 二分探索の最大回数
 
     // ソースノード圧力専用閾値
     private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値
     private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.30; // 20%変化率閾値（フロー減少用）
-    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.30; // 20%減少閾値（フロー増加用）
+    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 20%減少閾値（フロー増加用）
 
     // フロー減少（UAV整数値対応）
     private static final double MINIMUM_FLOW_RATIO = 0.1; // 最小安全フロー（要求フローの10%）
@@ -432,6 +433,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
             // 線形方程式を解く
             int testIter = 10;
+
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
                 LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Pressure equation solving failed at iteration " + (ct + 1));
                 break;
@@ -545,37 +547,9 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             ct++;
         }
 
-        // 最終流量の整数丸め
+        // 最終流量の整数丸め（ソースノード流出を基準に丸める）
         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Performing final flow rounding after " + ct + " iterations");
-        int linkCount = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    linkCount++;
-                }
-            }
-        }
-
-        double[] flows = new double[linkCount];
-        int index = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    flows[index++] = link[i][j].getQ_tubeFlow();
-                }
-            }
-        }
-
-        MathUtils.roundWithConservation(flows);
-
-        index = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    link[i][j].setQ_tubeFlow(flows[index++]);
-                }
-            }
-        }
+        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) finalFlow);
 
         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Final EPS completed with flow " + finalFlow);
 
@@ -641,6 +615,67 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                 Q_tubeFlow_sigmoidOutput[i][j] = 0.0;
             }
         }
+    }
+
+    /**
+     * EPS開始時のリンクデータを詳細ログ出力する（デバッグ用）
+     * メモリモードとRedisモードの差分を特定するため
+     * @param client クライアント
+     */
+    private void logEPSInputData(Client client) {
+        LogManager log = LogManager.getInstance();
+        String workerMode = BoundaryController.getCurrentWorkerMode().toString();
+
+        log.log("=== DEBUG: EPS Input Data for Client " + client.getId() + " ===");
+        log.log("WorkerMode: " + workerMode);
+        log.log("sourceNode: " + sourceNode + ", destNode: " + destNode);
+        log.log("node count: " + node);
+
+        // リンク統計
+        int validLinkCount = 0;
+        int zeroCapacityCount = 0;
+        int negativeCapacityCount = 0;
+        double minCapacity = Double.MAX_VALUE;
+        double maxCapacity = Double.MIN_VALUE;
+        double sumCapacity = 0.0;
+
+        StringBuilder sampleLinks = new StringBuilder();
+        int sampleCount = 0;
+
+        for (int i = 0; i < node; i++) {
+            for (int j = 0; j < node; j++) {
+                if (link[i][j].getL_tubeLength() != INF) {
+                    validLinkCount++;
+                    double cap = link[i][j].getCapacity();
+                    double initCap = link[i][j].getInitCapacity();
+                    double thickness = link[i][j].getD_tubeThickness();
+                    double length = link[i][j].getL_tubeLength();
+
+                    sumCapacity += cap;
+                    if (cap < minCapacity) minCapacity = cap;
+                    if (cap > maxCapacity) maxCapacity = cap;
+                    if (cap == 0.0) zeroCapacityCount++;
+                    if (cap < 0.0) negativeCapacityCount++;
+
+                    // サンプルリンクを記録（最初の10個）
+                    if (sampleCount < 10) {
+                        sampleLinks.append(String.format("  Link[%d][%d]: cap=%.2f, initCap=%.2f, thickness=%.4f, length=%.2f%n",
+                                i, j, cap, initCap, thickness, length));
+                        sampleCount++;
+                    }
+                }
+            }
+        }
+
+        log.log("Valid links: " + validLinkCount);
+        log.log("Zero capacity links: " + zeroCapacityCount);
+        log.log("Negative capacity links: " + negativeCapacityCount);
+        if (validLinkCount > 0) {
+            log.log(String.format("Capacity stats: min=%.2f, max=%.2f, avg=%.2f",
+                    minCapacity, maxCapacity, sumCapacity / validLinkCount));
+        }
+        log.log("Sample links:\n" + sampleLinks.toString());
+        log.log("=== END DEBUG ===");
     }
 
     /**
@@ -733,37 +768,18 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                 }
             }
 
-            // 最終イテレーションで流量を整数に丸める
+            // 最終イテレーションで流量を整数に丸める（ソースノード流出を基準に）
             if (psIter == 499) {
-                int linkCount = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (psLink[i][j].getL_tubeLength() != INF) {
-                            linkCount++;
-                        }
+                roundSourceOutflowsAndPropagate(psLink, sourceNode, destNode, remainingUAVs);
+
+                // 丸め後のソース流出合計を検証
+                double finalSum = 0.0;
+                for (int j = 0; j < node; j++) {
+                    if (psLink[sourceNode][j].getL_tubeLength() != INF && psLink[sourceNode][j].getQ_tubeFlow() > 0) {
+                        finalSum += psLink[sourceNode][j].getQ_tubeFlow();
                     }
                 }
-
-                double[] flows = new double[linkCount];
-                int index = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (psLink[i][j].getL_tubeLength() != INF) {
-                            flows[index++] = psLink[i][j].getQ_tubeFlow();
-                        }
-                    }
-                }
-
-                MathUtils.roundWithConservation(flows);
-
-                index = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (psLink[i][j].getL_tubeLength() != INF) {
-                            psLink[i][j].setQ_tubeFlow(flows[index++]);
-                        }
-                    }
-                }
+                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: PS source outflow sum after rounding = " + finalSum + " (expected: " + remainingUAVs + ")");
             }
 
             // シグモイド関数
@@ -813,42 +829,19 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             }
         }
 
-        // 統合後に再度整数への丸め込みを実行
+        // 統合後に再度整数への丸め込みを実行（ソースノード流出を基準に）
         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Applying final integer rounding after EPS+PS integration");
-        int linkCount = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    linkCount++;
-                }
+        int totalRequiredFlow = (int) requestedFlow;
+        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, totalRequiredFlow);
+
+        // 丸め後のソース流出合計を検証
+        double integratedSourceOutflow = 0.0;
+        for (int j = 0; j < node; j++) {
+            if (link[sourceNode][j].getL_tubeLength() != INF && link[sourceNode][j].getQ_tubeFlow() > 0) {
+                integratedSourceOutflow += link[sourceNode][j].getQ_tubeFlow();
             }
         }
-
-        double[] integratedFlows = new double[linkCount];
-        int index = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    integratedFlows[index++] = link[i][j].getQ_tubeFlow();
-                }
-            }
-        }
-
-        MathUtils.roundWithConservation(integratedFlows);
-
-        index = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    double oldFlow = link[i][j].getQ_tubeFlow();
-                    double newFlow = integratedFlows[index++];
-                    link[i][j].setQ_tubeFlow(newFlow);
-                    if (oldFlow != newFlow) {
-                        LogManager.getInstance().log("Final rounding: Link (" + i + "," + j + "): " + oldFlow + " → " + newFlow);
-                    }
-                }
-            }
-        }
+        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Integrated source outflow sum after rounding = " + integratedSourceOutflow + " (expected: " + totalRequiredFlow + ")");
 
         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Final integer rounding completed. All flows are now exact integers.");
 
@@ -878,10 +871,13 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
      */
     private void performDynamicBinarySearchEPS(Client client, double eps) throws IOException {
         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Starting dynamic binary search EPS with initial flow " + currentFlow);
-        
+
         // EPSの初期化
         initializeEPS();
-        
+
+        // === DEBUG: EPS開始時のリンクデータ詳細ログ ===
+        logEPSInputData(client);
+
         // *** 初期セーブポイントの作成 ***
         epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Initial EPS savepoint created. " + epsSavePoint.getStatistics());
@@ -929,6 +925,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
             // 線形方程式を解く
             int testIter = 10;
+
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
                 LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Pressure equation solving failed at iteration " + (ct + 1));
                 break;
@@ -1206,37 +1203,18 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             ct++;
         }
 
-        // 最終流量の整数丸め
+        // 最終流量の整数丸め（ソースノード流出を基準に丸める）
         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Performing final flow rounding after " + ct + " iterations");
-        int linkCount = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    linkCount++;
-                }
+        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
+
+        // 丸め後のソース流出合計を検証
+        double sourceOutflowSum = 0.0;
+        for (int j = 0; j < node; j++) {
+            if (link[sourceNode][j].getL_tubeLength() != INF && link[sourceNode][j].getQ_tubeFlow() > 0) {
+                sourceOutflowSum += link[sourceNode][j].getQ_tubeFlow();
             }
         }
-
-        double[] flows = new double[linkCount];
-        int index = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    flows[index++] = link[i][j].getQ_tubeFlow();
-                }
-            }
-        }
-
-        MathUtils.roundWithConservation(flows);
-
-        index = 0;
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    link[i][j].setQ_tubeFlow(flows[index++]);
-                }
-            }
-        }
+        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Source outflow sum after rounding = " + sourceOutflowSum + " (expected: " + (int) currentFlow + ")");
 
         LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Dynamic binary search EPS completed with optimal flow " + currentFlow);
 
@@ -1244,5 +1222,143 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
         ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
         ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, currentFlow);
+    }
+
+    /**
+     * ネットワーク全体のフローを整数に丸める（流量保存則を維持）
+     * BFSでソースからデスティネーションまで各ノードを処理し、
+     * 各ノードで流入合計に合わせて流出を整数に丸める
+     *
+     * @param linkArray リンク配列
+     * @param srcNode ソースノード
+     * @param dstNode デスティネーションノード
+     * @param targetFlow ターゲットフロー（整数）
+     */
+    private void roundSourceOutflowsAndPropagate(Link[][] linkArray, int srcNode, int dstNode, int targetFlow) {
+        // Step 1: ソースノードの流出を丸める
+        java.util.List<Integer> sourceOutLinks = new java.util.ArrayList<>();
+        java.util.List<Double> sourceOutFlows = new java.util.ArrayList<>();
+
+        for (int j = 0; j < node; j++) {
+            if (linkArray[srcNode][j].getL_tubeLength() != INF && linkArray[srcNode][j].getQ_tubeFlow() > 0) {
+                sourceOutLinks.add(j);
+                sourceOutFlows.add(linkArray[srcNode][j].getQ_tubeFlow());
+            }
+        }
+
+        if (sourceOutFlows.isEmpty()) {
+            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: No positive source outflows found. Skipping rounding.");
+            return;
+        }
+
+        // ソース流出を丸める
+        double[] sourceFlowsArray = sourceOutFlows.stream().mapToDouble(Double::doubleValue).toArray();
+        MathUtils.roundWithTargetSum(sourceFlowsArray, targetFlow);
+
+        // ソースリンクに適用
+        for (int i = 0; i < sourceOutLinks.size(); i++) {
+            int linkDest = sourceOutLinks.get(i);
+            double newFlow = sourceFlowsArray[i];
+            linkArray[srcNode][linkDest].setQ_tubeFlow(newFlow);
+            if (linkArray[linkDest][srcNode].getL_tubeLength() != INF) {
+                linkArray[linkDest][srcNode].setQ_tubeFlow(-newFlow);
+            }
+        }
+
+        // Step 2: BFSで中間ノードを処理
+        java.util.Set<Integer> visited = new java.util.HashSet<>();
+        java.util.Queue<Integer> queue = new java.util.LinkedList<>();
+        visited.add(srcNode);
+
+        // ソースの隣接ノードをキューに追加
+        for (int i = 0; i < sourceOutLinks.size(); i++) {
+            int dest = sourceOutLinks.get(i);
+            if (sourceFlowsArray[i] > 0 && dest != dstNode) {
+                queue.add(dest);
+            }
+        }
+
+        while (!queue.isEmpty()) {
+            int currentNode = queue.poll();
+            if (visited.contains(currentNode)) {
+                continue;
+            }
+            visited.add(currentNode);
+
+            // 現在のノードへの整数流入量を計算（丸め済みの正の流入のみ）
+            int integerInflow = 0;
+            for (int i = 0; i < node; i++) {
+                if (linkArray[i][currentNode].getL_tubeLength() != INF) {
+                    double flow = linkArray[i][currentNode].getQ_tubeFlow();
+                    if (flow > 0) {
+                        integerInflow += (int) Math.round(flow);
+                    }
+                }
+            }
+
+            // 現在のノードからの流出を収集
+            java.util.List<Integer> outLinks = new java.util.ArrayList<>();
+            java.util.List<Double> outFlows = new java.util.ArrayList<>();
+            for (int j = 0; j < node; j++) {
+                if (linkArray[currentNode][j].getL_tubeLength() != INF && linkArray[currentNode][j].getQ_tubeFlow() > 0) {
+                    outLinks.add(j);
+                    outFlows.add(linkArray[currentNode][j].getQ_tubeFlow());
+                }
+            }
+
+            if (!outFlows.isEmpty() && integerInflow > 0) {
+                // 流出を流入に合わせて丸める
+                double[] outFlowsArray = outFlows.stream().mapToDouble(Double::doubleValue).toArray();
+                MathUtils.roundWithTargetSum(outFlowsArray, integerInflow);
+
+                // 適用
+                for (int i = 0; i < outLinks.size(); i++) {
+                    int linkDest = outLinks.get(i);
+                    double newFlow = outFlowsArray[i];
+                    linkArray[currentNode][linkDest].setQ_tubeFlow(newFlow);
+                    if (linkArray[linkDest][currentNode].getL_tubeLength() != INF) {
+                        linkArray[linkDest][currentNode].setQ_tubeFlow(-newFlow);
+                    }
+
+                    // 次のノードをキューに追加（デスティネーション以外）
+                    if (newFlow > 0 && linkDest != dstNode && !visited.contains(linkDest)) {
+                        queue.add(linkDest);
+                    }
+                }
+            } else if (integerInflow == 0) {
+                // 流入が0になった場合、流出も0にする
+                for (int j = 0; j < node; j++) {
+                    if (linkArray[currentNode][j].getL_tubeLength() != INF && linkArray[currentNode][j].getQ_tubeFlow() > 0) {
+                        linkArray[currentNode][j].setQ_tubeFlow(0.0);
+                        if (linkArray[j][currentNode].getL_tubeLength() != INF) {
+                            linkArray[j][currentNode].setQ_tubeFlow(0.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 下流のフローを再帰的に調整する
+     * @param psLink PSリンク配列
+     * @param currentNode 現在のノード
+     * @param destNode デスティネーションノード
+     * @param correctionFactor 修正係数
+     */
+    private void adjustDownstreamFlows(Link[][] psLink, int currentNode, int destNode, double correctionFactor) {
+        // 現在のノードから出るリンクを調整
+        for (int j = 0; j < node; j++) {
+            if (psLink[currentNode][j].getL_tubeLength() != INF && psLink[currentNode][j].getQ_tubeFlow() > 0) {
+                double oldFlow = psLink[currentNode][j].getQ_tubeFlow();
+                double newFlow = oldFlow * correctionFactor;
+                psLink[currentNode][j].setQ_tubeFlow(newFlow);
+
+                // 再帰的に下流も調整（デスティネーション到達まで）
+                if (j != destNode && newFlow > 0) {
+                    adjustDownstreamFlows(psLink, j, destNode, correctionFactor);
+                }
+            }
+        }
     }
 }

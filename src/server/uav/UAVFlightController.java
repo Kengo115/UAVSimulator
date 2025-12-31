@@ -1,9 +1,11 @@
 package server.uav;
 
 import client.ClientController;
+import controller.BoundaryController;
 import item.BeaconCluster;
 import item.Link;
 import item.Uav;
+import server.redis.UAVStateManager;
 import server.util.LogManager;
 
 import java.util.Queue;
@@ -12,6 +14,14 @@ import java.util.Queue;
  * UAVの飛行制御を行うクラス
  */
 public class UAVFlightController {
+
+    // Phase 1: UAV状態管理用のRedisマネージャー
+    private static UAVStateManager uavStateManager = new UAVStateManager();
+
+    // Phase 3a: リンク容量整合性チェック用
+    private static server.redis.LinkCapacityReader linkCapacityReader = new server.redis.LinkCapacityReader();
+    private static int capacityValidationCounter = 0;
+    private static final int CAPACITY_VALIDATION_INTERVAL = 5;  // 5回に1回チェック
 
     /**
      * UAVを移動させる
@@ -24,6 +34,24 @@ public class UAVFlightController {
      */
     public static void flyUAV(ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, Link[][] link, BeaconCluster beaconCluster, int node) {
         int[][] flyingUAV = new int[node][node];
+
+        // Phase 1: 飛行中のUAVの状態をRedisに保存（更新前）
+        for (Uav uav : flyingUavQueue) {
+            try {
+                uavStateManager.saveUAVState(uav);
+            } catch (Exception e) {
+                LogManager.getInstance().error("Redis書き込み失敗（飛行中UAV更新前）", e);
+            }
+        }
+
+        // Phase 1: 待機中のUAVの状態をRedisに保存（更新前）
+        for (Uav uav : uavQueue) {
+            try {
+                uavStateManager.saveUAVState(uav);
+            } catch (Exception e) {
+                LogManager.getInstance().error("Redis書き込み失敗（待機中UAV更新前）", e);
+            }
+        }
 
         // 飛行中のUAVを移動させる
         int queueSize = flyingUavQueue.size();
@@ -50,6 +78,13 @@ public class UAVFlightController {
 
                 // ログの保存
                 FlightDataRecorder.saveFlightData(clientController, uav, totalPathDistance);
+
+                // Phase 1: UAV状態をRedisに保存（到着時）
+                try {
+                    uavStateManager.saveUAVState(uav);
+                } catch (Exception e) {
+                    LogManager.getInstance().error("Redis書き込み失敗（UAV到着時）", e);
+                }
             } else {
                 processUavMovement(uav, flightDistance, path, flyingUAV, flyingUavQueue, uavQueue, link, beaconCluster);
             }
@@ -57,6 +92,14 @@ public class UAVFlightController {
 
         // 容量の更新
         CapacityManager.updateCapacity(flyingUAV, link, node);
+
+        // Phase 3a: リンク容量の整合性チェック（5回に1回）
+        // Phase 3b-12: メモリモード時はスキップ
+        capacityValidationCounter++;
+        if (capacityValidationCounter % CAPACITY_VALIDATION_INTERVAL == 0
+            && BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            linkCapacityReader.validateCapacity(link, flyingUAV, node);
+        }
 
         // 待機中のUAVを処理
         processWaitingUAVs(uavQueue, flyingUavQueue, flyingUAV, link, beaconCluster, node);
@@ -85,10 +128,10 @@ public class UAVFlightController {
                     if (link[startNode][endNode].getCapacity() > 0) {
                         uav.setFlyingLink(link[startNode][endNode]);
                         flyingUAV[startNode][endNode]++;
-                        
+
                         // 実際の飛行距離（飛行時間×速度）と正確な飛行距離（リンク距離）を計算
                         double actualFlightDistance = uav.getFlightTime() * uav.getSpeed();
-                        
+
                         // 正確な飛行距離を計算
                         double accurateFlightDistance = 0.0;
                         for (int j = 0; j < k; j++) {
@@ -96,10 +139,17 @@ public class UAVFlightController {
                             int pathEndNode = path[j + 1];
                             accurateFlightDistance += link[pathStartNode][pathEndNode].getDistance();
                         }
-                        
-                        LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " " + startNode + " → " + endNode + " へ移動" + 
+
+                        LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " " + startNode + " → " + endNode + " へ移動" +
                             "（実際の飛行距離：" + String.format("%.2f", actualFlightDistance) + "，正確な飛行距離：" + String.format("%.2f", accurateFlightDistance) + "）");
-                        
+
+                        // Phase 1: UAV状態をRedisに保存（リンク移動時）
+                        try {
+                            uavStateManager.saveUAVState(uav);
+                        } catch (Exception e) {
+                            LogManager.getInstance().error("Redis書き込み失敗（リンク移動時）", e);
+                        }
+
                         flyingUavQueue.add(uav);
                     } else {
                         if (uav.isFlying()) {
@@ -115,6 +165,14 @@ public class UAVFlightController {
                         uav.setStayedBeaconId(startNode);
                         beaconCluster.getBeacon(startNode).addUav(uav);
                         beaconCluster.getBeacon(startNode).incrementWaitingUavCount();
+
+                        // Phase 1: UAV状態をRedisに保存（待機状態）
+                        try {
+                            uavStateManager.saveUAVState(uav);
+                        } catch (Exception e) {
+                            LogManager.getInstance().error("Redis書き込み失敗（待機状態）", e);
+                        }
+
                         uavQueue.add(uav);
                     }
                 } else {
@@ -170,25 +228,46 @@ public class UAVFlightController {
                     uav.startTimer();
                     uav.setFlyingLink(link[startNode][nextNode]);
                     uav.setStayedBeaconId(-1);
-                    
+
                     // 実際の飛行距離（飛行時間×速度）と正確な飛行距離（リンク距離）を計算
                     double actualFlightDistance = uav.getFlightTime() * uav.getSpeed();
                     double accurateFlightDistance = link[startNode][nextNode].getDistance();
-                    
-                    LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " " + startNode + " → " + nextNode + " へ移動" + 
+
+                    LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " " + startNode + " → " + nextNode + " へ移動" +
                         "（実際の飛行距離：" + String.format("%.2f", actualFlightDistance) + "，正確な飛行距離：" + String.format("%.2f", accurateFlightDistance) + "）");
-                    
+
+                    // Phase 1: UAV状態をRedisに保存（飛行再開時）
+                    try {
+                        uavStateManager.saveUAVState(uav);
+                    } catch (Exception e) {
+                        LogManager.getInstance().error("Redis書き込み失敗（飛行再開時）", e);
+                    }
+
                     flyingUavQueue.add(uav);
-                } else {
+                } else{
+                    // Phase 1: UAV状態をRedisに保存（待機継続時）
+                    try {
+                        uavStateManager.saveUAVState(uav);
+                    } catch (Exception e) {
+                        LogManager.getInstance().error("Redis書き込み失敗（待機継続時）", e);
+                    }
+
                     uavQueue.add(uav);
                     LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " 容量不足のため待機継続 (" + startNode + " -> " + nextNode + ")");
                 }
             } else {
+                // Phase 1: UAV状態をRedisに保存（待機継続時・リンクなし）
+                try {
+                    uavStateManager.saveUAVState(uav);
+                } catch (Exception e) {
+                    LogManager.getInstance().error("Redis書き込み失敗（待機継続時・リンクなし）", e);
+                }
+
                 LogManager.getInstance().log("client" + uav.getClientId() + " UAV" + uav.getId() + " 移動できるリンクがないため待機継続");
                 uavQueue.add(uav);
             }
         }
-        
+
         // 容量の更新
         CapacityManager.updateCapacity(flyingUAV, link, node);
     }

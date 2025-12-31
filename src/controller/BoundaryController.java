@@ -7,12 +7,22 @@ import item.BeaconCluster;
 import item.Flow;
 import item.Uav;
 import server.controller.ServerController;
+import server.network.TopologyFileReader;
+import server.redis.*;
+import server.scheduler.FlightScheduler;
 import server.uav.UAVFlyScheduler;
 import server.util.LogManager;
+import server.worker.AsyncUAVWorker;
 
 import java.io.*;
+import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Queue;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 
 public class BoundaryController {
@@ -29,6 +39,17 @@ public class BoundaryController {
     static Queue<Uav> flyingUavQueue = new LinkedList<>();
     static Queue<Client> passedClient = new LinkedList<>();
     Flow flow;
+
+    // Phase 3b-6: Redisベースワーカー用
+    // Phase 3b-10: 4ワーカー固定
+    private static final int WORKER_COUNT = 4;
+    private static List<AsyncUAVWorker> asyncWorkers = new ArrayList<>();
+    private static ExecutorService workerExecutor;
+    private static UAVCompletionListener completionListener;
+    private static FlightScheduler flightScheduler;
+
+    // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
+    private static String currentSessionId;
 
     String filePath = "src/result/practice.net";
 
@@ -115,7 +136,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 40; // + (int)(Math.random() * 20);
+            int uavNum = 20; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -132,7 +153,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 10; // + (int)(Math.random() * 20);
+            int uavNum = 20; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -149,7 +170,7 @@ public class BoundaryController {
             Beacon source = beaconCluster.getBeacon(sourceId);
             Beacon destination = beaconCluster.getBeacon(destinationId);
 
-            int uavNum = 10; // + (int)(Math.random() * 20);
+            int uavNum = 20; // + (int)(Math.random() * 20);
             // flowListにsource, destination, uavNumを格納
             flow = new Flow(source, destination, uavNum);
 
@@ -198,38 +219,76 @@ public class BoundaryController {
     public enum LoggingMode {
         DISABLED(1, "無効"),
         ENABLED(2, "有効");
-        
+
         private final int id;
         private final String name;
-        
+
         LoggingMode(int id, String name) {
             this.id = id;
             this.name = name;
         }
-        
+
         public int getId() {
             return id;
         }
-        
+
         public String getName() {
             return name;
         }
-        
+
         public static LoggingMode fromId(int id) {
             for (LoggingMode mode : values()) {
                 if (mode.getId() == id) {
                     return mode;
                 }
             }
-            return DISABLED; // デフォルトは無効
+            return DISABLED;
         }
     }
-    
+
+    /**
+     * Phase 3b-6: ワーカーモードの列挙型
+     * MEMORY: 従来のメモリベース処理（UAVFlyScheduler）
+     * REDIS: Redisベース処理（AsyncUAVWorker + FlightScheduler）
+     */
+    public enum WorkerMode {
+        MEMORY(1, "メモリベース"),
+        REDIS(2, "Redisベース");
+
+        private final int id;
+        private final String name;
+
+        WorkerMode(int id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public static WorkerMode fromId(int id) {
+            for (WorkerMode mode : values()) {
+                if (mode.getId() == id) {
+                    return mode;
+                }
+            }
+            return MEMORY; // デフォルトはメモリベース
+        }
+    }
+
     // 現在選択されている経路探索手法
     private static RouteSearchMethod currentMethod = RouteSearchMethod.EPS;
-    
+
     // 現在選択されているログモード
     private static LoggingMode currentLoggingMode = LoggingMode.DISABLED;
+
+    // Phase 3b-6: 現在選択されているワーカーモード
+    private static WorkerMode currentWorkerMode = WorkerMode.MEMORY;
     
     /**
      * 経路探索手法を設定する
@@ -264,6 +323,142 @@ public class BoundaryController {
         return currentLoggingMode;
     }
 
+    /**
+     * Phase 3b-6: ワーカーモードを設定する
+     * @param mode ワーカーモード
+     */
+    public static void setWorkerMode(WorkerMode mode) {
+        currentWorkerMode = mode;
+        LogManager.getInstance().log("Phase 3b-6: ワーカーモードを " + mode.getName() + " に設定しました");
+    }
+
+    /**
+     * Phase 3b-6: 現在のワーカーモードを取得する
+     * @return ワーカーモード
+     */
+    public static WorkerMode getCurrentWorkerMode() {
+        return currentWorkerMode;
+    }
+
+    /**
+     * Phase 3b-6: Redisワーカーを初期化する
+     */
+    private static void initializeRedisWorker() {
+        try {
+            // Phase 3b-8: セッションIDを生成（古いプロセスからのジョブを無視するため）
+            currentSessionId = UUID.randomUUID().toString().substring(0, 8);
+            LogManager.getInstance().log("Phase 3b-8: 新しいセッションID生成: " + currentSessionId);
+
+            // FlightSchedulerを初期化
+            flightScheduler = FlightScheduler.getInstance();
+            flightScheduler.resetCounters();
+            flightScheduler.setSessionId(currentSessionId);
+
+            // 完了リスナーを開始
+            completionListener = new UAVCompletionListener();
+            completionListener.startListening();
+
+            // Phase 3b-10: AsyncUAVWorker x4をバックグラウンドで起動
+            workerExecutor = Executors.newFixedThreadPool(WORKER_COUNT);
+            asyncWorkers.clear();
+            for (int i = 0; i < WORKER_COUNT; i++) {
+                AsyncUAVWorker worker = new AsyncUAVWorker("async-worker-" + (i + 1));
+                asyncWorkers.add(worker);
+                workerExecutor.submit(() -> worker.start());
+            }
+            LogManager.getInstance().log("Phase 3b-10: " + WORKER_COUNT + "ワーカーを起動しました");
+
+            // ジョブキューをクリア
+            UAVJobQueue jobQueue = new UAVJobQueue();
+            jobQueue.clearQueue();
+
+            // 待機キューをクリア
+            WaitingUAVManager waitingManager = new WaitingUAVManager();
+            waitingManager.clearAll();
+
+            // リンク容量をRedisに初期化
+            initializeLinkCapacities();
+
+            System.out.println("✓ Redisワーカーを起動しました (workers=" + WORKER_COUNT + ", セッションID: " + currentSessionId + ")");
+            LogManager.getInstance().log("Phase 3b-6: Redisワーカー初期化完了");
+
+        } catch (Exception e) {
+            System.err.println("⚠ Redisワーカー初期化失敗: " + e.getMessage());
+            LogManager.getInstance().error("Phase 3b-6: Redisワーカー初期化失敗", e);
+            setWorkerMode(WorkerMode.MEMORY);
+        }
+    }
+
+    /**
+     * Phase 3b-8: 現在のセッションIDを取得する
+     * @return セッションID（Redisモードでない場合はnull）
+     */
+    public static String getCurrentSessionId() {
+        return currentSessionId;
+    }
+
+    /**
+     * Phase 3b-6: リンク容量をRedisに初期化する
+     */
+    private static void initializeLinkCapacities() {
+        try {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
+            int initialized = 0;
+
+            // すべてのリンク容量を初期化
+            for (int i = 0; i < nodeNum; i++) {
+                for (int j = 0; j < nodeNum; j++) {
+                    if (server.getLink(i, j) != null) {
+                        double capacity = server.getLink(i, j).getCapacity();
+                        capacityManager.saveCapacity(i, j, capacity);
+                        initialized++;
+                    }
+                }
+            }
+
+            LogManager.getInstance().log("Phase 3b-6: " + initialized + "件のリンク容量をRedisに初期化しました");
+        } catch (Exception e) {
+            LogManager.getInstance().error("Phase 3b-6: リンク容量初期化エラー", e);
+        }
+    }
+
+    /**
+     * Phase 3b-6: Redisワーカーを停止する
+     */
+    private static void shutdownRedisWorker() {
+        try {
+            // Phase 3b-10: 全ワーカーを停止
+            for (AsyncUAVWorker worker : asyncWorkers) {
+                if (worker != null) {
+                    worker.stop();
+                }
+            }
+            asyncWorkers.clear();
+
+            if (workerExecutor != null) {
+                workerExecutor.shutdownNow();
+                workerExecutor.awaitTermination(5, TimeUnit.SECONDS);
+            }
+
+            if (completionListener != null) {
+                completionListener.stopListening();
+            }
+
+            FlightScheduler.resetInstance();
+
+            LogManager.getInstance().log("Phase 3b-10: " + WORKER_COUNT + "ワーカーをシャットダウンしました");
+        } catch (Exception e) {
+            LogManager.getInstance().error("Phase 3b-10: Redisワーカーシャットダウンエラー", e);
+        }
+    }
+
+    /**
+     * Phase 3b-6: 完了リスナーを取得する（統計情報用）
+     */
+    public static UAVCompletionListener getCompletionListener() {
+        return completionListener;
+    }
+
     public void routeRequest(Client client) throws IOException {
         // Pajekファイルにネットワークトポロジーを出力
         server.nodeConfigureToPajek(filePath, client, beaconCluster);
@@ -291,17 +486,55 @@ public class BoundaryController {
 
     public static void main(String[] args) {
         BoundaryController boundaryController = new BoundaryController();
-        boundaryController.setNodeNum(6);
-        beaconCluster = new BeaconCluster(nodeNum);
-        server = new ServerController(nodeNum, beaconCluster);
-        
-        // 経路探索アルゴリズムを初期化
-        server.initializeRouteSearchers();
+        BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+
+        // Phase 1: Redis接続を確立
+        try {
+            RedisConnectionManager redisManager = RedisConnectionManager.getInstance();
+            redisManager.connect();
+            System.out.println("✓ Redisに接続しました: " + redisManager.getConnectionInfo());
+        } catch (IOException e) {
+            System.err.println("⚠ Redis接続に失敗しました。メモリベースで動作します。");
+            LogManager.getInstance().error("Redis接続失敗", e);
+        }
 
         // ランダムクライアント生成実験
         try {
+            // トポロジファイルのパスを入力
+            System.out.println("=== UAVシミュレーター ===");
+            System.out.println("ネットワークトポロジファイルのパスを入力してください:");
+            System.out.println("（Enterキーのみを押すとデフォルトトポロジを使用します）");
+            System.out.print("> ");
+
+            String topologyFilePath = reader.readLine().trim();
+
+            // トポロジの初期化
+            if (topologyFilePath.isEmpty()) {
+                // デフォルト（ハードコード）
+                System.out.println("デフォルトトポロジを使用します。");
+                boundaryController.setNodeNum(6);
+                beaconCluster = new BeaconCluster(nodeNum);
+                server = new ServerController(nodeNum, beaconCluster);
+            } else {
+                // 外部ファイルから読み込み
+                System.out.println("トポロジファイルを読み込んでいます: " + topologyFilePath);
+                TopologyFileReader.TopologyData topologyData =
+                    TopologyFileReader.readTopologyFile(topologyFilePath);
+
+                // トポロジ情報を表示
+                TopologyFileReader.printTopologyInfo(topologyData);
+
+                // ビーコンとサーバーを初期化
+                boundaryController.setNodeNum(topologyData.nodeCount);
+                beaconCluster = new BeaconCluster(topologyData);
+                server = new ServerController(beaconCluster, topologyData);
+            }
+
+            // 経路探索アルゴリズムを初期化
+            server.initializeRouteSearchers();
+
             boundaryController.setNetworkTopology(); // ネットワークの初期化
-            
+
             // 経路探索手法を選択
             System.out.println("経路探索手法を選択してください:");
             System.out.println("1: Dijkstra法");
@@ -309,8 +542,7 @@ public class BoundaryController {
             System.out.println("3: ExtendedPhysarumSolver法 (EPS)");
             System.out.println("4: ハイブリッド法 (HYBRID: EPS+PS)");
             System.out.println("5: バイナリサーチ法 (BINARY: Binary Search EPS+PS)");
-            
-            BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+
             int methodChoice = 3; // デフォルトはEPS
             try {
                 String input = reader.readLine();
@@ -358,7 +590,41 @@ public class BoundaryController {
                 System.out.println("ログは log/simulator.log に記録されます。");
                 System.out.println("別のターミナルで 'tail -f log/simulator.log' を実行すると、リアルタイムでログを確認できます。");
             }
-            
+
+            // Phase 3b-6: ワーカーモードを選択
+            System.out.println("\nワーカーモードを選択してください:");
+            System.out.println("1: メモリベース（従来の方式）");
+            System.out.println("2: Redisベース（Phase 3b 非同期ワーカー）");
+
+            int workerChoice = 1; // デフォルトはメモリベース
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    workerChoice = Integer.parseInt(input);
+                    if (workerChoice < 1 || workerChoice > 2) {
+                        System.out.println("無効な選択です。メモリベースを使用します。");
+                        workerChoice = 1;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。メモリベースを使用します。");
+            }
+
+            // 選択されたワーカーモードを設定
+            WorkerMode selectedWorkerMode = WorkerMode.fromId(workerChoice);
+            setWorkerMode(selectedWorkerMode);
+            System.out.println("ワーカーモード: " + selectedWorkerMode.getName());
+
+            // Phase 3b-6: Redisモード時の初期化
+            if (selectedWorkerMode == WorkerMode.REDIS) {
+                if (!RedisConnectionManager.getInstance().isConnected()) {
+                    System.err.println("⚠ Redis未接続のため、メモリベースにフォールバックします。");
+                    setWorkerMode(WorkerMode.MEMORY);
+                } else {
+                    initializeRedisWorker();
+                }
+            }
+
             // 標準入力からクライアントの生成回数を取得
             System.out.println("生成するクライアントの数を入力してください:");
             int clientCount = 1; // デフォルトは1
@@ -386,8 +652,8 @@ public class BoundaryController {
                     clientController.startTimer();
                 }
 
-                // UAVスケジューリングを更新
-                UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+                // UAVスケジューリングを更新（Phase 2: beaconClusterとnodeNumを渡す）
+                UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeNum);
 
                 String dirPath = "src/result/client";
                 String filePath = dirPath + "/client.txt";
@@ -410,9 +676,9 @@ public class BoundaryController {
                     System.err.println("ファイル書き込みエラー: " + e.getMessage());
                 }
 
-                // 次のクライアント生成まで40秒待機
+                // 次のクライアント生成まで30秒待機
                 if (i < clientCount - 1) { // 最後のクライアント以外
-                    Thread.sleep(40000); // 40秒待機
+                    Thread.sleep(30000); // 30秒待機
                 }
             }
 
@@ -423,7 +689,21 @@ public class BoundaryController {
             
             // プログラム終了時にログマネージャーを閉じるようにシャットダウンフックを追加
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                LogManager.getInstance().log("プログラムを終了します。ログを閉じます。");
+                LogManager.getInstance().log("プログラムを終了します。");
+
+                // Phase 3b-6: Redisワーカーを停止
+                if (currentWorkerMode == WorkerMode.REDIS) {
+                    shutdownRedisWorker();
+                }
+
+                // Phase 1: Redis接続を切断
+                try {
+                    RedisConnectionManager.getInstance().disconnect();
+                } catch (Exception e) {
+                    System.err.println("Redis切断中にエラーが発生しました: " + e.getMessage());
+                }
+
+                LogManager.getInstance().log("ログを閉じます。");
                 LogManager.getInstance().close();
             }));
 

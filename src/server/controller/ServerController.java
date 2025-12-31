@@ -2,17 +2,20 @@ package server.controller;
 
 import client.Client;
 import client.ClientController;
+import controller.BoundaryController;
 import item.Beacon;
 import item.BeaconCluster;
 import item.Link;
 import item.Uav;
 import server.network.NetworkTopologyManager;
+import server.network.TopologyFileReader;
 import server.route.BinaryExtendedPhysarumSolverRouteSearcher;
 import server.route.DijkstraRouteSearcher;
 import server.route.ExtendedPhysarumSolverRouteSearcher;
 import server.route.HybridPhysarumSolverRouteSearcher;
 import server.route.PhysarumSolverRouteSearcher;
 import server.route.RouteSearcher;
+import server.redis.LinkCapacityManager;
 import server.uav.CapacityManager;
 import server.uav.FlightDataRecorder;
 import server.uav.UAVFlightController;
@@ -83,6 +86,17 @@ public class ServerController {
     }
 
     /**
+     * コンストラクタ（外部ファイルから読み込んだトポロジデータを使用）
+     * @param beaconCluster ビーコンクラスター
+     * @param topologyData トポロジデータ
+     */
+    public ServerController(BeaconCluster beaconCluster, TopologyFileReader.TopologyData topologyData) {
+        initialize(topologyData.nodeCount);
+        ServerController.beaconCluster = beaconCluster;
+        this.networkTopologyManager = new NetworkTopologyManager(link, beaconCluster, adjMatrix, topologyData);
+    }
+
+    /**
      * 初期化処理
      * @param node ノード数
      */
@@ -110,6 +124,23 @@ public class ServerController {
         this.extendedPhysarumSolverRouteSearcher = new ExtendedPhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
         this.hybridPhysarumSolverRouteSearcher = new HybridPhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
         this.binaryExtendedPhysarumSolverRouteSearcher = new BinaryExtendedPhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
+    }
+
+    /**
+     * Phase 3b-6: リンク情報を取得する
+     * @param from 始点ノード
+     * @param to 終点ノード
+     * @return リンク情報（存在しない場合はnull）
+     */
+    public Link getLink(int from, int to) {
+        if (from >= 0 && from < node && to >= 0 && to < node) {
+            Link l = link[from][to];
+            // 隣接していない場合はnullを返す
+            if (adjMatrix[from][to] == 1) {
+                return l;
+            }
+        }
+        return null;
     }
 
     /**
@@ -177,6 +208,18 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
+        }
+
         // 隣接行列の更新
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
@@ -190,8 +233,8 @@ public class ServerController {
         dijkstraRouteSearcher.search(client, flyingUavQueue, uavQueue, 1);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
@@ -216,12 +259,24 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
+        }
+
         // PhysarumSolver法による経路探索
         physarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
@@ -246,12 +301,24 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
+        }
+
         // ExtendedPhysarumSolver法による経路探索
         extendedPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
@@ -276,12 +343,24 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
+        }
+
         // ハイブリッドPhysarumSolver法による経路探索
         hybridPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
@@ -306,12 +385,24 @@ public class ServerController {
             UAVFlyScheduler.stopFlyUAVUpdates(clientController);
         }
 
+        // Phase 3b-11: Redisモードの場合のみ、容量を同期
+        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+            LinkCapacityManager capacityManager = new LinkCapacityManager();
+            if (runCounter == 0) {
+                // 最初の実行時: メモリの初期容量をRedisに保存
+                capacityManager.initializeCapacitiesToRedis(link, node);
+            } else {
+                // 2回目以降: Redisの現在容量をメモリに同期
+                capacityManager.syncCapacitiesToMemory(link, node);
+            }
+        }
+
         // バイナリサーチExtendedPhysarumSolver法による経路探索
         binaryExtendedPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
-            // UAVFlySchedulerを開始
-            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController);
+            // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）
+            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
         }
 
         runCounter++;
