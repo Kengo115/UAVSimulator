@@ -28,6 +28,7 @@ public class FlightScheduler {
     private LinkCapacityManager capacityManager;
     private WaitingUAVManager waitingManager;
     private UAVJobQueue jobQueue;
+    private PathWaitingManager pathWaitingManager;  // Phase 4: 経路待ちUAV管理
 
     // Pub/Sub
     private RedissonClient client;
@@ -81,6 +82,7 @@ public class FlightScheduler {
                 this.capacityManager = new LinkCapacityManager();
                 this.waitingManager = new WaitingUAVManager();
                 this.jobQueue = new UAVJobQueue();
+                this.pathWaitingManager = new PathWaitingManager();  // Phase 4
 
                 // Pub/Subトピック
                 this.linkPassedTopic = client.getTopic(UAVEventChannels.LINK_PASSED);
@@ -110,6 +112,7 @@ public class FlightScheduler {
         this.capacityManager = capacityManager;
         this.waitingManager = waitingManager;
         this.jobQueue = jobQueue;
+        this.pathWaitingManager = new PathWaitingManager();  // Phase 4
 
         if (client != null) {
             this.linkPassedTopic = client.getTopic(UAVEventChannels.LINK_PASSED);
@@ -205,6 +208,11 @@ public class FlightScheduler {
 
         // 2. リンク通過イベントを送信（Pub/Sub）
         publishLinkPassedEvent(job, fromNode, toNode, linkIndex);
+
+        // 2.5 Phase 4: 第一ホップ通過時に経路待ちUAVへ経路コピー
+        if (linkIndex == 0) {
+            processFirstHopPathCopy(job);
+        }
 
         // 3. 容量回復（順方向・逆方向両方）
         double newCapacity = capacityManager.recoverCapacity(fromNode, toNode);
@@ -315,6 +323,9 @@ public class FlightScheduler {
 
         // 完了イベント送信
         publishCompletionEvent(job);
+
+        // Phase 4: 事業者の時間計測（UAV完了通知）
+        ClientTimeManager.getInstance().onUAVCompleted(job.getClientId());
     }
 
     /**
@@ -378,6 +389,70 @@ public class FlightScheduler {
         }
         sb.append("]");
         return sb.toString();
+    }
+
+    /**
+     * Phase 4: 第一ホップ通過時に経路待ちUAVへ経路コピー
+     *
+     * 同一クライアントの経路待ちUAVがいれば、通過したUAVの経路をコピーして
+     * ジョブキューに投入する。これにより、経路待ちUAVが飛行を開始できる。
+     *
+     * @param job 第一ホップを通過したUAVジョブ
+     */
+    private void processFirstHopPathCopy(UAVJob job) {
+        int clientId = job.getClientId();
+
+        // 経路待ちUAVがいるか確認
+        if (!pathWaitingManager.hasWaitingUAV(clientId)) {
+            return;
+        }
+
+        // 経路待ちUAVを取り出し
+        UAVJob waitingJob = pathWaitingManager.dequeue(clientId);
+        if (waitingJob == null) {
+            return;
+        }
+
+        // Phase 4: 経路待ち時間を確定
+        waitingJob.endPathWaiting();
+
+        // 経路をコピー
+        int[] originalPath = job.getPath();
+        int[] copiedPath = originalPath.clone();
+        waitingJob.setPath(copiedPath);
+
+        // リンク距離をコピー
+        double[] originalDistances = job.getLinkDistances();
+        if (originalDistances != null) {
+            double[] copiedDistances = originalDistances.clone();
+            waitingJob.setLinkDistances(copiedDistances);
+        }
+
+        // 開始位置を先頭に設定
+        waitingJob.setCurrentPathIndex(0);
+
+        // セッションIDをコピー（同一セッションであることを保証）
+        waitingJob.setSessionId(job.getSessionId());
+
+        // ジョブキューに投入して飛行開始
+        jobQueue.enqueueJob(waitingJob);
+
+        LogManager.getInstance().log(
+            "Phase 4 [経路待ち→飛行]: client" + clientId + " UAV" + waitingJob.getUavId() +
+            " が経路待ちから飛行開始 (経路コピー元=UAV" + job.getUavId() +
+            ", path=" + formatPath(copiedPath) +
+            ", 速度=" + String.format("%.2f", waitingJob.getSpeed()) + "m/s" +
+            ", 経路待ち時間=" + String.format("%.2f", waitingJob.getPathWaitTime()) + "s" +
+            ", 残り経路待ち=" + pathWaitingManager.getWaitingCount(clientId) + ")"
+        );
+    }
+
+    /**
+     * Phase 4: PathWaitingManagerを取得（RouteSearcherから使用）
+     * @return PathWaitingManagerインスタンス
+     */
+    public PathWaitingManager getPathWaitingManager() {
+        return pathWaitingManager;
     }
 
     // 統計情報取得

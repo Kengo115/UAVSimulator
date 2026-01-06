@@ -186,25 +186,27 @@ public class BoundaryController {
         DIJKSTRA(1, "Dijkstra"),
         PS(2, "PS"),
         EPS(3, "EPS"),
-        HYBRID(4, "HYBRID"),
-        BINARY(5, "BINARY");
-        
+        HYBRID(4, "Hybrid"),
+        BINARY(5, "Binary"),
+        BISECTIONAL_PGEPS(6, "Bisectional"),
+        STEP_CONTROLLED_PGEPS(7, "StepControlled");
+
         private final int id;
         private final String name;
-        
+
         RouteSearchMethod(int id, String name) {
             this.id = id;
             this.name = name;
         }
-        
+
         public int getId() {
             return id;
         }
-        
+
         public String getName() {
             return name;
         }
-        
+
         public static RouteSearchMethod fromId(int id) {
             for (RouteSearchMethod method : values()) {
                 if (method.getId() == id) {
@@ -477,6 +479,12 @@ public class BoundaryController {
             case BINARY:
                 server.run_Binary(client, clientController, flyingUavQueue, uavQueue, num_loop);
                 break;
+            case BISECTIONAL_PGEPS:
+                server.run_BisectionalPGEPS(client, clientController, flyingUavQueue, uavQueue, num_loop);
+                break;
+            case STEP_CONTROLLED_PGEPS:
+                server.run_StepControlledPGEPS(client, clientController, flyingUavQueue, uavQueue, num_loop);
+                break;
             case EPS:
             default:
                 server.run_EPS(client, clientController, flyingUavQueue, uavQueue, num_loop);
@@ -542,13 +550,15 @@ public class BoundaryController {
             System.out.println("3: ExtendedPhysarumSolver法 (EPS)");
             System.out.println("4: ハイブリッド法 (HYBRID: EPS+PS)");
             System.out.println("5: バイナリサーチ法 (BINARY: Binary Search EPS+PS)");
+            System.out.println("6: 二分法型圧力誘導法 (BISECTIONAL_PG-EPS)");
+            System.out.println("7: ステップ制御型圧力誘導法 (STEP_CONTROLLED_PG-EPS)");
 
             int methodChoice = 3; // デフォルトはEPS
             try {
                 String input = reader.readLine();
                 if (!input.trim().isEmpty()) {
                     methodChoice = Integer.parseInt(input);
-                    if (methodChoice < 1 || methodChoice > 5) {
+                    if (methodChoice < 1 || methodChoice > 7) {
                         System.out.println("無効な選択です。ExtendedPhysarumSolver法 (EPS) を使用します。");
                         methodChoice = 3;
                     }
