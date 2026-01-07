@@ -7,6 +7,7 @@ import item.BeaconCluster;
 import item.Link;
 import item.Uav;
 import server.controller.ServerController;
+import server.redis.ClientTimeManager;
 import server.redis.UAVJob;
 import server.redis.UAVJobQueue;
 import server.util.LogManager;
@@ -163,37 +164,10 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 }
             }
 
-            // 最後のループで流量を整数に丸める
+            // 最後のループで流量を整数に丸める（ソース流出を基準に、流量保存則を維持）
             if (ct == numLoop - 1) {
-                int linkCount = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (link[i][j].getL_tubeLength() != INF) {
-                            linkCount++;
-                        }
-                    }
-                }
-
-                double[] flows = new double[linkCount];
-                int index = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (link[i][j].getL_tubeLength() != INF) {
-                            flows[index++] = link[i][j].getQ_tubeFlow();
-                        }
-                    }
-                }
-
-                MathUtils.roundWithConservation(flows);
-
-                index = 0;
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (link[i][j].getL_tubeLength() != INF) {
-                            link[i][j].setQ_tubeFlow(flows[index++]);
-                        }
-                    }
-                }
+                int requiredFlow = (int) Math.round(Q_Kirchhoff[source]);
+                roundSourceOutflowsAndPropagate(link, source, dist, requiredFlow);
             }
 
             // シグモイド関数
@@ -320,6 +294,9 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
      * @param uavQueue 待機中のUAVキュー
      */
     protected void runUAVFlow(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
+        // Phase 4: 時間計測開始（全経路探索手法共通）
+        ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);
+
         // Phase 3b-6: WorkerModeに応じて処理を分岐
         if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
             runUAVFlowRedis(startNode, goalNode, requiredUAVs, client);
@@ -782,5 +759,120 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         }
 
         UAV_count += countOfUAV; // UAV_count を適切に更新
+    }
+
+    /**
+     * ネットワーク全体のフローを整数に丸める（流量保存則を維持）
+     * BFSでソースからデスティネーションまで各ノードを処理し、
+     * 各ノードで流入合計に合わせて流出を整数に丸める
+     *
+     * @param linkArray リンク配列
+     * @param srcNode ソースノード
+     * @param dstNode デスティネーションノード
+     * @param targetFlow ターゲットフロー（整数）
+     */
+    protected void roundSourceOutflowsAndPropagate(Link[][] linkArray, int srcNode, int dstNode, int targetFlow) {
+        // Step 1: ソースノードの流出を丸める
+        java.util.List<Integer> sourceOutLinks = new java.util.ArrayList<>();
+        java.util.List<Double> sourceOutFlows = new java.util.ArrayList<>();
+
+        for (int j = 0; j < node; j++) {
+            if (linkArray[srcNode][j].getL_tubeLength() != INF && linkArray[srcNode][j].getQ_tubeFlow() > 0) {
+                sourceOutLinks.add(j);
+                sourceOutFlows.add(linkArray[srcNode][j].getQ_tubeFlow());
+            }
+        }
+
+        if (sourceOutFlows.isEmpty()) {
+            LogManager.getInstance().log("AbstractPhysarumSolver: No positive source outflows found. Skipping rounding.");
+            return;
+        }
+
+        // ソース流出を丸める（targetFlowに合わせる）
+        double[] sourceFlowsArray = sourceOutFlows.stream().mapToDouble(Double::doubleValue).toArray();
+        MathUtils.roundWithTargetSum(sourceFlowsArray, targetFlow);
+
+        // ソースリンクに適用
+        for (int i = 0; i < sourceOutLinks.size(); i++) {
+            int linkDest = sourceOutLinks.get(i);
+            double newFlow = sourceFlowsArray[i];
+            linkArray[srcNode][linkDest].setQ_tubeFlow(newFlow);
+            if (linkArray[linkDest][srcNode].getL_tubeLength() != INF) {
+                linkArray[linkDest][srcNode].setQ_tubeFlow(-newFlow);
+            }
+        }
+
+        // Step 2: BFSで中間ノードを処理
+        java.util.Set<Integer> visited = new java.util.HashSet<>();
+        java.util.Queue<Integer> queue = new java.util.LinkedList<>();
+        visited.add(srcNode);
+
+        // ソースの隣接ノードをキューに追加
+        for (int i = 0; i < sourceOutLinks.size(); i++) {
+            int dest = sourceOutLinks.get(i);
+            if (sourceFlowsArray[i] > 0 && dest != dstNode) {
+                queue.add(dest);
+            }
+        }
+
+        while (!queue.isEmpty()) {
+            int currentNode = queue.poll();
+            if (visited.contains(currentNode)) {
+                continue;
+            }
+            visited.add(currentNode);
+
+            // 現在のノードへの整数流入量を計算（丸め済みの正の流入のみ）
+            int integerInflow = 0;
+            for (int i = 0; i < node; i++) {
+                if (linkArray[i][currentNode].getL_tubeLength() != INF) {
+                    double flow = linkArray[i][currentNode].getQ_tubeFlow();
+                    if (flow > 0) {
+                        integerInflow += (int) Math.round(flow);
+                    }
+                }
+            }
+
+            // 現在のノードからの流出を収集
+            java.util.List<Integer> outLinks = new java.util.ArrayList<>();
+            java.util.List<Double> outFlows = new java.util.ArrayList<>();
+            for (int j = 0; j < node; j++) {
+                if (linkArray[currentNode][j].getL_tubeLength() != INF && linkArray[currentNode][j].getQ_tubeFlow() > 0) {
+                    outLinks.add(j);
+                    outFlows.add(linkArray[currentNode][j].getQ_tubeFlow());
+                }
+            }
+
+            if (!outFlows.isEmpty() && integerInflow > 0) {
+                // 流出を流入に合わせて丸める
+                double[] outFlowsArray = outFlows.stream().mapToDouble(Double::doubleValue).toArray();
+                MathUtils.roundWithTargetSum(outFlowsArray, integerInflow);
+
+                // 適用
+                for (int i = 0; i < outLinks.size(); i++) {
+                    int linkDest = outLinks.get(i);
+                    double newFlow = outFlowsArray[i];
+                    linkArray[currentNode][linkDest].setQ_tubeFlow(newFlow);
+                    if (linkArray[linkDest][currentNode].getL_tubeLength() != INF) {
+                        linkArray[linkDest][currentNode].setQ_tubeFlow(-newFlow);
+                    }
+
+                    // 次のノードをキューに追加（デスティネーション以外）
+                    if (newFlow > 0 && linkDest != dstNode && !visited.contains(linkDest)) {
+                        queue.add(linkDest);
+                    }
+                }
+            } else if (integerInflow == 0) {
+                // 流入が0になった場合、流出も0にする
+                for (int j = 0; j < node; j++) {
+                    if (linkArray[currentNode][j].getL_tubeLength() != INF && linkArray[currentNode][j].getQ_tubeFlow() > 0) {
+                        linkArray[currentNode][j].setQ_tubeFlow(0.0);
+                        if (linkArray[j][currentNode].getL_tubeLength() != INF) {
+                            linkArray[j][currentNode].setQ_tubeFlow(0.0);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

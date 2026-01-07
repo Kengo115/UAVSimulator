@@ -5,6 +5,7 @@ import controller.BoundaryController;
 import item.Uav;
 import org.redisson.api.RMap;
 import org.redisson.api.RedissonClient;
+import server.redis.ClientTimeManager;
 import server.redis.RedisConnectionManager;
 import server.util.LogManager;
 
@@ -159,6 +160,9 @@ public class FlightDataRecorder {
 
         // Phase 2: Redisに保存
         saveFlightDataToRedis(clientController, uav, totalPathDistance);
+
+        // Phase 4: 事業者の時間計測（UAV完了通知）- メモリモード用
+        ClientTimeManager.getInstance().onUAVCompleted(uav.getClientId());
     }
 
     /**

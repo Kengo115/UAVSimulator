@@ -128,6 +128,7 @@ public class ClientTimeManager {
 
     /**
      * clientTime.csvファイルに出力
+     * 出力先: src/result/{method}/time/clientTime.csv
      */
     private void writeClientTimeCSV(int clientId, int uavCount, double elapsedSeconds) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成

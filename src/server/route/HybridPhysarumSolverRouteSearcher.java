@@ -23,7 +23,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
     private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 500; // 収束判定用の連続安定回数（従来基準を継承）
+    private static final int REQUIRED_STABLE_ITERATIONS = 150; // 収束判定用の連続安定回数
     private static final int STABILIZATION_ITERATIONS = 500; // 異常検知後の安定化イテレーション数
 
 
@@ -601,11 +601,11 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         }
 
         double currentPressure = Math.abs(P_tubePressure[sourceNode]);
-        
-        // 現在の要求フローでの基準圧力から10%減少したかをチェック
-        double tenPercentReduction = currentFlowBaselinePressure * 0.9; // 90%になった場合（10%減少）
-        
-        if (currentPressure < tenPercentReduction) {
+
+        // 現在の要求フローでの基準圧力から50%減少したかをチェック
+        double fiftyPercentReduction = currentFlowBaselinePressure * 0.5; // 50%になった場合（50%減少）
+
+        if (currentPressure < fiftyPercentReduction) {
             // 現在のフローが要求フローより少ない場合のみ増加を適用
             if (currentFlow < requestedFlow) {
                 double increaseAmount = 1.0; // 1UAV増加
@@ -626,16 +626,16 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                     // 基準圧力をリセット（新しいフロー値での基準を次回キャプチャ）
                     currentFlowBaselineCaptured = false;
                     
-                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure 10% reduction detected " +
+                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure 50% reduction detected " +
                                               " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
                                               ", currentPressure=" + String.format("%.4f", currentPressure) +
-                                              ", threshold=" + String.format("%.4f", tenPercentReduction) +
+                                              ", threshold=" + String.format("%.4f", fiftyPercentReduction) +
                                               "). Increasing flow by " + (int)increaseAmount + " UAVs to " + currentFlow);
                     
                     return true;
                 }
             } else {
-                LogManager.getInstance().log("HybridPhysarumSolver: Source pressure 10% reduction detected but flow already at requested level " +
+                LogManager.getInstance().log("HybridPhysarumSolver: Source pressure 50% reduction detected but flow already at requested level " +
                                           " (currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ")");
             }
         }
@@ -1029,7 +1029,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
      * @param dstNode デスティネーションノード
      * @param targetFlow ターゲットフロー（整数）
      */
-    private void roundSourceOutflowsAndPropagate(Link[][] linkArray, int srcNode, int dstNode, int targetFlow) {
+    @Override
+    protected void roundSourceOutflowsAndPropagate(Link[][] linkArray, int srcNode, int dstNode, int targetFlow) {
         // Step 1: ソースノードの流出を丸める
         java.util.List<Integer> sourceOutLinks = new java.util.ArrayList<>();
         java.util.List<Double> sourceOutFlows = new java.util.ArrayList<>();

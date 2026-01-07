@@ -32,7 +32,7 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
     private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 200; // 収束判定用の連続安定回数
+    private static final int REQUIRED_STABLE_ITERATIONS = 150; // 収束判定用の連続安定回数
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 30; // 二分探索の最大回数
 
     // ソースノード圧力専用閾値
@@ -469,8 +469,34 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             int testIter = 10;
 
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
-                LogManager.getInstance().log("BisectionalPGEPS: Pressure equation solving failed at iteration " + (ct + 1));
-                break;
+                LogManager.getInstance().log("BisectionalPGEPS: [Solver Failure] Final EPS pressure equation solving failed at iteration " + (ct + 1) +
+                                           " with flow " + finalFlow + ". Applying SavePoint restoration and binary search flow reduction.");
+
+                // EPSSavePointから復元（圧力100超過時と同様の処理）
+                if (epsSavePoint != null && epsSavePoint.isAvailable()) {
+                    epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                    LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint after solver failure. " + epsSavePoint.getStatistics());
+                } else {
+                    initializeEPS();
+                    LogManager.getInstance().log("BisectionalPGEPS: EPS initialized to default state after solver failure (no savepoint available).");
+                }
+
+                // 二分探索でフロー減少
+                upperBound = finalFlow;
+                double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
+
+                if (newFlow != finalFlow && newFlow > lowerBound) {
+                    finalFlow = newFlow;
+                    stableIterationCount = 0;
+                    currentFlowBaselineCaptured = false;
+                    LogManager.getInstance().log("BisectionalPGEPS: Binary search flow reduction after solver failure: " + upperBound + " → " + finalFlow +
+                                              " (new bounds: " + lowerBound + " - " + upperBound + ")");
+                } else {
+                    LogManager.getInstance().log("BisectionalPGEPS: Cannot reduce flow further after solver failure. Breaking loop.");
+                    break;
+                }
+                ct++;
+                continue;
             }
 
             // 流量の計算
@@ -927,7 +953,7 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             // 流入フロー値を設定
             Q_Kirchhoff[sourceNode] = currentFlow;
             Q_Kirchhoff[destNode] = currentFlow * NEG;
-            
+
             // その他のノードは0に設定
             for (int i = 0; i < node; i++) {
                 pressureCoefficient[i][i] = 0.0;
@@ -961,8 +987,41 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             int testIter = 10;
 
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
-                LogManager.getInstance().log("BisectionalPGEPS: Pressure equation solving failed at iteration " + (ct + 1));
-                break;
+                LogManager.getInstance().log("BisectionalPGEPS: [Solver Failure] Pressure equation solving failed at iteration " + (ct + 1) +
+                                           " with flow " + currentFlow + ". Applying SavePoint restoration and binary search flow reduction.");
+
+                // EPSSavePointから復元（圧力100超過時と同様の処理）
+                if (epsSavePoint != null && epsSavePoint.isAvailable()) {
+                    epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                    LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint after solver failure. " + epsSavePoint.getStatistics());
+                } else {
+                    initializeEPS();
+                    LogManager.getInstance().log("BisectionalPGEPS: EPS initialized to default state after solver failure (no savepoint available).");
+                }
+
+                // 二分探索でフロー減少
+                upperBound = currentFlow;
+                double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
+
+                if (newFlow != currentFlow && newFlow > lowerBound) {
+                    LogManager.getInstance().log("BisectionalPGEPS: Binary search flow reduction after solver failure: " + currentFlow + " → " + newFlow +
+                                               " (new bounds: " + lowerBound + " - " + upperBound + ")");
+                    currentFlow = newFlow;
+                    stableIterationCount = 0;
+                    currentFlowBaselineCaptured = false;
+
+                    // 安定化フェーズに入る
+                    inStabilizationPhase = true;
+                    stabilizationIterationCount = 0;
+                } else {
+                    // フロー減少できない場合（最小フロー到達）
+                    LogManager.getInstance().log("BisectionalPGEPS: Cannot reduce flow further after solver failure (lowerBound=" + lowerBound +
+                                               ", currentFlow=" + currentFlow + "). Breaking loop.");
+                    break;
+                }
+
+                ct++;
+                continue;
             }
 
             // 流量の計算
@@ -1268,7 +1327,8 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
      * @param dstNode デスティネーションノード
      * @param targetFlow ターゲットフロー（整数）
      */
-    private void roundSourceOutflowsAndPropagate(Link[][] linkArray, int srcNode, int dstNode, int targetFlow) {
+    @Override
+    protected void roundSourceOutflowsAndPropagate(Link[][] linkArray, int srcNode, int dstNode, int targetFlow) {
         // Step 1: ソースノードの流出を丸める
         java.util.List<Integer> sourceOutLinks = new java.util.ArrayList<>();
         java.util.List<Double> sourceOutFlows = new java.util.ArrayList<>();
@@ -1370,6 +1430,78 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                     }
                 }
             }
+        }
+
+        // Step 3: フロー保存則の検証と修正（中間ノードのみ）
+        // BFS処理後も不整合が残っている場合に修正
+        boolean hasViolation = true;
+        int maxIterations = 10; // 無限ループ防止
+        int iteration = 0;
+
+        while (hasViolation && iteration < maxIterations) {
+            hasViolation = false;
+            iteration++;
+
+            for (int currentNode = 0; currentNode < node; currentNode++) {
+                // ソースとデスティネーションはスキップ
+                if (currentNode == srcNode || currentNode == dstNode) {
+                    continue;
+                }
+
+                // 入力フロー計算
+                double actualInflow = 0.0;
+                for (int i = 0; i < node; i++) {
+                    if (linkArray[i][currentNode].getL_tubeLength() != INF) {
+                        double flow = linkArray[i][currentNode].getQ_tubeFlow();
+                        if (flow > 0) {
+                            actualInflow += flow;
+                        }
+                    }
+                }
+
+                // 出力フロー計算
+                double actualOutflow = 0.0;
+                java.util.List<Integer> outLinks = new java.util.ArrayList<>();
+                java.util.List<Double> outFlows = new java.util.ArrayList<>();
+                for (int j = 0; j < node; j++) {
+                    if (linkArray[currentNode][j].getL_tubeLength() != INF) {
+                        double flow = linkArray[currentNode][j].getQ_tubeFlow();
+                        if (flow > 0) {
+                            actualOutflow += flow;
+                            outLinks.add(j);
+                            outFlows.add(flow);
+                        }
+                    }
+                }
+
+                // フロー保存則違反チェック
+                int intInflow = (int) Math.round(actualInflow);
+                int intOutflow = (int) Math.round(actualOutflow);
+
+                if (intInflow != intOutflow && intInflow > 0 && !outFlows.isEmpty()) {
+                    hasViolation = true;
+                    LogManager.getInstance().log("BisectionalPGEPS: Flow conservation violation at node " + currentNode +
+                                               " (inflow=" + intInflow + ", outflow=" + intOutflow + "). Correcting...");
+
+                    // 出力フローを入力フローに合わせて再丸め
+                    double[] outFlowsArray = outFlows.stream().mapToDouble(Double::doubleValue).toArray();
+                    MathUtils.roundWithTargetSum(outFlowsArray, intInflow);
+
+                    // 適用
+                    for (int i = 0; i < outLinks.size(); i++) {
+                        int linkDest = outLinks.get(i);
+                        double newFlow = outFlowsArray[i];
+                        linkArray[currentNode][linkDest].setQ_tubeFlow(newFlow);
+                        if (linkArray[linkDest][currentNode].getL_tubeLength() != INF) {
+                            linkArray[linkDest][currentNode].setQ_tubeFlow(-newFlow);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (iteration > 1) {
+            LogManager.getInstance().log("BisectionalPGEPS: Flow conservation correction completed after " + iteration + " iterations");
         }
     }
 
