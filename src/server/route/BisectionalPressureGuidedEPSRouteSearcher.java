@@ -33,7 +33,7 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
     private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
     private static final int REQUIRED_STABLE_ITERATIONS = 150; // 収束判定用の連続安定回数
-    private static final int MAX_BINARY_SEARCH_ITERATIONS = 30; // 二分探索の最大回数
+    private static final int MAX_BINARY_SEARCH_ITERATIONS = 10; // 二分探索の最大回数
 
     // ソースノード圧力専用閾値
     private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値
@@ -69,6 +69,9 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
 
     // EPSセーブポイント機能
     private EPSSavePoint epsSavePoint = null; // EPSセーブポイント
+
+    // Phase 5: 現在処理中のクライアントID
+    private int currentClientId = -1;
 
     /**
      * コンストラクタ
@@ -113,6 +116,7 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         requestedFlow = client.getFlow().getTheNumberOfUAV();
         this.sourceNode = client.getFlow().getSource().getId();
         this.destNode = client.getFlow().getDestination().getId();
+        this.currentClientId = client.getId();  // Phase 5: クライアントID保存
         double eps = 1e-10;
 
         LogManager.getInstance().log("BisectionalPGEPS: Starting dynamic binary search EPS with requested flow " + requestedFlow);
@@ -469,34 +473,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             int testIter = 10;
 
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
+                // Phase 5: ソルバー失敗時は例外をスローして再試行管理に委ねる
                 LogManager.getInstance().log("BisectionalPGEPS: [Solver Failure] Final EPS pressure equation solving failed at iteration " + (ct + 1) +
-                                           " with flow " + finalFlow + ". Applying SavePoint restoration and binary search flow reduction.");
-
-                // EPSSavePointから復元（圧力100超過時と同様の処理）
-                if (epsSavePoint != null && epsSavePoint.isAvailable()) {
-                    epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-                    LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint after solver failure. " + epsSavePoint.getStatistics());
-                } else {
-                    initializeEPS();
-                    LogManager.getInstance().log("BisectionalPGEPS: EPS initialized to default state after solver failure (no savepoint available).");
-                }
-
-                // 二分探索でフロー減少
-                upperBound = finalFlow;
-                double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
-
-                if (newFlow != finalFlow && newFlow > lowerBound) {
-                    finalFlow = newFlow;
-                    stableIterationCount = 0;
-                    currentFlowBaselineCaptured = false;
-                    LogManager.getInstance().log("BisectionalPGEPS: Binary search flow reduction after solver failure: " + upperBound + " → " + finalFlow +
-                                              " (new bounds: " + lowerBound + " - " + upperBound + ")");
-                } else {
-                    LogManager.getInstance().log("BisectionalPGEPS: Cannot reduce flow further after solver failure. Breaking loop.");
-                    break;
-                }
-                ct++;
-                continue;
+                                           " with flow " + finalFlow + ". Throwing SolverFailedException for retry management.");
+                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS");
             }
 
             // 流量の計算
@@ -564,10 +544,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                 throw new RuntimeException("System termination: Pressure emergency in final EPS run");
             }
 
-            // 負の圧力チェック
+            // 負の圧力チェック - Phase 5: SolverFailedExceptionで再試行対象に
             if (P_tubePressure[sourceNode] < 0.0) {
-                LogManager.getInstance().error("BisectionalPGEPS: CRITICAL ERROR - Negative pressure detected in final EPS at iteration " + (ct + 1) + " (pressure: " + P_tubePressure[sourceNode] + "). System termination required.");
-                throw new RuntimeException("System termination: Negative pressure detected in final EPS run");
+                LogManager.getInstance().log("BisectionalPGEPS: [Negative Pressure] Detected in final EPS at iteration " + (ct + 1) + " (pressure: " + P_tubePressure[sourceNode] + "). Throwing SolverFailedException for retry management.");
+                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-NegativePressure");
             }
 
             // 圧力変化率チェック（30%増）
@@ -946,6 +926,7 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         previousSourcePressure = 0.0;
         currentFlowBaselinePressure = 0.0;
         currentFlowBaselineCaptured = false;
+        binarySearchIteration = 0; // Phase 5: 再試行時にリセット
         int ct = 0;
 
         // 動的二分探索EPSループ
@@ -987,41 +968,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             int testIter = 10;
 
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
+                // Phase 5: ソルバー失敗時は例外をスローして再試行管理に委ねる
                 LogManager.getInstance().log("BisectionalPGEPS: [Solver Failure] Pressure equation solving failed at iteration " + (ct + 1) +
-                                           " with flow " + currentFlow + ". Applying SavePoint restoration and binary search flow reduction.");
-
-                // EPSSavePointから復元（圧力100超過時と同様の処理）
-                if (epsSavePoint != null && epsSavePoint.isAvailable()) {
-                    epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-                    LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint after solver failure. " + epsSavePoint.getStatistics());
-                } else {
-                    initializeEPS();
-                    LogManager.getInstance().log("BisectionalPGEPS: EPS initialized to default state after solver failure (no savepoint available).");
-                }
-
-                // 二分探索でフロー減少
-                upperBound = currentFlow;
-                double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
-
-                if (newFlow != currentFlow && newFlow > lowerBound) {
-                    LogManager.getInstance().log("BisectionalPGEPS: Binary search flow reduction after solver failure: " + currentFlow + " → " + newFlow +
-                                               " (new bounds: " + lowerBound + " - " + upperBound + ")");
-                    currentFlow = newFlow;
-                    stableIterationCount = 0;
-                    currentFlowBaselineCaptured = false;
-
-                    // 安定化フェーズに入る
-                    inStabilizationPhase = true;
-                    stabilizationIterationCount = 0;
-                } else {
-                    // フロー減少できない場合（最小フロー到達）
-                    LogManager.getInstance().log("BisectionalPGEPS: Cannot reduce flow further after solver failure (lowerBound=" + lowerBound +
-                                               ", currentFlow=" + currentFlow + "). Breaking loop.");
-                    break;
-                }
-
-                ct++;
-                continue;
+                                           " with flow " + currentFlow + ". Throwing SolverFailedException for retry management.");
+                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS");
             }
 
             // 流量の計算
@@ -1206,9 +1156,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                             throw new RuntimeException("System termination: Pressure emergency persists after stabilization phase");
                         }
                         
+                        // Phase 5: 負の圧力検出 → SolverFailedExceptionで再試行対象に
                         if (P_tubePressure[sourceNode] < 0.0) {
-                            LogManager.getInstance().error("BisectionalPGEPS: CRITICAL ERROR - Negative pressure detected after stabilization phase (pressure: " + P_tubePressure[sourceNode] + "). System termination required.");
-                            throw new RuntimeException("System termination: Negative pressure detected after stabilization phase");
+                            LogManager.getInstance().log("BisectionalPGEPS: [Negative Pressure] Detected after stabilization phase (pressure: " + P_tubePressure[sourceNode] + "). Throwing SolverFailedException for retry management.");
+                            throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-NegativePressure");
                         }
                     }
                 }
@@ -1294,6 +1245,21 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             }
 
             ct++;
+
+            // Phase 5: 二分探索回数のチェック（フロー変更時のみカウント）
+            if (flowChanged) {
+                binarySearchIteration++;
+                if (binarySearchIteration >= MAX_BINARY_SEARCH_ITERATIONS) {
+                    LogManager.getInstance().log("BisectionalPGEPS: [Max Binary Search] Reached maximum binary search iterations (" + MAX_BINARY_SEARCH_ITERATIONS + "). Throwing SolverFailedException for retry management.");
+                    throw new SolverFailedException(currentClientId, ct, "BisectionalPGEPS-MaxBinarySearch");
+                }
+            }
+        }
+
+        // Phase 5: MAX_ITERATIONSに達した場合は再試行対象
+        if (ct >= MAX_ITERATIONS && stableIterationCount < REQUIRED_STABLE_ITERATIONS) {
+            LogManager.getInstance().log("BisectionalPGEPS: [Max Iterations] Reached maximum iterations (" + MAX_ITERATIONS + ") without convergence. Throwing SolverFailedException for retry management.");
+            throw new SolverFailedException(currentClientId, ct, "BisectionalPGEPS-MaxIterations");
         }
 
         // 最終流量の整数丸め（ソースノード流出を基準に丸める）

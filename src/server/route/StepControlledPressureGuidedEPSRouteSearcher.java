@@ -13,6 +13,7 @@ import server.redis.ClientTimeManager;
 import server.redis.PathWaitingManager;
 import server.redis.UAVJob;
 import server.scheduler.FlightScheduler;
+import server.route.SolverFailedException;
 
 import java.io.IOException;
 import java.util.Queue;
@@ -62,6 +63,9 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
     private double currentFlowBaselinePressure = 0.0; // 現在の要求フローでの基準圧力値（フロー増加判定用）
     private boolean currentFlowBaselineCaptured = false; // 現在フロー基準圧力がキャプチャ済みかどうか
 
+    // Phase 5: 現在処理中のクライアントID
+    private int currentClientId = -1;
+
     /**
      * コンストラクタ
      * @param serverController サーバーコントローラー
@@ -105,6 +109,7 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
         requestedFlow = client.getFlow().getTheNumberOfUAV();
         this.sourceNode = client.getFlow().getSource().getId();
         this.destNode = client.getFlow().getDestination().getId();
+        this.currentClientId = client.getId();  // Phase 5: クライアントID保存
         double eps = 1e-10;
         int ct = 0;
 
@@ -159,19 +164,10 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                 // 線形方程式を解く
                 int testIter = 10;
                 if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
-                    LogManager.getInstance().log("StepControlledPGEPS: Pressure equation solving failed at iteration " + (ct + 1) + 
-                                              " with flow " + currentFlow + ". Applying emergency flow reduction.");
-                    
-                    // 緊急フロー減少を適用
-                    if (applyUAVFlowReduction(EMERGENCY_FLOW_REDUCTION_UAV, "Solver failure")) {
-                        ct++;
-                        continue;
-                    } else {
-                        LogManager.getInstance().log("StepControlledPGEPS: Solver failure but cannot reduce flow further. Continuing with current flow (may be unstable).");
-                        // Solver failureだが最小フロー制約のため継続（不安定な可能性あり）
-                        ct++;
-                        continue;
-                    }
+                    // Phase 5: ソルバー失敗時は例外をスローして再試行管理に委ねる
+                    LogManager.getInstance().log("StepControlledPGEPS: [Solver Failure] Pressure equation solving failed at iteration " + (ct + 1) +
+                                              " with flow " + currentFlow + ". Throwing SolverFailedException for retry management.");
+                    throw new SolverFailedException(currentClientId, ct + 1, "StepControlledPGEPS");
                 }
 
                 // 流量の計算
@@ -360,19 +356,13 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                 // 既にループ内で整数丸め込みと出力が完了している
                 LogManager.getInstance().log("StepControlledPGEPS: EPS converged successfully with flow " + currentFlow + ". Integer rounding completed.");
             } else if (ct >= MAX_ITERATIONS) {
-                LogManager.getInstance().log("StepControlledPGEPS: Reached maximum iterations (" + MAX_ITERATIONS + 
-                                          ") with flow " + currentFlow + " of " + requestedFlow + " requested (stable count: " + stableIterationCount + ")");
+                // Phase 5: MAX_ITERATIONS超過時は例外をスローして再試行管理に委ねる
+                LogManager.getInstance().log("StepControlledPGEPS: [Max Iterations] Reached maximum iterations (" + MAX_ITERATIONS +
+                                          ") without convergence. Throwing SolverFailedException for retry management.");
+                throw new SolverFailedException(currentClientId, ct, "StepControlledPGEPS-MaxIterations");
             } else {
-                LogManager.getInstance().log("StepControlledPGEPS: Terminated with final flow " + currentFlow + 
+                LogManager.getInstance().log("StepControlledPGEPS: Terminated with final flow " + currentFlow +
                                           " after " + ct + " iterations (stable count: " + stableIterationCount + ")");
-            }
-
-            // 500回安定収束していない場合のみ、最終結果を出力
-            if (stableIterationCount < REQUIRED_STABLE_ITERATIONS) {
-                LogManager.getInstance().log("StepControlledPGEPS: Outputting final results after early termination");
-                ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
-                ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), currentFlow);
-                ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, currentFlow);
             }
 
             // 親クラスのUAV割り当て処理を実行
@@ -773,15 +763,10 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
             // 圧力方程式を解く
             int testIter = 10;
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
-                LogManager.getInstance().log("StepControlledPGEPS: Pressure equation solving failed during stabilization iteration " + (stabIter + 1));
-                // 出力を残す（連番イテレーション番号）
-                try {
-                    ResultOutputManager.outputToExcel(client, currentIteration - 1, link, node, serverController.getRunCounter(), currentFlow);
-                    ResultOutputManager.outputToTxt(client, currentIteration - 1, link, node, serverController.getRunCounter(), pressureCoefficient, currentFlow);
-                } catch (IOException ioe) {
-                    LogManager.getInstance().error("StepControlledPGEPS: Failed to write stabilization outputs on solver failure", ioe);
-                }
-                return false;
+                // Phase 5: ソルバー失敗時は例外をスローして再試行管理に委ねる
+                LogManager.getInstance().log("StepControlledPGEPS: [Solver Failure] Pressure equation solving failed during stabilization iteration " + (stabIter + 1) +
+                                          ". Throwing SolverFailedException for retry management.");
+                throw new SolverFailedException(currentClientId, currentIteration, "StepControlledPGEPS-Stabilization");
             }
             
             // 流量の計算
