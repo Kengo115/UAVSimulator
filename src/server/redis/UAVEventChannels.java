@@ -25,19 +25,37 @@ public final class UAVEventChannels {
     public static final String COMPLETION = "uav:completed";
 
     /**
-     * 待機キューのキープレフィックス
+     * 待機キューのキープレフィックス（容量待ち）
      * 形式: waiting:link:{fromNode}:{toNode}
      * 例: waiting:link:0:1
      */
     public static final String WAITING_QUEUE_PREFIX = "waiting:link:";
 
     /**
-     * 待機キューのキーを生成
+     * 経路待ちキューのキープレフィックス
+     * Phase 4: 経路待ちUAVをクライアント別に管理
+     * 形式: waiting:path:{clientId}
+     * 例: waiting:path:0
+     */
+    public static final String PATH_WAITING_QUEUE_PREFIX = "waiting:path:";
+
+    /**
+     * 待機キューのキーを生成（容量待ち）
      * @param fromNode 始点ノード
      * @param toNode 終点ノード
      * @return Redis キー
      */
     public static String getWaitingQueueKey(int fromNode, int toNode) {
         return WAITING_QUEUE_PREFIX + fromNode + ":" + toNode;
+    }
+
+    /**
+     * 経路待ちキューのキーを生成
+     * Phase 4: クライアント別の経路待ちキュー
+     * @param clientId クライアントID
+     * @return Redis キー
+     */
+    public static String getPathWaitingQueueKey(int clientId) {
+        return PATH_WAITING_QUEUE_PREFIX + clientId;
     }
 }

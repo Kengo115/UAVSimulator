@@ -7,6 +7,7 @@ import item.BeaconCluster;
 import item.Link;
 import item.Uav;
 import server.controller.ServerController;
+import server.redis.ClientTimeManager;
 import server.redis.UAVJob;
 import server.redis.UAVJobQueue;
 import server.util.LogManager;
@@ -150,6 +151,9 @@ public class DijkstraRouteSearcher implements RouteSearcher {
      * @param requiredUAVs 必要なUAV数
      */
     private void runUAVFlow(Client client, int[] path, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int requiredUAVs) {
+        // Phase 4: 時間計測開始（全経路探索手法共通）
+        ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);
+
         // Phase 3b-6: WorkerModeに応じて処理を分岐
         if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
             runUAVFlowRedis(client, path, requiredUAVs);

@@ -40,6 +40,10 @@ public class UAVJob implements Serializable {
     private double totalWaitingTime;       // 累積待機時間（秒）
     private long waitingStartTime;         // 待機開始時刻（ミリ秒）
 
+    // Phase 4: 経路待ち時間追跡用
+    private double pathWaitTime;           // 経路待ち時間（秒）- 経路割り当てまでの待機時間
+    private long pathWaitingStartTime;     // 経路待ち開始時刻（ミリ秒）
+
     // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
     private String sessionId;
 
@@ -214,6 +218,41 @@ public class UAVJob implements Serializable {
      */
     public double getTotalTime() {
         return elapsedFlightTime + totalWaitingTime;
+    }
+
+    // Phase 4: 経路待ち時間関連メソッド
+
+    public double getPathWaitTime() {
+        return pathWaitTime;
+    }
+
+    public void setPathWaitTime(double pathWaitTime) {
+        this.pathWaitTime = pathWaitTime;
+    }
+
+    public long getPathWaitingStartTime() {
+        return pathWaitingStartTime;
+    }
+
+    public void setPathWaitingStartTime(long pathWaitingStartTime) {
+        this.pathWaitingStartTime = pathWaitingStartTime;
+    }
+
+    /**
+     * 経路待ちを開始（現在時刻を記録）
+     */
+    public void startPathWaiting() {
+        this.pathWaitingStartTime = System.currentTimeMillis();
+    }
+
+    /**
+     * 経路待ちを終了し、経路待ち時間を確定
+     */
+    public void endPathWaiting() {
+        if (pathWaitingStartTime > 0) {
+            this.pathWaitTime = (System.currentTimeMillis() - pathWaitingStartTime) / 1000.0;
+            this.pathWaitingStartTime = 0;
+        }
     }
 
     // Phase 3b-2b: リンク距離関連メソッド

@@ -5,6 +5,7 @@ import controller.BoundaryController;
 import item.Uav;
 import org.redisson.api.RMap;
 import org.redisson.api.RedissonClient;
+import server.redis.ClientTimeManager;
 import server.redis.RedisConnectionManager;
 import server.util.LogManager;
 
@@ -129,19 +130,29 @@ public class FlightDataRecorder {
             dir1.mkdirs();
         }
 
-        long flightTime = clientController.getFlightTime();
         long UAV_flightTime = uav.getFlightTime();
         long UAV_waitingTime = uav.getWaitingTime();
         long UAV_totalTime = UAV_flightTime + UAV_waitingTime;
 
+        // Phase 4: 時間を秒に変換
+        double realFlightTimeSeconds = UAV_flightTime / 1000.0;
+        double waitingTimeSeconds = UAV_waitingTime / 1000.0;
+        double totalTimeSeconds = UAV_totalTime / 1000.0;
+        double pathWaitTime = 0.0;  // メモリモードでは経路待ちは発生しない
+
         try (FileWriter writer = new FileWriter(filePath, true)) {
             File file = new File(filePath);
             if (file.length() == 0) {
-                writer.write("source,dist,passedTime,UAV_flightTime,UAV_waitingTime,UAV_totalTime,ClientID,UAVID,speed,distance,path\n");
+                // Phase 4: ResultOutputManagerと同じフォーマットに統一
+                writer.write("source,dest,flightTime,realFlightTime,waitingTime,pathWaitTime,clientId,uavId,speed,distance,path\n");
             }
             String pathString = Arrays.stream(uav.getPath()).mapToObj(String::valueOf).collect(Collectors.joining("-"));
-            writer.write(String.format("%d,%d,%d,%d,%d,%d,%d,%d,%f,%f,%s\n",
-                    uav.getSource().getId(), uav.getDistination().getId(), flightTime, UAV_flightTime, UAV_waitingTime, UAV_totalTime,
+            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
+                    uav.getSource().getId(), uav.getDistination().getId(),
+                    totalTimeSeconds,       // flightTime: 合計時間
+                    realFlightTimeSeconds,  // realFlightTime: 純粋な飛行時間
+                    waitingTimeSeconds,     // waitingTime: 容量待機時間
+                    pathWaitTime,           // pathWaitTime: 経路待ち時間（メモリモードでは0）
                     uav.getClientId(), uav.getId(), uav.getSpeed(), totalPathDistance, pathString));
         } catch (IOException e) {
             System.err.println("ファイル書き込みエラー: " + e.getMessage());
@@ -149,6 +160,9 @@ public class FlightDataRecorder {
 
         // Phase 2: Redisに保存
         saveFlightDataToRedis(clientController, uav, totalPathDistance);
+
+        // Phase 4: 事業者の時間計測（UAV完了通知）- メモリモード用
+        ClientTimeManager.getInstance().onUAVCompleted(uav.getClientId());
     }
 
     /**

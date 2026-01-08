@@ -9,16 +9,23 @@ import server.util.ICCGSolver;
 import server.util.LogManager;
 import server.util.MathUtils;
 import server.util.ResultOutputManager;
+import server.redis.ClientTimeManager;
+import server.redis.PathWaitingManager;
+import server.redis.UAVJob;
+import server.scheduler.FlightScheduler;
 import server.route.SolverFailedException;
 
 import java.io.IOException;
 import java.util.Queue;
 
 /**
- * ハイブリッドPhysarumSolverルートサーチャー
+ * 段階制御型圧力誘導EPS (Step-Controlled Pressure-Guided EPS)
+ * Phase 4: 最大フロー超過分は経路待ちキューで管理し、
+ * 第一ホップ通過時に経路をコピーして飛行開始する
+ *
  * 適応的フロー制御方式でEPSを適用し、予防的不安定性検知によりフローを調整する
  */
-public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRouteSearcher {
+public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysarumSolverRouteSearcher {
 
     // 定数
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
@@ -67,8 +74,8 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
      * @param beaconCluster ビーコンクラスター
      * @param node ノード数
      */
-    public HybridPhysarumSolverRouteSearcher(ServerController serverController, int[][] adjMatrix, 
-                                            Link[][] link, BeaconCluster beaconCluster, int node) {
+    public StepControlledPressureGuidedEPSRouteSearcher(ServerController serverController, int[][] adjMatrix,
+                                                        Link[][] link, BeaconCluster beaconCluster, int node) {
         super(serverController, adjMatrix, link, beaconCluster, node);
     }
     
@@ -78,7 +85,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
      */
     @Override
     protected String getRouteRecordTag() {
-        return "runUAVFlow_HYBRID";
+        return "runUAVFlow_STEPCONTROLLED_PGEPS";
     }
 
     /**
@@ -87,7 +94,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
      */
     @Override
     protected String getRemainingRouteRecordTag() {
-        return "remainingFlow_HYBRID";
+        return "remainingFlow_STEPCONTROLLED_PGEPS";
     }
 
     @Override
@@ -106,7 +113,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         double eps = 1e-10;
         int ct = 0;
 
-        LogManager.getInstance().log("HybridPhysarumSolver: Starting adaptive flow control with requested flow " + requestedFlow);
+        LogManager.getInstance().log("StepControlledPGEPS: Starting adaptive flow control with requested flow " + requestedFlow);
 
         // 適応的フロー制御：要求フロー値から開始
         currentFlow = requestedFlow;
@@ -158,9 +165,9 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 int testIter = 10;
                 if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
                     // Phase 5: ソルバー失敗時は例外をスローして再試行管理に委ねる
-                    LogManager.getInstance().log("HybridPhysarumSolver: [Solver Failure] Pressure equation solving failed at iteration " + (ct + 1) +
+                    LogManager.getInstance().log("StepControlledPGEPS: [Solver Failure] Pressure equation solving failed at iteration " + (ct + 1) +
                                               " with flow " + currentFlow + ". Throwing SolverFailedException for retry management.");
-                    throw new SolverFailedException(currentClientId, ct + 1, "HybridPhysarumSolver");
+                    throw new SolverFailedException(currentClientId, ct + 1, "StepControlledPGEPS");
                 }
 
                 // 流量の計算
@@ -192,7 +199,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 if (!currentFlowBaselineCaptured && sourceNode >= 0) {
                     currentFlowBaselinePressure = Math.abs(P_tubePressure[sourceNode]);
                     currentFlowBaselineCaptured = true;
-                    LogManager.getInstance().log("HybridPhysarumSolver: Current flow baseline pressure captured: " + String.format("%.4f", currentFlowBaselinePressure));
+                    LogManager.getInstance().log("StepControlledPGEPS: Current flow baseline pressure captured: " + String.format("%.4f", currentFlowBaselinePressure));
                 }
 
                 // ソース圧力の個別チェック（猶予期間に関係なく常に実行）
@@ -209,23 +216,23 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                     double targetHalfFlow = currentFlow / 2.0;
                     double halvingReductionAmount = currentFlow - Math.ceil(targetHalfFlow); // 半分値を繰り上げして減少量を計算
                     
-                    LogManager.getInstance().log("HybridPhysarumSolver: CRITICAL absolute source pressure detected at iteration " + (ct + 1) +
+                    LogManager.getInstance().log("StepControlledPGEPS: CRITICAL absolute source pressure detected at iteration " + (ct + 1) +
                                               " (sourcePressure=" + String.format("%.2f", currentPressure) + 
                                               "). Halving flow from " + currentFlow + " to " + Math.ceil(targetHalfFlow) + " (reduction: " + halvingReductionAmount + " UAVs)");
                     
                     if (!applyUAVFlowReduction(halvingReductionAmount, "Critical absolute source pressure - halving flow")) {
-                        LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Treating as stable iteration.");
+                        LogManager.getInstance().log("StepControlledPGEPS: Cannot reduce flow further. Treating as stable iteration.");
                         // 最小フロー制約に達した場合、これ以上改善できないため安定とみなす
                         stableIterationCount++;
 
                         // 500回連続安定を達成したか確認
                         if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
-                            LogManager.getInstance().log("HybridPhysarumSolver: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
+                            LogManager.getInstance().log("StepControlledPGEPS: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
 
                             // 最終流量の整数丸め（ソースノード流出を基準に）
                             roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
 
-                            LogManager.getInstance().log("HybridPhysarumSolver: Final flow rounding completed. EPS converged with flow " + currentFlow);
+                            LogManager.getInstance().log("StepControlledPGEPS: Final flow rounding completed. EPS converged with flow " + currentFlow);
 
                             // 最終結果を出力
                             ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -251,24 +258,24 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                         reductionLevel = "MODERATE (3-5%)";
                     }
 
-                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure change detected [" + reductionLevel + "] at iteration " + (ct + 1) +
+                    LogManager.getInstance().log("StepControlledPGEPS: Source pressure change detected [" + reductionLevel + "] at iteration " + (ct + 1) +
                                               " (changeRate=" + String.format("%.1f%%", changeRate * 100) +
                                               ", " + String.format("%.2f", previousSourcePressure) + " → " + String.format("%.2f", currentPressure) +
                                               ", reducing " + (int)reductionAmount + " UAVs)");
 
                     if (!applyUAVFlowReduction(reductionAmount, "Source pressure change rate")) {
-                        LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow further. Treating as stable iteration.");
+                        LogManager.getInstance().log("StepControlledPGEPS: Cannot reduce flow further. Treating as stable iteration.");
                         // 最小フロー制約に達した場合、これ以上改善できないため安定とみなす
                         stableIterationCount++;
 
                         // 500回連続安定を達成したか確認
                         if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
-                            LogManager.getInstance().log("HybridPhysarumSolver: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
+                            LogManager.getInstance().log("StepControlledPGEPS: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
 
                             // 最終流量の整数丸め（ソースノード流出を基準に）
                             roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
 
-                            LogManager.getInstance().log("HybridPhysarumSolver: Final flow rounding completed. EPS converged with flow " + currentFlow);
+                            LogManager.getInstance().log("StepControlledPGEPS: Final flow rounding completed. EPS converged with flow " + currentFlow);
 
                             // 最終結果を出力
                             ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -296,12 +303,12 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
 
                     // 500回連続安定を達成したら、整数丸め込みを実行してEPS終了
                     if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
-                        LogManager.getInstance().log("HybridPhysarumSolver: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
+                        LogManager.getInstance().log("StepControlledPGEPS: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
 
                         // 最終流量の整数丸め（ソースノード流出を基準に）
                         roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
 
-                        LogManager.getInstance().log("HybridPhysarumSolver: Final flow rounding completed. EPS converged with flow " + currentFlow);
+                        LogManager.getInstance().log("StepControlledPGEPS: Final flow rounding completed. EPS converged with flow " + currentFlow);
 
                         // 最終結果を出力
                         ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -347,14 +354,14 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             // 収束時の処理
             if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
                 // 既にループ内で整数丸め込みと出力が完了している
-                LogManager.getInstance().log("HybridPhysarumSolver: EPS converged successfully with flow " + currentFlow + ". Integer rounding completed.");
+                LogManager.getInstance().log("StepControlledPGEPS: EPS converged successfully with flow " + currentFlow + ". Integer rounding completed.");
             } else if (ct >= MAX_ITERATIONS) {
                 // Phase 5: MAX_ITERATIONS超過時は例外をスローして再試行管理に委ねる
-                LogManager.getInstance().log("HybridPhysarumSolver: [Max Iterations] Reached maximum iterations (" + MAX_ITERATIONS +
+                LogManager.getInstance().log("StepControlledPGEPS: [Max Iterations] Reached maximum iterations (" + MAX_ITERATIONS +
                                           ") without convergence. Throwing SolverFailedException for retry management.");
-                throw new SolverFailedException(currentClientId, ct, "HybridPhysarumSolver-MaxIterations");
+                throw new SolverFailedException(currentClientId, ct, "StepControlledPGEPS-MaxIterations");
             } else {
-                LogManager.getInstance().log("HybridPhysarumSolver: Terminated with final flow " + currentFlow +
+                LogManager.getInstance().log("StepControlledPGEPS: Terminated with final flow " + currentFlow +
                                           " after " + ct + " iterations (stable count: " + stableIterationCount + ")");
             }
 
@@ -378,30 +385,52 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             double epsAssignedFlow = currentFlow;
             int remainingUAVs = requiredUAVs - (int)epsAssignedFlow;
 
-            LogManager.getInstance().log("HybridPhysarumSolver: EPS assigned flow " + epsAssignedFlow + " out of " + requiredUAVs + " required UAVs");
+            LogManager.getInstance().log("StepControlledPGEPS: EPS assigned flow " + epsAssignedFlow + " out of " + requiredUAVs + " required UAVs");
 
-            // 残りUAVがある場合はPSで割り当て、ない場合はEPSのみで完了
+            // Phase 4: 事業者の時間計測開始（経路割り当て開始時点）
+            ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);
+
+            // Phase 4: 残りUAVがある場合は経路待ちキューに登録
             if (remainingUAVs > 0) {
-                LogManager.getInstance().log("HybridPhysarumSolver: Remaining UAVs to be assigned by PS: " + remainingUAVs);
+                LogManager.getInstance().log("StepControlledPGEPS Phase 4: EPS割当=" + (int)epsAssignedFlow +
+                    ", 経路待ち登録=" + remainingUAVs + " (要求UAV数=" + requiredUAVs + ")");
+
+                // FlightSchedulerからPathWaitingManagerを取得
+                PathWaitingManager pathWaitingManager = FlightScheduler.getInstance().getPathWaitingManager();
+
+                // 経路待ちUAVをキューに登録（EPS割り当て分の次のIDから開始）
+                int epsAssigned = (int) epsAssignedFlow;
+                for (int i = 0; i < remainingUAVs; i++) {
+                    int uavIndex = epsAssigned + i;
+                    // UAVオブジェクトから速度を取得（各UAVは8~16m/sのランダム速度を持つ）
+                    double uavSpeed = client.getFlow().getUav(uavIndex).getSpeed();
+                    int uavId = client.getFlow().getUav(uavIndex).getId();
+                    UAVJob waitingJob = new UAVJob(
+                        uavId,
+                        client.getId(),
+                        null,  // path = null（経路待ち状態）
+                        uavSpeed,
+                        System.currentTimeMillis(),
+                        sourceNode,
+                        destNode
+                    );
+                    waitingJob.setSessionId(FlightScheduler.getInstance().getSessionId());
+                    // Phase 4: 経路待ち開始時刻を記録
+                    waitingJob.startPathWaiting();
+                    pathWaitingManager.enqueue(client.getId(), waitingJob);
+                }
+
+                LogManager.getInstance().log("StepControlledPGEPS Phase 4: " + remainingUAVs + "機の経路待ち登録完了");
             } else {
-                LogManager.getInstance().log("HybridPhysarumSolver: EPS satisfied all required UAVs (" + requiredUAVs + "). No PS computation needed.");
+                LogManager.getInstance().log("StepControlledPGEPS Phase 4: 全UAV(" + requiredUAVs + "機)をEPS割当完了、経路待ちなし");
             }
 
-            // 残りUAVがある場合はPSで追加計算
-            if (remainingUAVs > 0) {
-                LogManager.getInstance().log("HybridPhysarumSolver: Starting PS computation for " + remainingUAVs + " remaining UAVs");
+            // EPS割り当て分のUAV飛行開始前に流量の最終確認
+            int epsUAVCount = (int) epsAssignedFlow;
+            LogManager.getInstance().log("StepControlledPGEPS: Starting UAV flight assignment for " + epsUAVCount + " EPS UAVs (out of " + requiredUAVs + " total)");
 
-                // PS計算実行
-                ct = performPSComputation(client, remainingUAVs, sourceNode, destNode, ct + 1, eps);
-
-                LogManager.getInstance().log("HybridPhysarumSolver: PS computation completed. Results integrated.");
-            }
-
-            // 全UAV割り当て実行前に流量の最終確認
-            LogManager.getInstance().log("HybridPhysarumSolver: Starting UAV flight assignment for all " + requiredUAVs + " UAVs");
-            
             // 統合後の流量とtubeFlowを詳細ログ出力
-            LogManager.getInstance().log("HybridPhysarumSolver: Final flow verification before runUAVFlow:");
+            LogManager.getInstance().log("StepControlledPGEPS: Final flow verification before runUAVFlow:");
             double totalFlowSum = 0.0;
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
@@ -416,9 +445,9 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                     }
                 }
             }
-            LogManager.getInstance().log("HybridPhysarumSolver: Total flow sum = " + totalFlowSum + " (expected: " + requiredUAVs + ")");
-            
-            runUAVFlow(sourceNode, destNode, requiredUAVs, client, flyingUavQueue, uavQueue);
+            LogManager.getInstance().log("StepControlledPGEPS: Total flow sum = " + totalFlowSum + " (expected: " + epsUAVCount + ")");
+
+            runUAVFlow(sourceNode, destNode, epsUAVCount, client, flyingUavQueue, uavQueue);
             
         } catch (Exception e) {
             // エラー詳細をログ出力
@@ -450,7 +479,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 }
             }
         }
-        LogManager.getInstance().log("HybridPhysarumSolver: Initialized previous thickness array with " + totalLinks + " links");
+        LogManager.getInstance().log("StepControlledPGEPS: Initialized previous thickness array with " + totalLinks + " links");
     }
 
     /**
@@ -559,7 +588,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         double newFlow = currentFlow - reductionAmount; // 整数単位での減少
 
         if (newFlow < minFlow) {
-            LogManager.getInstance().log("HybridPhysarumSolver: Cannot reduce flow below minimum safety level (" + minFlow + "). Current flow: " + currentFlow);
+            LogManager.getInstance().log("StepControlledPGEPS: Cannot reduce flow below minimum safety level (" + minFlow + "). Current flow: " + currentFlow);
             return false;
         }
 
@@ -574,7 +603,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         // 基準圧力をリセット（新しいフロー値での基準を次回キャプチャ）
         currentFlowBaselineCaptured = false;
 
-        LogManager.getInstance().log("HybridPhysarumSolver: Flow reduced by " + reductionAmount + " UAVs due to " + reason +
+        LogManager.getInstance().log("StepControlledPGEPS: Flow reduced by " + reductionAmount + " UAVs due to " + reason +
                                   ". New flow: " + currentFlow + " (reduction count: " + flowReductionCount + ")");
 
         return true;
@@ -616,7 +645,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                     // 基準圧力をリセット（新しいフロー値での基準を次回キャプチャ）
                     currentFlowBaselineCaptured = false;
                     
-                    LogManager.getInstance().log("HybridPhysarumSolver: Source pressure 50% reduction detected " +
+                    LogManager.getInstance().log("StepControlledPGEPS: Source pressure 50% reduction detected " +
                                               " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
                                               ", currentPressure=" + String.format("%.4f", currentPressure) +
                                               ", threshold=" + String.format("%.4f", fiftyPercentReduction) +
@@ -625,7 +654,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                     return true;
                 }
             } else {
-                LogManager.getInstance().log("HybridPhysarumSolver: Source pressure 50% reduction detected but flow already at requested level " +
+                LogManager.getInstance().log("StepControlledPGEPS: Source pressure 50% reduction detected but flow already at requested level " +
                                           " (currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ")");
             }
         }
@@ -641,7 +670,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF && link[i][j].getD_tubeThickness() < 0.0) {
-                    LogManager.getInstance().log("HybridPhysarumSolver: Tube thickness anomaly detected at link (" + i + "," + j + 
+                    LogManager.getInstance().log("StepControlledPGEPS: Tube thickness anomaly detected at link (" + i + "," + j + 
                                               ") with thickness = " + link[i][j].getD_tubeThickness());
                     return true;
                 }
@@ -654,7 +683,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
      * EPSを初期化する（一番初めの状態に戻す）
      */
     private void initializeEPS() {
-        LogManager.getInstance().log("HybridPhysarumSolver: Initializing EPS to initial state");
+        LogManager.getInstance().log("StepControlledPGEPS: Initializing EPS to initial state");
         
         // リンクのチューブ厚を初期値にリセット
         for (int i = 0; i < node; i++) {
@@ -693,7 +722,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
      * @return 安定化に成功した場合true、失敗した場合false
      */
     private boolean performStabilizationIterations(Client client, int sourceNode, int destNode, int startIteration, double eps) {
-        LogManager.getInstance().log("HybridPhysarumSolver: Starting " + STABILIZATION_ITERATIONS + " stabilization iterations with flow " + currentFlow);
+        LogManager.getInstance().log("StepControlledPGEPS: Starting " + STABILIZATION_ITERATIONS + " stabilization iterations with flow " + currentFlow);
         if (this.outputIterationCursor < startIteration) {
             this.outputIterationCursor = startIteration;
         }
@@ -735,9 +764,9 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             int testIter = 10;
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
                 // Phase 5: ソルバー失敗時は例外をスローして再試行管理に委ねる
-                LogManager.getInstance().log("HybridPhysarumSolver: [Solver Failure] Pressure equation solving failed during stabilization iteration " + (stabIter + 1) +
+                LogManager.getInstance().log("StepControlledPGEPS: [Solver Failure] Pressure equation solving failed during stabilization iteration " + (stabIter + 1) +
                                           ". Throwing SolverFailedException for retry management.");
-                throw new SolverFailedException(currentClientId, currentIteration, "HybridPhysarumSolver-Stabilization");
+                throw new SolverFailedException(currentClientId, currentIteration, "StepControlledPGEPS-Stabilization");
             }
             
             // 流量の計算
@@ -766,21 +795,21 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 ResultOutputManager.outputToExcel(client, currentIteration - 1, link, node, serverController.getRunCounter(), currentFlow);
                 ResultOutputManager.outputToTxt(client, currentIteration - 1, link, node, serverController.getRunCounter(), pressureCoefficient, currentFlow);
             } catch (IOException ioe) {
-                LogManager.getInstance().error("HybridPhysarumSolver: Failed to write stabilization outputs", ioe);
+                LogManager.getInstance().error("StepControlledPGEPS: Failed to write stabilization outputs", ioe);
             }
             
             // 各安定化イテレーション後にチューブ厚をチェック
             if (checkTubeThicknessAnomaly()) {
-                LogManager.getInstance().log("HybridPhysarumSolver: Tube thickness anomaly detected during stabilization iteration " + (stabIter + 1) + ". Stabilization failed.");
+                LogManager.getInstance().log("StepControlledPGEPS: Tube thickness anomaly detected during stabilization iteration " + (stabIter + 1) + ". Stabilization failed.");
                 return false;
             }
         }
         
         // 1000回安定化完了時に流量を整数に丸める（ソースノード流出を基準に）
-        LogManager.getInstance().log("HybridPhysarumSolver: Performing flow rounding after successful stabilization");
+        LogManager.getInstance().log("StepControlledPGEPS: Performing flow rounding after successful stabilization");
         roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
 
-        LogManager.getInstance().log("HybridPhysarumSolver: Stabilization completed successfully after " + STABILIZATION_ITERATIONS + " iterations");
+        LogManager.getInstance().log("StepControlledPGEPS: Stabilization completed successfully after " + STABILIZATION_ITERATIONS + " iterations");
         return true;
     }
 
@@ -825,7 +854,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             }
         }
         
-        LogManager.getInstance().log("HybridPhysarumSolver: PS starting with " + remainingUAVs + " UAVs flow");
+        LogManager.getInstance().log("StepControlledPGEPS: PS starting with " + remainingUAVs + " UAVs flow");
         
         // PS用500回イテレーション
         for (int psIter = 0; psIter < 500; psIter++) {
@@ -867,7 +896,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             int testIter = 10;
             int result = ICCGSolver.solve(ps_pressureCoefficient, ps_Q_Kirchhoff, ps_P_tubePressure, node, testIter, eps);
             if (result != 1) {
-                LogManager.getInstance().log("HybridPhysarumSolver: PS pressure equation solving failed at iteration " + currentIteration);
+                LogManager.getInstance().log("StepControlledPGEPS: PS pressure equation solving failed at iteration " + currentIteration);
                 break;
             }
 
@@ -891,7 +920,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                         finalSum += psLink[sourceNode][j].getQ_tubeFlow();
                     }
                 }
-                LogManager.getInstance().log("HybridPhysarumSolver: PS source outflow sum after rounding = " + finalSum + " (expected: " + remainingUAVs + ")");
+                LogManager.getInstance().log("StepControlledPGEPS: PS source outflow sum after rounding = " + finalSum + " (expected: " + remainingUAVs + ")");
             }
 
             // シグモイド関数
@@ -941,7 +970,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 psFlowSum += psTempResults[sourceNode][j];
             }
         }
-        LogManager.getInstance().log("HybridPhysarumSolver: PS source outflow sum = " + psFlowSum + " (expected: " + remainingUAVs + ")");
+        LogManager.getInstance().log("StepControlledPGEPS: PS source outflow sum = " + psFlowSum + " (expected: " + remainingUAVs + ")");
         
         // 全リンクの流量合計も表示（デバッグ用）
         double totalFlowSum = 0.0;
@@ -952,10 +981,10 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 }
             }
         }
-        LogManager.getInstance().log("HybridPhysarumSolver: PS total all-links flow sum = " + totalFlowSum);
+        LogManager.getInstance().log("StepControlledPGEPS: PS total all-links flow sum = " + totalFlowSum);
 
         // EPSとPSの結果を統合
-        LogManager.getInstance().log("HybridPhysarumSolver: Integrating EPS and PS results");
+        LogManager.getInstance().log("StepControlledPGEPS: Integrating EPS and PS results");
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF) {
@@ -970,7 +999,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         }
 
         // 統合後に再度整数への丸め込みを実行（ソースノード流出を基準に）
-        LogManager.getInstance().log("HybridPhysarumSolver: Applying final integer rounding after EPS+PS integration");
+        LogManager.getInstance().log("StepControlledPGEPS: Applying final integer rounding after EPS+PS integration");
         int totalRequiredFlow = (int) requestedFlow;
         roundSourceOutflowsAndPropagate(link, sourceNode, destNode, totalRequiredFlow);
 
@@ -981,12 +1010,12 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 integratedSourceOutflow += link[sourceNode][j].getQ_tubeFlow();
             }
         }
-        LogManager.getInstance().log("HybridPhysarumSolver: Integrated source outflow sum after rounding = " + integratedSourceOutflow + " (expected: " + totalRequiredFlow + ")");
+        LogManager.getInstance().log("StepControlledPGEPS: Integrated source outflow sum after rounding = " + integratedSourceOutflow + " (expected: " + totalRequiredFlow + ")");
 
-        LogManager.getInstance().log("HybridPhysarumSolver: Final integer rounding completed. All flows are now exact integers.");
+        LogManager.getInstance().log("StepControlledPGEPS: Final integer rounding completed. All flows are now exact integers.");
 
         // 統合完了後に、Flow_CapacityとtubeFlowを統合結果で更新（重要！）
-        LogManager.getInstance().log("HybridPhysarumSolver: Updating Flow_Capacity and tubeFlow arrays with integrated results");
+        LogManager.getInstance().log("StepControlledPGEPS: Updating Flow_Capacity and tubeFlow arrays with integrated results");
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF) {
@@ -999,7 +1028,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
                 }
             }
         }
-        LogManager.getInstance().log("HybridPhysarumSolver: Flow arrays update completed");
+        LogManager.getInstance().log("StepControlledPGEPS: Flow arrays update completed");
 
         return startIteration + 500;
     }
@@ -1028,7 +1057,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
         }
 
         if (sourceOutFlows.isEmpty()) {
-            LogManager.getInstance().log("HybridPhysarumSolver: No positive source outflows found. Skipping rounding.");
+            LogManager.getInstance().log("StepControlledPGEPS: No positive source outflows found. Skipping rounding.");
             return;
         }
 

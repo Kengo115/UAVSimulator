@@ -10,16 +10,20 @@ import item.Uav;
 import server.network.NetworkTopologyManager;
 import server.network.TopologyFileReader;
 import server.route.BinaryExtendedPhysarumSolverRouteSearcher;
+import server.route.BisectionalPressureGuidedEPSRouteSearcher;
 import server.route.DijkstraRouteSearcher;
 import server.route.ExtendedPhysarumSolverRouteSearcher;
 import server.route.HybridPhysarumSolverRouteSearcher;
 import server.route.PhysarumSolverRouteSearcher;
 import server.route.RouteSearcher;
+import server.route.StepControlledPressureGuidedEPSRouteSearcher;
 import server.redis.LinkCapacityManager;
+import server.scheduler.SearcherRetryManager;
 import server.uav.CapacityManager;
 import server.uav.FlightDataRecorder;
 import server.uav.UAVFlightController;
 import server.uav.UAVFlyScheduler;
+import server.util.LogManager;
 import server.util.ResultOutputManager;
 
 import java.io.File;
@@ -62,6 +66,9 @@ public class ServerController {
     private RouteSearcher extendedPhysarumSolverRouteSearcher;
     private RouteSearcher hybridPhysarumSolverRouteSearcher;
     private RouteSearcher binaryExtendedPhysarumSolverRouteSearcher;
+    // Phase 4: PG-EPS (Pressure-Guided EPS)
+    private RouteSearcher bisectionalPGEPSRouteSearcher;
+    private RouteSearcher stepControlledPGEPSRouteSearcher;
     
     // ネットワークトポロジーマネージャー
     private NetworkTopologyManager networkTopologyManager;
@@ -124,6 +131,9 @@ public class ServerController {
         this.extendedPhysarumSolverRouteSearcher = new ExtendedPhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
         this.hybridPhysarumSolverRouteSearcher = new HybridPhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
         this.binaryExtendedPhysarumSolverRouteSearcher = new BinaryExtendedPhysarumSolverRouteSearcher(this, adjMatrix, link, beaconCluster, node);
+        // Phase 4: PG-EPS (Pressure-Guided EPS)
+        this.bisectionalPGEPSRouteSearcher = new BisectionalPressureGuidedEPSRouteSearcher(this, adjMatrix, link, beaconCluster, node);
+        this.stepControlledPGEPSRouteSearcher = new StepControlledPressureGuidedEPSRouteSearcher(this, adjMatrix, link, beaconCluster, node);
     }
 
     /**
@@ -368,6 +378,7 @@ public class ServerController {
     
     /**
      * バイナリサーチExtendedPhysarumSolver法による経路探索を実行する
+     * Phase 5: SearcherRetryManagerによる再試行管理
      * @param client クライアント
      * @param clientController クライアントコントローラー
      * @param flyingUavQueue 飛行中のUAVキュー
@@ -376,6 +387,119 @@ public class ServerController {
      * @throws IOException 入出力例外
      */
     public void run_Binary(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
+        if (!flyingUavQueue.isEmpty()) {
+            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
+        }
+
+        // Phase 5: SearcherRetryManagerを使用
+        final int currentRunCounter = runCounter;
+        SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
+            client,
+            clientController,
+            flyingUavQueue,
+            uavQueue,
+            numLoop,
+            binaryExtendedPhysarumSolverRouteSearcher,
+            // preSearchAction: 検索前処理（容量同期など）
+            () -> {
+                if (currentRunCounter != 0) {
+                    reset();
+                }
+                // Phase 3b-11: Redisモードの場合のみ、容量を同期
+                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+                    LinkCapacityManager capacityManager = new LinkCapacityManager();
+                    if (currentRunCounter == 0) {
+                        capacityManager.initializeCapacitiesToRedis(link, node);
+                    } else {
+                        capacityManager.syncCapacitiesToMemory(link, node);
+                    }
+                }
+            },
+            // postSearchAction: 検索後処理
+            () -> {
+                if (currentRunCounter != 0) {
+                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
+                }
+            }
+        );
+
+        boolean success = SearcherRetryManager.getInstance().requestSearch(request);
+        if (!success) {
+            LogManager.getInstance().log("Phase 5: client" + client.getId() + " の経路探索がスキップされました（Binary）");
+        }
+
+        runCounter++;
+    }
+
+    /**
+     * Phase 4: 二分法型圧力誘導EPS (Bisectional PG-EPS) による経路探索を実行する
+     * Phase 5: SearcherRetryManagerによる再試行管理
+     * 最大フロー超過分は経路待ちキューで管理し、第一ホップ通過時に経路コピーで飛行開始
+     * @param client クライアント
+     * @param clientController クライアントコントローラー
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param numLoop 反復回数
+     * @throws IOException 入出力例外
+     */
+    public void run_BisectionalPGEPS(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
+        if (!flyingUavQueue.isEmpty()) {
+            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
+        }
+
+        // Phase 5: SearcherRetryManagerを使用
+        final int currentRunCounter = runCounter;
+        SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
+            client,
+            clientController,
+            flyingUavQueue,
+            uavQueue,
+            numLoop,
+            bisectionalPGEPSRouteSearcher,
+            // preSearchAction: 検索前処理（容量同期など）
+            () -> {
+                if (currentRunCounter != 0) {
+                    reset();
+                }
+                // Phase 3b-11: Redisモードの場合のみ、容量を同期
+                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
+                    LinkCapacityManager capacityManager = new LinkCapacityManager();
+                    if (currentRunCounter == 0) {
+                        capacityManager.initializeCapacitiesToRedis(link, node);
+                    } else {
+                        capacityManager.syncCapacitiesToMemory(link, node);
+                    }
+                }
+            },
+            // postSearchAction: 検索後処理
+            () -> {
+                if (currentRunCounter != 0) {
+                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
+                }
+            }
+        );
+
+        boolean success = SearcherRetryManager.getInstance().requestSearch(request);
+        if (!success) {
+            LogManager.getInstance().log("Phase 5: client" + client.getId() + " の経路探索がスキップされました（BisectionalPGEPS）");
+        }
+
+        runCounter++;
+    }
+
+    /**
+     * Phase 4: 段階制御型圧力誘導EPS (Step-Controlled PG-EPS) による経路探索を実行する
+     * 最大フロー超過分は経路待ちキューで管理し、第一ホップ通過時に経路コピーで飛行開始
+     * @param client クライアント
+     * @param clientController クライアントコントローラー
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param numLoop 反復回数
+     * @throws IOException 入出力例外
+     */
+    public void run_StepControlledPGEPS(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
         if (runCounter != 0) {
             reset();
         }
@@ -397,8 +521,8 @@ public class ServerController {
             }
         }
 
-        // バイナリサーチExtendedPhysarumSolver法による経路探索
-        binaryExtendedPhysarumSolverRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
+        // Phase 4: 段階制御型圧力誘導EPS (Step-Controlled PG-EPS) による経路探索
+        stepControlledPGEPSRouteSearcher.search(client, flyingUavQueue, uavQueue, numLoop);
 
         if (runCounter != 0) {
             // UAVFlySchedulerを開始（Phase 2: beaconClusterとnodeを渡す）

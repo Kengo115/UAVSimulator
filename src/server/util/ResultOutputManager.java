@@ -364,21 +364,23 @@ public class ResultOutputManager {
 
         // Phase 3b-9: 時間情報を取得
         double realFlightTime = job.getElapsedFlightTime();    // 純粋な飛行時間
-        double waitingTime = job.getTotalWaitingTime();         // 待機時間
+        double waitingTime = job.getTotalWaitingTime();         // 待機時間（リンク容量待ち）
+        double pathWaitTime = job.getPathWaitTime();            // Phase 4: 経路待ち時間
         double flightTime = job.getTotalTime();                 // 合計時間（飛行＋待機）
 
         try (FileWriter writer = new FileWriter(filename, true)) {
             File file = new File(filename);
             if (file.length() == 0) {
-                // Phase 3b-9: ヘッダーを更新
-                writer.write("source,dest,flightTime,realFlightTime,waitingTime,clientId,uavId,speed,distance,path\n");
+                // Phase 4: ヘッダーにpathWaitTimeを追加
+                writer.write("source,dest,flightTime,realFlightTime,waitingTime,pathWaitTime,clientId,uavId,speed,distance,path\n");
             }
-            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
+            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
                 job.getSourceBeaconId(),
                 job.getDestinationBeaconId(),
                 flightTime,         // 合計時間（飛行＋待機）
                 realFlightTime,     // 純粋な飛行時間
-                waitingTime,        // 待機時間
+                waitingTime,        // 待機時間（リンク容量待ち）
+                pathWaitTime,       // Phase 4: 経路待ち時間
                 job.getClientId(),
                 job.getUavId(),
                 job.getSpeed(),
@@ -386,10 +388,11 @@ public class ResultOutputManager {
                 pathString));
         }
 
-        LogManager.getInstance().log("Phase 3b-9: UAV" + job.getUavId() +
+        LogManager.getInstance().log("Phase 4: UAV" + job.getUavId() +
             " 飛行結果保存 (合計=" + String.format("%.2f", flightTime) +
             "s, 飛行=" + String.format("%.2f", realFlightTime) +
-            "s, 待機=" + String.format("%.2f", waitingTime) + "s)");
+            "s, 容量待機=" + String.format("%.2f", waitingTime) +
+            "s, 経路待ち=" + String.format("%.2f", pathWaitTime) + "s)");
     }
 
     /**
@@ -419,18 +422,21 @@ public class ResultOutputManager {
             .collect(Collectors.joining("-"));
 
         double flightTime = elapsedFlightTime + waitingTime; // 合計時間
+        double pathWaitTime = job.getPathWaitTime();          // Phase 4: 経路待ち時間
 
         try (FileWriter writer = new FileWriter(filename, true)) {
             File file = new File(filename);
             if (file.length() == 0) {
-                writer.write("source,dest,flightTime,realFlightTime,waitingTime,clientId,uavId,speed,distance,path\n");
+                // Phase 4: ヘッダーにpathWaitTimeを追加
+                writer.write("source,dest,flightTime,realFlightTime,waitingTime,pathWaitTime,clientId,uavId,speed,distance,path\n");
             }
-            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
+            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
                 job.getSourceBeaconId(),
                 job.getDestinationBeaconId(),
                 flightTime,
                 elapsedFlightTime,
                 waitingTime,
+                pathWaitTime,       // Phase 4: 経路待ち時間
                 job.getClientId(),
                 job.getUavId(),
                 job.getSpeed(),

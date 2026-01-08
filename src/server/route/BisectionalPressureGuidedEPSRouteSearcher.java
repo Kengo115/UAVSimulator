@@ -10,23 +10,30 @@ import server.util.ICCGSolver;
 import server.util.LogManager;
 import server.util.MathUtils;
 import server.util.ResultOutputManager;
+import server.redis.ClientTimeManager;
+import server.redis.PathWaitingManager;
+import server.redis.UAVJob;
+import server.scheduler.FlightScheduler;
 import controller.BoundaryController;
 
 import java.io.IOException;
 import java.util.Queue;
 
 /**
- * バイナリサーチPhysarumSolverルートサーチャー
+ * 二分法型圧力誘導EPS (Bisectional Pressure-Guided EPS)
+ * Phase 4: 最大フロー超過分は経路待ちキューで管理し、
+ * 第一ホップ通過時に経路をコピーして飛行開始する
+ *
  * 二分探索を使用して最適なフロー値を見つけるEPS
  */
-public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRouteSearcher {
+public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumSolverRouteSearcher {
 
     // 定数
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
     private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
     private static final int REQUIRED_STABLE_ITERATIONS = 150; // 収束判定用の連続安定回数
-    private static final int MAX_BINARY_SEARCH_ITERATIONS = 30; // 二分探索の最大回数
+    private static final int MAX_BINARY_SEARCH_ITERATIONS = 10; // 二分探索の最大回数
 
     // ソースノード圧力専用閾値
     private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値
@@ -74,7 +81,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
      * @param beaconCluster ビーコンクラスター
      * @param node ノード数
      */
-    public BinaryExtendedPhysarumSolverRouteSearcher(ServerController serverController, int[][] adjMatrix, 
+    public BisectionalPressureGuidedEPSRouteSearcher(ServerController serverController, int[][] adjMatrix,
                                                     Link[][] link, BeaconCluster beaconCluster, int node) {
         super(serverController, adjMatrix, link, beaconCluster, node);
     }
@@ -85,7 +92,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
      */
     @Override
     protected String getRouteRecordTag() {
-        return "runUAVFlow_BINARY";
+        return "runUAVFlow_BISECTIONAL_PGEPS";
     }
 
     /**
@@ -94,7 +101,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
      */
     @Override
     protected String getRemainingRouteRecordTag() {
-        return "remainingFlow_BINARY";
+        return "remainingFlow_BISECTIONAL_PGEPS";
     }
 
     @Override
@@ -112,14 +119,14 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         this.currentClientId = client.getId();  // Phase 5: クライアントID保存
         double eps = 1e-10;
 
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Starting dynamic binary search EPS with requested flow " + requestedFlow);
+        LogManager.getInstance().log("BisectionalPGEPS: Starting dynamic binary search EPS with requested flow " + requestedFlow);
 
         // 二分探索の初期化
         lowerBound = 0.0;
         upperBound = requestedFlow;
         currentFlow = requestedFlow; // 要求フローから開始
         
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Initial bounds - Lower: " + lowerBound + ", Upper: " + upperBound + ", Starting flow: " + currentFlow);
+        LogManager.getInstance().log("BisectionalPGEPS: Initial bounds - Lower: " + lowerBound + ", Upper: " + upperBound + ", Starting flow: " + currentFlow);
 
         // 前回チューブ厚の初期化
         initializePreviousThickness();
@@ -127,13 +134,13 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         try {
         // EPSセーブポイントの初期化
         epsSavePoint = new EPSSavePoint(node);
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPSSavePoint initialized");
+        LogManager.getInstance().log("BisectionalPGEPS: EPSSavePoint initialized");
         
         // 動的二分探索EPS実行
         performDynamicBinarySearchEPS(client, eps);
 
             // 親クラスのUAV割り当て処理を実行
-            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Setting up flow capacity arrays");
+            LogManager.getInstance().log("BisectionalPGEPS: Setting up flow capacity arrays");
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
                     if (link[i][j].getL_tubeLength() != INF) {
@@ -152,23 +159,50 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             double epsAssignedFlow = currentFlow;
             int remainingUAVs = requiredUAVs - (int)epsAssignedFlow;
 
-            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS assigned flow " + epsAssignedFlow + " out of " + requiredUAVs + " required UAVs");
+            LogManager.getInstance().log("BisectionalPGEPS: EPS assigned flow " + epsAssignedFlow + " out of " + requiredUAVs + " required UAVs");
 
-            // 残りUAVがある場合はPSで割り当て
+            // Phase 4: 事業者の時間計測開始（経路割り当て開始時点）
+            ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);
+
+            // Phase 4: 残りUAVがある場合は経路待ちキューに登録
             if (remainingUAVs > 0) {
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Remaining UAVs to be assigned by PS: " + remainingUAVs);
-                
-                // PS計算実行
-                performPSComputation(client, remainingUAVs, sourceNode, destNode, eps);
-                
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: PS computation completed. Results integrated.");
+                LogManager.getInstance().log("BisectionalPGEPS Phase 4: EPS割当=" + (int)epsAssignedFlow +
+                    ", 経路待ち登録=" + remainingUAVs + " (要求UAV数=" + requiredUAVs + ")");
+
+                // FlightSchedulerからPathWaitingManagerを取得
+                PathWaitingManager pathWaitingManager = FlightScheduler.getInstance().getPathWaitingManager();
+
+                // 経路待ちUAVをキューに登録（EPS割り当て分の次のIDから開始）
+                int epsAssigned = (int) epsAssignedFlow;
+                for (int i = 0; i < remainingUAVs; i++) {
+                    int uavIndex = epsAssigned + i;
+                    // UAVオブジェクトから速度を取得（各UAVは8~16m/sのランダム速度を持つ）
+                    double uavSpeed = client.getFlow().getUav(uavIndex).getSpeed();
+                    int uavId = client.getFlow().getUav(uavIndex).getId();
+                    UAVJob waitingJob = new UAVJob(
+                        uavId,
+                        client.getId(),
+                        null,  // path = null（経路待ち状態）
+                        uavSpeed,
+                        System.currentTimeMillis(),
+                        sourceNode,
+                        destNode
+                    );
+                    waitingJob.setSessionId(FlightScheduler.getInstance().getSessionId());
+                    // Phase 4: 経路待ち開始時刻を記録
+                    waitingJob.startPathWaiting();
+                    pathWaitingManager.enqueue(client.getId(), waitingJob);
+                }
+
+                LogManager.getInstance().log("BisectionalPGEPS Phase 4: " + remainingUAVs + "機の経路待ち登録完了");
             } else {
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS satisfied all required UAVs (" + requiredUAVs + "). No PS computation needed.");
+                LogManager.getInstance().log("BisectionalPGEPS Phase 4: 全UAV(" + requiredUAVs + "機)をEPS割当完了、経路待ちなし");
             }
 
-            // 全UAV割り当て実行
-            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Starting UAV flight assignment for all " + requiredUAVs + " UAVs");
-            runUAVFlow(sourceNode, destNode, requiredUAVs, client, flyingUavQueue, uavQueue);
+            // EPS割り当て分のUAVのみ飛行開始
+            int epsUAVCount = (int) epsAssignedFlow;
+            LogManager.getInstance().log("BisectionalPGEPS: Starting UAV flight assignment for " + epsUAVCount + " EPS UAVs (out of " + requiredUAVs + " total)");
+            runUAVFlow(sourceNode, destNode, epsUAVCount, client, flyingUavQueue, uavQueue);
             
         } catch (Exception e) {
             LogManager.getInstance().error("Error in binary search EPS process: ", e);
@@ -294,7 +328,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                 boolean shouldIncrease = checkShouldIncreaseFlow();
                 if (shouldIncrease) {
                     // 二分探索テスト中は実際のフロー変更は行わず、ログ出力のみ
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow increase trigger detected at iteration " + (ct + 1) + " for flow " + testFlow + " (test only - no action taken during binary search)");
+                    LogManager.getInstance().log("BisectionalPGEPS: Flow increase trigger detected at iteration " + (ct + 1) + " for flow " + testFlow + " (test only - no action taken during binary search)");
                 }
 
                 // ソース圧力チェック
@@ -385,14 +419,14 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
      * @param eps イプシロン値
      */
     private void performFinalEPSRun(Client client, double finalFlow, double eps) throws IOException {
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Performing final EPS run with flow " + finalFlow);
+        LogManager.getInstance().log("BisectionalPGEPS: Performing final EPS run with flow " + finalFlow);
         
         // EPSの初期化
         initializeEPS();
         
         // *** 初期セーブポイントの作成 ***
         epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Initial EPS savepoint created. " + epsSavePoint.getStatistics());
+        LogManager.getInstance().log("BisectionalPGEPS: Initial EPS savepoint created. " + epsSavePoint.getStatistics());
         
         stableIterationCount = 0;
         previousSourcePressure = 0.0;
@@ -440,9 +474,9 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
                 // Phase 5: ソルバー失敗時は例外をスローして再試行管理に委ねる
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Solver Failure] Final EPS pressure equation solving failed at iteration " + (ct + 1) +
+                LogManager.getInstance().log("BisectionalPGEPS: [Solver Failure] Final EPS pressure equation solving failed at iteration " + (ct + 1) +
                                            " with flow " + finalFlow + ". Throwing SolverFailedException for retry management.");
-                throw new SolverFailedException(currentClientId, ct + 1, "BinaryExtendedPhysarumSolver");
+                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS");
             }
 
             // 流量の計算
@@ -470,7 +504,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             if (!currentFlowBaselineCaptured && sourceNode >= 0) {
                 currentFlowBaselinePressure = Math.abs(P_tubePressure[sourceNode]);
                 currentFlowBaselineCaptured = true;
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Final EPS baseline pressure captured: " + String.format("%.4f", currentFlowBaselinePressure));
+                LogManager.getInstance().log("BisectionalPGEPS: Final EPS baseline pressure captured: " + String.format("%.4f", currentFlowBaselinePressure));
             }
 
             // ソース圧力10%減少検知とフロー増加ロジック（二分探索方式）
@@ -493,7 +527,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     // 基準圧力をリセット（新しいフロー値での基準を次回キャプチャ）
                     currentFlowBaselineCaptured = false;
                     
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Source pressure 10% reduction detected in final EPS " +
+                    LogManager.getInstance().log("BisectionalPGEPS: Source pressure 10% reduction detected in final EPS " +
                                               " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
                                               ", currentPressure=" + String.format("%.4f", Math.abs(P_tubePressure[sourceNode])) +
                                               "). Binary search flow increase: " + (finalFlow - increaseAmount) + " → " + finalFlow +
@@ -506,21 +540,21 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             
             // 圧力絶対値チェック
             if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
-                LogManager.getInstance().error("BinaryExtendedPhysarumSolver: CRITICAL ERROR - Final EPS pressure emergency detected at iteration " + (ct + 1) + " (pressure: " + currentSourcePressure + "). System termination required.");
+                LogManager.getInstance().error("BisectionalPGEPS: CRITICAL ERROR - Final EPS pressure emergency detected at iteration " + (ct + 1) + " (pressure: " + currentSourcePressure + "). System termination required.");
                 throw new RuntimeException("System termination: Pressure emergency in final EPS run");
             }
 
             // 負の圧力チェック - Phase 5: SolverFailedExceptionで再試行対象に
             if (P_tubePressure[sourceNode] < 0.0) {
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Negative Pressure] Detected in final EPS at iteration " + (ct + 1) + " (pressure: " + P_tubePressure[sourceNode] + "). Throwing SolverFailedException for retry management.");
-                throw new SolverFailedException(currentClientId, ct + 1, "BinaryExtendedPhysarumSolver-NegativePressure");
+                LogManager.getInstance().log("BisectionalPGEPS: [Negative Pressure] Detected in final EPS at iteration " + (ct + 1) + " (pressure: " + P_tubePressure[sourceNode] + "). Throwing SolverFailedException for retry management.");
+                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-NegativePressure");
             }
 
             // 圧力変化率チェック（30%増）
             if (previousSourcePressure > 0.0) {
                 double changeRate = (currentSourcePressure - previousSourcePressure) / previousSourcePressure;
                 if (changeRate >= SOURCE_PRESSURE_CHANGE_THRESHOLD) {
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Final EPS run terminated due to pressure change rate at iteration " + (ct + 1) + " (change rate: " + (changeRate * 100) + "%)");
+                    LogManager.getInstance().log("BisectionalPGEPS: Final EPS run terminated due to pressure change rate at iteration " + (ct + 1) + " (change rate: " + (changeRate * 100) + "%)");
                     break;
                 }
             }
@@ -554,10 +588,10 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         }
 
         // 最終流量の整数丸め（ソースノード流出を基準に丸める）
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Performing final flow rounding after " + ct + " iterations");
+        LogManager.getInstance().log("BisectionalPGEPS: Performing final flow rounding after " + ct + " iterations");
         roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) finalFlow);
 
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Final EPS completed with flow " + finalFlow);
+        LogManager.getInstance().log("BisectionalPGEPS: Final EPS completed with flow " + finalFlow);
 
         // 最終結果を出力
         ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -588,7 +622,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                 }
             }
         }
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Initialized previous thickness array with " + totalLinks + " links");
+        LogManager.getInstance().log("BisectionalPGEPS: Initialized previous thickness array with " + totalLinks + " links");
     }
 
     /**
@@ -721,7 +755,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             }
         }
         
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: PS starting with " + remainingUAVs + " UAVs flow");
+        LogManager.getInstance().log("BisectionalPGEPS: PS starting with " + remainingUAVs + " UAVs flow");
         
         // PS用500回イテレーション
         for (int psIter = 0; psIter < 500; psIter++) {
@@ -761,7 +795,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             int testIter = 10;
             int result = ICCGSolver.solve(ps_pressureCoefficient, ps_Q_Kirchhoff, ps_P_tubePressure, node, testIter, eps);
             if (result != 1) {
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: PS pressure equation solving failed at iteration " + (psIter + 1));
+                LogManager.getInstance().log("BisectionalPGEPS: PS pressure equation solving failed at iteration " + (psIter + 1));
                 break;
             }
 
@@ -785,7 +819,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                         finalSum += psLink[sourceNode][j].getQ_tubeFlow();
                     }
                 }
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: PS source outflow sum after rounding = " + finalSum + " (expected: " + remainingUAVs + ")");
+                LogManager.getInstance().log("BisectionalPGEPS: PS source outflow sum after rounding = " + finalSum + " (expected: " + remainingUAVs + ")");
             }
 
             // シグモイド関数
@@ -821,7 +855,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         }
 
         // EPSとPSの結果を統合
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Integrating EPS and PS results");
+        LogManager.getInstance().log("BisectionalPGEPS: Integrating EPS and PS results");
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF) {
@@ -836,7 +870,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         }
 
         // 統合後に再度整数への丸め込みを実行（ソースノード流出を基準に）
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Applying final integer rounding after EPS+PS integration");
+        LogManager.getInstance().log("BisectionalPGEPS: Applying final integer rounding after EPS+PS integration");
         int totalRequiredFlow = (int) requestedFlow;
         roundSourceOutflowsAndPropagate(link, sourceNode, destNode, totalRequiredFlow);
 
@@ -847,12 +881,12 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                 integratedSourceOutflow += link[sourceNode][j].getQ_tubeFlow();
             }
         }
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Integrated source outflow sum after rounding = " + integratedSourceOutflow + " (expected: " + totalRequiredFlow + ")");
+        LogManager.getInstance().log("BisectionalPGEPS: Integrated source outflow sum after rounding = " + integratedSourceOutflow + " (expected: " + totalRequiredFlow + ")");
 
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Final integer rounding completed. All flows are now exact integers.");
+        LogManager.getInstance().log("BisectionalPGEPS: Final integer rounding completed. All flows are now exact integers.");
 
         // 統合完了後に、Flow_CapacityとtubeFlowを統合結果で更新
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Updating Flow_Capacity and tubeFlow arrays with integrated results");
+        LogManager.getInstance().log("BisectionalPGEPS: Updating Flow_Capacity and tubeFlow arrays with integrated results");
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF) {
@@ -865,7 +899,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                 }
             }
         }
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow arrays update completed");
+        LogManager.getInstance().log("BisectionalPGEPS: Flow arrays update completed");
     }
 
     /**
@@ -876,7 +910,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
      * @throws IOException 入出力例外
      */
     private void performDynamicBinarySearchEPS(Client client, double eps) throws IOException {
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Starting dynamic binary search EPS with initial flow " + currentFlow);
+        LogManager.getInstance().log("BisectionalPGEPS: Starting dynamic binary search EPS with initial flow " + currentFlow);
 
         // EPSの初期化
         initializeEPS();
@@ -886,7 +920,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
         // *** 初期セーブポイントの作成 ***
         epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Initial EPS savepoint created. " + epsSavePoint.getStatistics());
+        LogManager.getInstance().log("BisectionalPGEPS: Initial EPS savepoint created. " + epsSavePoint.getStatistics());
         
         stableIterationCount = 0;
         previousSourcePressure = 0.0;
@@ -900,7 +934,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             // 流入フロー値を設定
             Q_Kirchhoff[sourceNode] = currentFlow;
             Q_Kirchhoff[destNode] = currentFlow * NEG;
-            
+
             // その他のノードは0に設定
             for (int i = 0; i < node; i++) {
                 pressureCoefficient[i][i] = 0.0;
@@ -935,9 +969,9 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
             if (solvePressureEquation(pressureCoefficient, Q_Kirchhoff, P_tubePressure, node, testIter, eps) == -1) {
                 // Phase 5: ソルバー失敗時は例外をスローして再試行管理に委ねる
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Solver Failure] Pressure equation solving failed at iteration " + (ct + 1) +
+                LogManager.getInstance().log("BisectionalPGEPS: [Solver Failure] Pressure equation solving failed at iteration " + (ct + 1) +
                                            " with flow " + currentFlow + ". Throwing SolverFailedException for retry management.");
-                throw new SolverFailedException(currentClientId, ct + 1, "BinaryExtendedPhysarumSolver");
+                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS");
             }
 
             // 流量の計算
@@ -965,7 +999,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             if (!currentFlowBaselineCaptured && sourceNode >= 0) {
                 currentFlowBaselinePressure = Math.abs(P_tubePressure[sourceNode]);
                 currentFlowBaselineCaptured = true;
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Baseline pressure captured for flow " + currentFlow + ": " + String.format("%.4f", currentFlowBaselinePressure));
+                LogManager.getInstance().log("BisectionalPGEPS: Baseline pressure captured for flow " + currentFlow + ": " + String.format("%.4f", currentFlowBaselinePressure));
             }
 
             // ソース圧力チェック（優先度順で実行）
@@ -978,7 +1012,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             
             // 100回に1回だけ詳細ログ出力（ログ量を抑制）
             if ((ct + 1) % 100 == 0 || ct < 10) {
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Debug] Flow increase check at iteration " + (ct + 1) + 
+                LogManager.getInstance().log("BisectionalPGEPS: [Debug] Flow increase check at iteration " + (ct + 1) + 
                                            " - baselineCaptured=" + currentFlowBaselineCaptured +
                                            ", baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
                                            ", currentPressure=" + String.format("%.4f", currentSourcePressure) +
@@ -993,7 +1027,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             if (!inStabilizationPhase) {
                 // 【優先度1】圧力絶対値チェック（100以上でフロー減少）
                 if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 1] Pressure emergency detected at iteration " + (ct + 1) + 
+                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 1] Pressure emergency detected at iteration " + (ct + 1) + 
                                                " (pressure: " + String.format("%.2f", currentSourcePressure) + "). Applying binary search flow reduction.");
                     
                     // 上限を現在のフロー値に更新
@@ -1001,7 +1035,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
                     
                     if (newFlow != currentFlow && newFlow > lowerBound) {
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Binary search flow reduction: " + currentFlow + " → " + newFlow +
+                        LogManager.getInstance().log("BisectionalPGEPS: Binary search flow reduction: " + currentFlow + " → " + newFlow +
                                                    " (new bounds: " + lowerBound + " - " + upperBound + ")");
                         
                         currentFlow = newFlow;
@@ -1012,29 +1046,29 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                         // *** フロー減少後のEPS状態復元 ***
                         if (epsSavePoint.isAvailable()) {
                             epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS state restored from savepoint after flow reduction due to pressure emergency. " + epsSavePoint.getStatistics());
+                            LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint after flow reduction due to pressure emergency. " + epsSavePoint.getStatistics());
                         } else {
                             // セーブポイントがない場合（流入フロー初回等）は初期状態に戻す
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: No savepoint available, restoring EPS to initial state after flow reduction");
+                            LogManager.getInstance().log("BisectionalPGEPS: No savepoint available, restoring EPS to initial state after flow reduction");
                             initializeEPS();
                         }
                         
                         // フロー減少後に安定化フェーズを開始
                         inStabilizationPhase = true;
                         stabilizationIterationCount = 0;
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
+                        LogManager.getInstance().log("BisectionalPGEPS: Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
                     } else {
                         // フロー変更がない場合はEPS復元のみ実行
                         if (epsSavePoint.isAvailable()) {
                             epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS state restored from savepoint (no flow change required). " + epsSavePoint.getStatistics());
+                            LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint (no flow change required). " + epsSavePoint.getStatistics());
                         } else {
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: No savepoint available, restoring EPS to initial state (no flow change required)");
+                            LogManager.getInstance().log("BisectionalPGEPS: No savepoint available, restoring EPS to initial state (no flow change required)");
                             initializeEPS();
                         }
                         
                         // EPS復元後は安定化フェーズに入る
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS state restored but no flow change required. Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
+                        LogManager.getInstance().log("BisectionalPGEPS: EPS state restored but no flow change required. Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
                         inStabilizationPhase = true;
                         stabilizationIterationCount = 0;
                         stableIterationCount = 0; // リセット
@@ -1047,7 +1081,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     double increaseThreshold = currentFlowBaselinePressure * (1.0 + SOURCE_PRESSURE_CHANGE_THRESHOLD);
                     if (currentSourcePressure >= increaseThreshold) {
                         double increaseRate = (currentSourcePressure - currentFlowBaselinePressure) / currentFlowBaselinePressure;
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 2] Pressure increase detected at iteration " + (ct + 1) + 
+                        LogManager.getInstance().log("BisectionalPGEPS: [Priority 2] Pressure increase detected at iteration " + (ct + 1) + 
                                                    " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) + 
                                                    ", currentPressure=" + String.format("%.4f", currentSourcePressure) + 
                                                    ", increase rate: " + String.format("%.2f%%", increaseRate * 100) + "). Applying binary search flow reduction.");
@@ -1057,7 +1091,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                         double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
                         
                         if (newFlow != currentFlow && newFlow > lowerBound) {
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Binary search flow reduction: " + currentFlow + " → " + newFlow +
+                            LogManager.getInstance().log("BisectionalPGEPS: Binary search flow reduction: " + currentFlow + " → " + newFlow +
                                                        " (new bounds: " + lowerBound + " - " + upperBound + ")");
                             
                             currentFlow = newFlow;
@@ -1068,18 +1102,18 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                             // フロー減少後に安定化フェーズを開始
                             inStabilizationPhase = true;
                             stabilizationIterationCount = 0;
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
+                            LogManager.getInstance().log("BisectionalPGEPS: Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
                         }
                     }
                 }
             } else {
                 // 安定化フェーズ中の処理
                 stabilizationIterationCount++;
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Stabilization phase iteration " + stabilizationIterationCount + "/" + STABILIZATION_PHASE_ITERATIONS + " (pressure emergency detection only)");
+                LogManager.getInstance().log("BisectionalPGEPS: Stabilization phase iteration " + stabilizationIterationCount + "/" + STABILIZATION_PHASE_ITERATIONS + " (pressure emergency detection only)");
                 
                 // 安定化フェーズ中でも圧力絶対値100の異常検知のみ作動
                 if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 1 - Stabilization Phase] Pressure emergency detected during stabilization at iteration " + (ct + 1) + 
+                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 1 - Stabilization Phase] Pressure emergency detected during stabilization at iteration " + (ct + 1) + 
                                                " (pressure: " + String.format("%.2f", currentSourcePressure) + "). Applying binary search flow reduction.");
                     
                     // 上限を現在のフロー値に更新
@@ -1087,7 +1121,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
                     
                     if (newFlow != currentFlow && newFlow > lowerBound) {
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Binary search flow reduction during stabilization: " + currentFlow + " → " + newFlow +
+                        LogManager.getInstance().log("BisectionalPGEPS: Binary search flow reduction during stabilization: " + currentFlow + " → " + newFlow +
                                                    " (new bounds: " + lowerBound + " - " + upperBound + ")");
                         
                         double oldFlow = currentFlow;
@@ -1099,33 +1133,33 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                         // *** フロー減少後のEPS状態復元（安定化フェーズ中も同様） ***
                         if (epsSavePoint.isAvailable()) {
                             epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS state restored from savepoint after flow reduction during stabilization. " + epsSavePoint.getStatistics());
+                            LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint after flow reduction during stabilization. " + epsSavePoint.getStatistics());
                         } else {
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: No savepoint available, restoring EPS to initial state after flow reduction during stabilization");
+                            LogManager.getInstance().log("BisectionalPGEPS: No savepoint available, restoring EPS to initial state after flow reduction during stabilization");
                             initializeEPS();
                         }
                         
                         // 安定化フェーズをリセット（新しいフロー値で再開始）
                         stabilizationIterationCount = 0;
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow reduced from " + oldFlow + " to " + currentFlow + " during stabilization. Restarting stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state restored)");
+                        LogManager.getInstance().log("BisectionalPGEPS: Flow reduced from " + oldFlow + " to " + currentFlow + " during stabilization. Restarting stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state restored)");
                     }
                 } else {
                     // 安定化フェーズ完了チェック
                     if (stabilizationIterationCount >= STABILIZATION_PHASE_ITERATIONS) {
                         inStabilizationPhase = false;
                         stabilizationIterationCount = 0;
-                        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Stabilization phase completed. Resuming full anomaly detection.");
+                        LogManager.getInstance().log("BisectionalPGEPS: Stabilization phase completed. Resuming full anomaly detection.");
                         
                         // 安定化フェーズ後の安全性チェック
                         if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
-                            LogManager.getInstance().error("BinaryExtendedPhysarumSolver: CRITICAL ERROR - Pressure still >= 100 after stabilization phase (pressure: " + String.format("%.2f", currentSourcePressure) + "). System termination required.");
+                            LogManager.getInstance().error("BisectionalPGEPS: CRITICAL ERROR - Pressure still >= 100 after stabilization phase (pressure: " + String.format("%.2f", currentSourcePressure) + "). System termination required.");
                             throw new RuntimeException("System termination: Pressure emergency persists after stabilization phase");
                         }
                         
                         // Phase 5: 負の圧力検出 → SolverFailedExceptionで再試行対象に
                         if (P_tubePressure[sourceNode] < 0.0) {
-                            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Negative Pressure] Detected after stabilization phase (pressure: " + P_tubePressure[sourceNode] + "). Throwing SolverFailedException for retry management.");
-                            throw new SolverFailedException(currentClientId, ct + 1, "BinaryExtendedPhysarumSolver-NegativePressure");
+                            LogManager.getInstance().log("BisectionalPGEPS: [Negative Pressure] Detected after stabilization phase (pressure: " + P_tubePressure[sourceNode] + "). Throwing SolverFailedException for retry management.");
+                            throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-NegativePressure");
                         }
                     }
                 }
@@ -1134,7 +1168,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             // 【優先度3】圧力減少率チェック（現在フロー基準圧力から30%減少でフロー増加）- 安定化フェーズ中はスキップ
             if (!inStabilizationPhase && !flowChanged && shouldIncrease && currentFlow < requestedFlow) {
                 // デバッグログ
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase conditions - shouldIncrease=" + shouldIncrease + 
+                LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase conditions - shouldIncrease=" + shouldIncrease + 
                                            ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
                                            ", lowerBound=" + lowerBound + ", upperBound=" + upperBound);
                 
@@ -1147,12 +1181,12 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     newFlow = requestedFlow;
                 }
                 
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Calculated newFlow=" + newFlow + 
+                LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Calculated newFlow=" + newFlow + 
                                            " (newFlow != currentFlow: " + (newFlow != currentFlow) + 
                                            ", newFlow <= requestedFlow: " + (newFlow <= requestedFlow) + ")");
                 
                 if (newFlow != currentFlow && newFlow <= requestedFlow) {
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3] Source pressure 30% reduction detected at iteration " + (ct + 1) + 
+                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 3] Source pressure 30% reduction detected at iteration " + (ct + 1) + 
                                                " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
                                                ", currentPressure=" + String.format("%.4f", currentSourcePressure) +
                                                "). Binary search flow increase: " + currentFlow + " → " + newFlow +
@@ -1160,7 +1194,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     
                     // *** フロー増加直前のEPSセーブポイント保存 ***
                     epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: EPS savepoint created before flow increase from " + currentFlow + " to " + newFlow + ". " + epsSavePoint.getStatistics());
+                    LogManager.getInstance().log("BisectionalPGEPS: EPS savepoint created before flow increase from " + currentFlow + " to " + newFlow + ". " + epsSavePoint.getStatistics());
                     
                     currentFlow = newFlow;
                     stableIterationCount = 0; // リセット
@@ -1170,16 +1204,16 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                     // フロー増加後に安定化フェーズを開始（EPSは初期化しない）
                     inStabilizationPhase = true;
                     stabilizationIterationCount = 0;
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow increased to " + currentFlow + ". Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state preserved)");
+                    LogManager.getInstance().log("BisectionalPGEPS: Flow increased to " + currentFlow + ". Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state preserved)");
                 } else {
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase skipped - newFlow=" + newFlow + 
+                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase skipped - newFlow=" + newFlow + 
                                                ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
                                                ", condition check: newFlow != currentFlow=" + (newFlow != currentFlow) +
                                                ", newFlow <= requestedFlow=" + (newFlow <= requestedFlow));
                 }
             } else if (!flowChanged && (ct + 1) % 100 == 0) {
                 // 100回に1回だけログ出力（フロー増加しない理由）
-                LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Priority 3 DEBUG] Flow increase not triggered - inStabilizationPhase=" + inStabilizationPhase + 
+                LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase not triggered - inStabilizationPhase=" + inStabilizationPhase + 
                                            ", shouldIncrease=" + shouldIncrease + ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ", flowChanged=" + flowChanged);
             }
 
@@ -1216,20 +1250,20 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
             if (flowChanged) {
                 binarySearchIteration++;
                 if (binarySearchIteration >= MAX_BINARY_SEARCH_ITERATIONS) {
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Max Binary Search] Reached maximum binary search iterations (" + MAX_BINARY_SEARCH_ITERATIONS + "). Throwing SolverFailedException for retry management.");
-                    throw new SolverFailedException(currentClientId, ct, "BinaryExtendedPhysarumSolver-MaxBinarySearch");
+                    LogManager.getInstance().log("BisectionalPGEPS: [Max Binary Search] Reached maximum binary search iterations (" + MAX_BINARY_SEARCH_ITERATIONS + "). Throwing SolverFailedException for retry management.");
+                    throw new SolverFailedException(currentClientId, ct, "BisectionalPGEPS-MaxBinarySearch");
                 }
             }
         }
 
         // Phase 5: MAX_ITERATIONSに達した場合は再試行対象
         if (ct >= MAX_ITERATIONS && stableIterationCount < REQUIRED_STABLE_ITERATIONS) {
-            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: [Max Iterations] Reached maximum iterations (" + MAX_ITERATIONS + ") without convergence. Throwing SolverFailedException for retry management.");
-            throw new SolverFailedException(currentClientId, ct, "BinaryExtendedPhysarumSolver-MaxIterations");
+            LogManager.getInstance().log("BisectionalPGEPS: [Max Iterations] Reached maximum iterations (" + MAX_ITERATIONS + ") without convergence. Throwing SolverFailedException for retry management.");
+            throw new SolverFailedException(currentClientId, ct, "BisectionalPGEPS-MaxIterations");
         }
 
         // 最終流量の整数丸め（ソースノード流出を基準に丸める）
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Performing final flow rounding after " + ct + " iterations");
+        LogManager.getInstance().log("BisectionalPGEPS: Performing final flow rounding after " + ct + " iterations");
         roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
 
         // 丸め後のソース流出合計を検証
@@ -1239,9 +1273,9 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
                 sourceOutflowSum += link[sourceNode][j].getQ_tubeFlow();
             }
         }
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Source outflow sum after rounding = " + sourceOutflowSum + " (expected: " + (int) currentFlow + ")");
+        LogManager.getInstance().log("BisectionalPGEPS: Source outflow sum after rounding = " + sourceOutflowSum + " (expected: " + (int) currentFlow + ")");
 
-        LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Dynamic binary search EPS completed with optimal flow " + currentFlow);
+        LogManager.getInstance().log("BisectionalPGEPS: Dynamic binary search EPS completed with optimal flow " + currentFlow);
 
         // 最終結果を出力
         ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -1273,7 +1307,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         }
 
         if (sourceOutFlows.isEmpty()) {
-            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: No positive source outflows found. Skipping rounding.");
+            LogManager.getInstance().log("BisectionalPGEPS: No positive source outflows found. Skipping rounding.");
             return;
         }
 
@@ -1412,7 +1446,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
                 if (intInflow != intOutflow && intInflow > 0 && !outFlows.isEmpty()) {
                     hasViolation = true;
-                    LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow conservation violation at node " + currentNode +
+                    LogManager.getInstance().log("BisectionalPGEPS: Flow conservation violation at node " + currentNode +
                                                " (inflow=" + intInflow + ", outflow=" + intOutflow + "). Correcting...");
 
                     // 出力フローを入力フローに合わせて再丸め
@@ -1433,7 +1467,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
         }
 
         if (iteration > 1) {
-            LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Flow conservation correction completed after " + iteration + " iterations");
+            LogManager.getInstance().log("BisectionalPGEPS: Flow conservation correction completed after " + iteration + " iterations");
         }
     }
 
