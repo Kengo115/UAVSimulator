@@ -182,4 +182,9 @@ public class TopologyFileReader {
         }
         System.out.println("===============================\n");
     }
+
+    /**
+     * デフォルトのトポロジファイルパス
+     */
+    public static final String DEFAULT_TOPOLOGY_PATH = "config/topology/default_topology.txt";
 }

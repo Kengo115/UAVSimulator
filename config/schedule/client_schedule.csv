@@ -1,0 +1,13 @@
+# クライアントスケジュール定義ファイル
+# フォーマット: clientId,sourceId,destinationId,uavCount,intervalAfterSec
+#
+# clientId: クライアントID
+# sourceId: 出発ノードID
+# destinationId: 到着ノードID
+# uavCount: UAV台数
+# intervalAfterSec: このクライアント処理後の待機時間（秒）
+#
+# 例: クライアント1がノード0からノード5へ25台のUAVを飛ばし、30秒後に次のクライアント
+1,0,5,25,30
+2,0,5,25,30
+3,2,4,20,0
