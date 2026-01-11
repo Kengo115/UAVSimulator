@@ -214,6 +214,9 @@ public class BoundaryController {
 
     // Phase 3b-6: 現在選択されているワーカーモード
     private static WorkerMode currentWorkerMode = WorkerMode.MEMORY;
+
+    // Phase 7-1: 大規模シミュレーションモード
+    private static boolean isLargeScaleMode = false;
     
     /**
      * 経路探索手法を設定する
@@ -263,6 +266,23 @@ public class BoundaryController {
      */
     public static WorkerMode getCurrentWorkerMode() {
         return currentWorkerMode;
+    }
+
+    /**
+     * Phase 7-1: 大規模シミュレーションモードを設定する
+     * @param isLargeScale 大規模モードかどうか
+     */
+    public static void setLargeScaleMode(boolean isLargeScale) {
+        isLargeScaleMode = isLargeScale;
+        LogManager.getInstance().log("Phase 7-1: シミュレーション規模を " + (isLargeScale ? "大規模" : "小規模") + " に設定しました");
+    }
+
+    /**
+     * Phase 7-1: 大規模シミュレーションモードかどうかを取得する
+     * @return 大規模モードならtrue
+     */
+    public static boolean isLargeScaleMode() {
+        return isLargeScaleMode;
     }
 
     /**
@@ -512,6 +532,8 @@ public class BoundaryController {
             }
 
             boolean isLargeScale = (scaleChoice == 2);
+            setLargeScaleMode(isLargeScale);  // Phase 7-1: 規模情報を設定
+
             String defaultPath = isLargeScale
                 ? "config/topology/koriyama_topology.txt"
                 : TopologyFileReader.DEFAULT_TOPOLOGY_PATH;
@@ -700,7 +722,9 @@ public class BoundaryController {
                 // UAVスケジューリングを更新（Phase 2: beaconClusterとnodeNumを渡す）
                 UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeNum);
 
-                String dirPath = "src/result/client";
+                // Phase 7-1: スケール別のディレクトリに出力
+                String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
+                String dirPath = "src/result/" + scaleDir + "/" + currentMethod.getName() + "/client";
                 String filePath = dirPath + "/client.txt";
 
                 // ディレクトリが存在しない場合は作成

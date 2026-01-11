@@ -40,12 +40,14 @@ public class FlightDataRecorder {
 
     /**
      * 現在の経路探索手法に基づいてディレクトリパスを取得する
+     * Phase 7-1: small_scale/large_scale分離
      * @param baseDir ベースディレクトリ
      * @return ディレクトリパス
      */
     private static String getDirectoryPath(String baseDir) {
         BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-        return "src/result/" + method.getName() + "/" + baseDir;
+        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
+        return "src/result/" + scaleDir + "/" + method.getName() + "/" + baseDir;
     }
 
     /**

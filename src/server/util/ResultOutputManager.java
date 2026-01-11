@@ -20,13 +20,17 @@ public class ResultOutputManager {
 
     /**
      * 現在の経路探索手法に基づいてディレクトリパスを取得する
+     * Phase 7-1: small_scale/large_scale分離、client形式に変更
      * @param baseDir ベースディレクトリ
-     * @param runCounter 実行カウンター
+     * @param runCounter 実行カウンター（0始まり）
      * @return ディレクトリパス
      */
     private static String getDirectoryPath(String baseDir, int runCounter) {
         BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-        return "src/result/" + method.getName() + "/" + baseDir + "/result" + runCounter;
+        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
+        // runCounterは0始まりなので+1してclient1, client2, ...にする
+        int clientNumber = runCounter + 1;
+        return "src/result/" + scaleDir + "/" + method.getName() + "/" + baseDir + "/client" + clientNumber;
     }
 
     /**

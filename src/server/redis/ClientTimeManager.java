@@ -128,12 +128,13 @@ public class ClientTimeManager {
 
     /**
      * clientTime.csvファイルに出力
-     * 出力先: src/result/{method}/time/clientTime.csv
+     * Phase 7-1: 出力先: src/result/{scale}/{method}/time/clientTime.csv
      */
     private void writeClientTimeCSV(int clientId, int uavCount, double elapsedSeconds) throws IOException {
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-        String dirPath = "src/result/" + method.getName() + "/time";
+        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
+        String dirPath = "src/result/" + scaleDir + "/" + method.getName() + "/time";
 
         // ディレクトリが存在しない場合は作成
         File dir = new File(dirPath);
