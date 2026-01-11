@@ -8,9 +8,11 @@ import item.Flow;
 import item.Uav;
 import server.controller.ServerController;
 import server.network.TopologyFileReader;
+import server.config.SimulationConfig;
 import server.redis.*;
 import server.scheduler.FlightScheduler;
 import server.uav.UAVFlyScheduler;
+import server.util.LinkStatusRecorder;
 import server.util.LogManager;
 import server.worker.AsyncUAVWorker;
 
@@ -405,6 +407,39 @@ public class BoundaryController {
     }
 
     /**
+     * Phase 7-7: シミュレーション設定を適用する
+     */
+    private static void applySimulationConfig() {
+        if (!SimulationConfig.isLoaded()) {
+            return;
+        }
+
+        SimulationConfig config = SimulationConfig.getInstance();
+
+        // スナップショット間隔を設定
+        int snapshotIntervalSec = config.getSnapshotIntervalSec();
+        LinkStatusRecorder.getInstance().setSnapshotIntervalSeconds(snapshotIntervalSec);
+        LogManager.getInstance().log("Phase 7-7: スナップショット間隔を " + snapshotIntervalSec + " 秒に設定");
+
+        // トポロジパスが指定されていれば表示（実際の適用はCUI前に行う必要があるため警告）
+        if (config.getTopologyPath() != null) {
+            LogManager.getInstance().log("Phase 7-7: 設定ファイルでトポロジが指定されています: " + config.getTopologyPath());
+        }
+
+        // 経路探索手法が指定されていれば適用
+        if (config.getRouteSearchMethod() != null) {
+            String methodName = config.getRouteSearchMethod();
+            for (RouteSearchMethod method : RouteSearchMethod.values()) {
+                if (method.getName().equalsIgnoreCase(methodName)) {
+                    setRouteSearchMethod(method);
+                    LogManager.getInstance().log("Phase 7-7: 経路探索手法を " + method.getName() + " に設定");
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
      * トポロジをPNG画像として出力する
      * Pythonスクリプトを呼び出して描画を行う
      *
@@ -675,6 +710,49 @@ public class BoundaryController {
                     setWorkerMode(WorkerMode.MEMORY);
                 } else {
                     initializeRedisWorker();
+                }
+            }
+
+            // Phase 7-7: シミュレーション設定ファイルの読み込み
+            System.out.println("\nシミュレーション設定ファイルを読み込みますか？");
+            System.out.println("1: 読み込まない（デフォルト設定を使用）");
+            System.out.println("2: 読み込む（config/simulation_params.json）");
+            System.out.println("3: ファイルパスを指定して読み込む");
+
+            int configChoice = 1;
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    configChoice = Integer.parseInt(input);
+                    if (configChoice < 1 || configChoice > 3) {
+                        System.out.println("無効な選択です。デフォルト設定を使用します。");
+                        configChoice = 1;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。デフォルト設定を使用します。");
+            }
+
+            if (configChoice == 2) {
+                // デフォルトパスから読み込み
+                if (SimulationConfig.loadDefault()) {
+                    System.out.println("✓ 設定ファイルを読み込みました: config/simulation_params.json");
+                    // スナップショット間隔を適用
+                    applySimulationConfig();
+                } else {
+                    System.out.println("⚠ 設定ファイルの読み込みに失敗しました。デフォルト設定を使用します。");
+                }
+            } else if (configChoice == 3) {
+                // パスを指定して読み込み
+                System.out.print("設定ファイルのパスを入力してください: ");
+                String configPath = reader.readLine().trim();
+                if (!configPath.isEmpty()) {
+                    if (SimulationConfig.load(configPath)) {
+                        System.out.println("✓ 設定ファイルを読み込みました: " + configPath);
+                        applySimulationConfig();
+                    } else {
+                        System.out.println("⚠ 設定ファイルの読み込みに失敗しました。デフォルト設定を使用します。");
+                    }
                 }
             }
 

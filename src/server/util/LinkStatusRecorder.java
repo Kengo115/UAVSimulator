@@ -31,7 +31,8 @@ public class LinkStatusRecorder {
 
     // Phase 7-5: スナップショット用スケジューラ
     private ScheduledExecutorService snapshotScheduler;
-    private static final int SNAPSHOT_INTERVAL_SECONDS = 10;
+    // Phase 7-7: 設定ファイルから変更可能
+    private int snapshotIntervalSeconds = 10;
     private int snapshotCount = 0;
 
     private LinkStatusRecorder() {
@@ -76,15 +77,15 @@ public class LinkStatusRecorder {
             return t;
         });
 
-        // 10秒ごとにスナップショットを記録
+        // スナップショット間隔でスナップショットを記録
         snapshotScheduler.scheduleAtFixedRate(
             this::takeSnapshot,
-            SNAPSHOT_INTERVAL_SECONDS,
-            SNAPSHOT_INTERVAL_SECONDS,
+            snapshotIntervalSeconds,
+            snapshotIntervalSeconds,
             TimeUnit.SECONDS
         );
 
-        LogManager.getInstance().log("Phase 7-5: スナップショットスケジューラ開始 (間隔=" + SNAPSHOT_INTERVAL_SECONDS + "秒)");
+        LogManager.getInstance().log("Phase 7-5: スナップショットスケジューラ開始 (間隔=" + snapshotIntervalSeconds + "秒)");
     }
 
     /**
@@ -428,5 +429,24 @@ public class LinkStatusRecorder {
      */
     public int getSnapshotCount() {
         return snapshotCount;
+    }
+
+    /**
+     * Phase 7-7: スナップショット間隔を設定
+     * @param seconds スナップショット間隔（秒）
+     */
+    public void setSnapshotIntervalSeconds(int seconds) {
+        if (seconds > 0) {
+            this.snapshotIntervalSeconds = seconds;
+            LogManager.getInstance().log("Phase 7-7: スナップショット間隔を " + seconds + " 秒に設定");
+        }
+    }
+
+    /**
+     * Phase 7-7: スナップショット間隔を取得
+     * @return スナップショット間隔（秒）
+     */
+    public int getSnapshotIntervalSeconds() {
+        return snapshotIntervalSeconds;
     }
 }

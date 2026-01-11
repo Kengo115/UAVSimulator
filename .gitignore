@@ -54,4 +54,4 @@ dump.rdb
 appendonly.aof
 .venv/
 output/
-config/
+
