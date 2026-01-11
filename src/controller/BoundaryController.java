@@ -11,6 +11,7 @@ import server.network.TopologyFileReader;
 import server.config.SimulationConfig;
 import server.redis.*;
 import server.scheduler.FlightScheduler;
+import server.scheduler.RandomClientGenerator;
 import server.uav.UAVFlyScheduler;
 import server.util.LinkStatusRecorder;
 import server.util.LogManager;
@@ -756,23 +757,95 @@ public class BoundaryController {
                 }
             }
 
-            // スケジュールファイルのパスを入力（空ならデフォルト）
-            System.out.println("スケジュールファイルのパスを入力してください（空欄でデフォルト: " + ClientScheduleLoader.DEFAULT_SCHEDULE_PATH + "）:");
-            String schedulePath = reader.readLine().trim();
-            if (schedulePath.isEmpty()) {
-                schedulePath = ClientScheduleLoader.DEFAULT_SCHEDULE_PATH;
+            // Phase 7-8: クライアント生成モードを選択
+            System.out.println("\nクライアント生成モードを選択してください:");
+            System.out.println("1: スケジュールファイルから読み込み");
+            System.out.println("2: ランダム生成（Phase 7-8）");
+
+            int clientGenMode = 1;
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    clientGenMode = Integer.parseInt(input);
+                    if (clientGenMode < 1 || clientGenMode > 2) {
+                        System.out.println("無効な選択です。スケジュールファイルを使用します。");
+                        clientGenMode = 1;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。スケジュールファイルを使用します。");
             }
 
-            // スケジュールファイルを読み込み
             List<ClientScheduleLoader.ScheduleEntry> schedule;
-            try {
-                schedule = ClientScheduleLoader.load(schedulePath);
-            } catch (IOException e) {
-                System.err.println("スケジュールファイルの読み込みに失敗しました: " + e.getMessage());
-                System.err.println("デフォルトのクライアント設定で続行します。");
-                // フォールバック: デフォルトのクライアント1つ
-                schedule = new ArrayList<>();
-                schedule.add(new ClientScheduleLoader.ScheduleEntry(1, 0, 5, 25, 0));
+            RandomClientGenerator randomGenerator = null;
+            boolean useRandomMode = (clientGenMode == 2);
+
+            if (useRandomMode) {
+                // Phase 7-8: ランダム生成モード
+                System.out.println("\n=== ランダム生成モード ===");
+
+                // シード値の取得（設定ファイルまたは入力）
+                long seed = SimulationConfig.isLoaded()
+                        ? SimulationConfig.getInstance().getSeed()
+                        : 12345L;
+
+                System.out.println("シード値を入力してください（空欄でデフォルト: " + seed + "）:");
+                try {
+                    String input = reader.readLine().trim();
+                    if (!input.isEmpty()) {
+                        seed = Long.parseLong(input);
+                    }
+                } catch (NumberFormatException e) {
+                    System.out.println("無効な入力です。デフォルトシード値を使用します。");
+                }
+
+                // 生成数の入力
+                System.out.println("生成するクライアント数を入力してください（空欄でデフォルト: 10）:");
+                int clientCount = 10;
+                try {
+                    String input = reader.readLine().trim();
+                    if (!input.isEmpty()) {
+                        clientCount = Integer.parseInt(input);
+                        if (clientCount <= 0) {
+                            clientCount = 10;
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    System.out.println("無効な入力です。10クライアントを生成します。");
+                }
+
+                // RandomClientGenerator初期化
+                randomGenerator = new RandomClientGenerator(seed, nodeNum, beaconCluster);
+
+                // 設定ファイルがあれば適用
+                if (SimulationConfig.isLoaded()) {
+                    randomGenerator.applyConfig(SimulationConfig.getInstance());
+                }
+
+                // スケジュールを生成
+                schedule = randomGenerator.generateEntries(clientCount);
+                randomGenerator.logSettings();
+
+                System.out.println("✓ " + clientCount + " クライアントをランダム生成しました (seed=" + seed + ")");
+
+            } else {
+                // スケジュールファイルモード
+                System.out.println("スケジュールファイルのパスを入力してください（空欄でデフォルト: " + ClientScheduleLoader.DEFAULT_SCHEDULE_PATH + "）:");
+                String schedulePath = reader.readLine().trim();
+                if (schedulePath.isEmpty()) {
+                    schedulePath = ClientScheduleLoader.DEFAULT_SCHEDULE_PATH;
+                }
+
+                // スケジュールファイルを読み込み
+                try {
+                    schedule = ClientScheduleLoader.load(schedulePath);
+                } catch (IOException e) {
+                    System.err.println("スケジュールファイルの読み込みに失敗しました: " + e.getMessage());
+                    System.err.println("デフォルトのクライアント設定で続行します。");
+                    // フォールバック: デフォルトのクライアント1つ
+                    schedule = new ArrayList<>();
+                    schedule.add(new ClientScheduleLoader.ScheduleEntry(1, 0, 5, 25, 0));
+                }
             }
 
             if (schedule.isEmpty()) {

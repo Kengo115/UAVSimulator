@@ -25,8 +25,17 @@
     "phase3_congestion": {
       "min_uav_count": 5,
       "max_uav_count": 10,
+      "duration_minutes": 5,
       "min_interval_sec": 1.0,
       "max_interval_sec": 2.0
+    },
+    "phase4_recovery": {
+      "min_uav_count": 1,
+      "max_uav_count": 5,
+      "dynamic_interval_enabled": true,
+      "target_congestion_percent": 50.0,
+      "min_interval_sec": 1.0,
+      "max_interval_sec": 10.0
     }
   }
 }

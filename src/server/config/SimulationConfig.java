@@ -42,7 +42,7 @@ public class SimulationConfig {
     private String routeSearchMethod = null;
 
     /**
-     * 3フェーズ設定クラス
+     * 4フェーズ設定クラス
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PhaseSettings {
@@ -55,9 +55,13 @@ public class SimulationConfig {
         @JsonProperty("phase3_congestion")
         private Phase3Settings phase3 = new Phase3Settings();
 
+        @JsonProperty("phase4_recovery")
+        private Phase4Settings phase4 = new Phase4Settings();
+
         public Phase1Settings getPhase1() { return phase1; }
         public Phase2Settings getPhase2() { return phase2; }
         public Phase3Settings getPhase3() { return phase3; }
+        public Phase4Settings getPhase4() { return phase4; }
     }
 
     /**
@@ -130,7 +134,7 @@ public class SimulationConfig {
 
     /**
      * Phase 3: 混雑期設定
-     * 遷移条件: シミュレーション終了まで
+     * 遷移条件: 指定時間経過
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Phase3Settings {
@@ -140,6 +144,9 @@ public class SimulationConfig {
         @JsonProperty("max_uav_count")
         private int maxUavCount = 10;
 
+        @JsonProperty("duration_minutes")
+        private int durationMinutes = 5;
+
         @JsonProperty("min_interval_sec")
         private double minIntervalSec = 1.0;
 
@@ -148,6 +155,39 @@ public class SimulationConfig {
 
         public int getMinUavCount() { return minUavCount; }
         public int getMaxUavCount() { return maxUavCount; }
+        public int getDurationMinutes() { return durationMinutes; }
+        public double getMinIntervalSec() { return minIntervalSec; }
+        public double getMaxIntervalSec() { return maxIntervalSec; }
+    }
+
+    /**
+     * Phase 4: 回復期設定（安定期に戻す）
+     * 遷移条件: シミュレーション終了まで
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Phase4Settings {
+        @JsonProperty("min_uav_count")
+        private int minUavCount = 1;
+
+        @JsonProperty("max_uav_count")
+        private int maxUavCount = 5;
+
+        @JsonProperty("dynamic_interval_enabled")
+        private boolean dynamicIntervalEnabled = true;
+
+        @JsonProperty("target_congestion_percent")
+        private double targetCongestionPercent = 50.0;
+
+        @JsonProperty("min_interval_sec")
+        private double minIntervalSec = 1.0;
+
+        @JsonProperty("max_interval_sec")
+        private double maxIntervalSec = 10.0;
+
+        public int getMinUavCount() { return minUavCount; }
+        public int getMaxUavCount() { return maxUavCount; }
+        public boolean isDynamicIntervalEnabled() { return dynamicIntervalEnabled; }
+        public double getTargetCongestionPercent() { return targetCongestionPercent; }
         public double getMinIntervalSec() { return minIntervalSec; }
         public double getMaxIntervalSec() { return maxIntervalSec; }
     }
@@ -236,7 +276,11 @@ public class SimulationConfig {
                 ", duration=" + phases.phase2.durationMinutes + "min" +
                 ", dynamicInterval=" + phases.phase2.dynamicIntervalEnabled);
         LogManager.getInstance().log("  Phase3: UAV=" + phases.phase3.minUavCount + "-" + phases.phase3.maxUavCount +
+                ", duration=" + phases.phase3.durationMinutes + "min" +
                 ", interval=" + phases.phase3.minIntervalSec + "-" + phases.phase3.maxIntervalSec + "s");
+        LogManager.getInstance().log("  Phase4: UAV=" + phases.phase4.minUavCount + "-" + phases.phase4.maxUavCount +
+                ", dynamicInterval=" + phases.phase4.dynamicIntervalEnabled +
+                ", targetCongestion=" + phases.phase4.targetCongestionPercent + "%");
     }
 
     // Getters
