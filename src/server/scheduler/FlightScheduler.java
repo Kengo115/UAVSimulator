@@ -3,6 +3,7 @@ package server.scheduler;
 import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import server.redis.*;
+import server.util.LinkStatusRecorder;
 import server.util.LogManager;
 import server.util.ResultOutputManager;
 
@@ -132,6 +133,14 @@ public class FlightScheduler {
      */
     public void startFlight(UAVJob job) {
         int linkIndex = job.getCurrentPathIndex();
+        int[] path = job.getPath();
+        int fromNode = path[linkIndex];
+        int toNode = path[linkIndex + 1];
+
+        // Phase 7-4: 待機解除時は待機終了を記録
+        if (job.getTotalWaitingTime() > 0) {
+            LinkStatusRecorder.getInstance().onWaitingEnd(fromNode, toNode);
+        }
 
         // Phase 3b-9: 待機中だった場合は待機時間を確定
         job.endWaiting();
@@ -141,6 +150,9 @@ public class FlightScheduler {
 
         // 飛行中カウント増加
         activeFlights.incrementAndGet();
+
+        // Phase 7-4: リンク進入を記録
+        LinkStatusRecorder.getInstance().onLinkEnter(fromNode, toNode);
 
         LogManager.getInstance().log(
             "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 飛行開始 " +
@@ -193,6 +205,9 @@ public class FlightScheduler {
         int[] path = job.getPath();
         int fromNode = path[linkIndex];
         int toNode = path[linkIndex + 1];
+
+        // Phase 7-4: リンク退出を記録
+        LinkStatusRecorder.getInstance().onLinkExit(fromNode, toNode);
 
         // 1. 経過時間を更新
         double linkDistance = job.getLinkDistance(linkIndex);
@@ -258,6 +273,9 @@ public class FlightScheduler {
         }
 
         // 8. 次のリンク飛行をスケジュール
+        // Phase 7-4: 次リンク進入を記録
+        LinkStatusRecorder.getInstance().onLinkEnter(nextFrom, nextTo);
+
         job.setCurrentLinkStartTime(System.currentTimeMillis());
         scheduleNextLink(job, linkIndex + 1);
     }
@@ -276,6 +294,9 @@ public class FlightScheduler {
 
         // Phase 3b-9: 待機開始時刻を記録
         job.startWaiting();
+
+        // Phase 7-4: 待機開始を記録
+        LinkStatusRecorder.getInstance().onWaitingStart(fromNode, toNode);
 
         // 待機キューに登録
         waitingManager.enqueue(fromNode, toNode, job);

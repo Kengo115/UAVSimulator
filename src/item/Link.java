@@ -8,7 +8,9 @@ public class Link {
     private double capacity;
     private double initCapacity;
     private int flyingUAV;
+    private int waitingUAV;  // Phase 7-4: 待機中UAV数
     private double congestionRate;
+    private double loadRate;  // Phase 7-4: 負荷率（飛行中+待機中）/容量
     // リンクの基本パラメータ
     private double Q_tubeFlow;
     private double D_tubeThickness;
@@ -106,5 +108,60 @@ public class Link {
 
     public double getInitCapacity() {
         return initCapacity;
+    }
+
+    // Phase 7-4: 待機中UAV関連メソッド
+    public int getWaitingUAV() {
+        return waitingUAV;
+    }
+
+    public void setWaitingUAV(int waitingUAV) {
+        this.waitingUAV = waitingUAV;
+    }
+
+    public void incrementWaitingUAV() {
+        this.waitingUAV++;
+        calcLoadRate();
+    }
+
+    public void decrementWaitingUAV() {
+        if (this.waitingUAV > 0) {
+            this.waitingUAV--;
+        }
+        calcLoadRate();
+    }
+
+    // Phase 7-4: 飛行中UAV増減メソッド
+    public void incrementFlyingUAV() {
+        this.flyingUAV++;
+        calcLoadRate();
+    }
+
+    public void decrementFlyingUAV() {
+        if (this.flyingUAV > 0) {
+            this.flyingUAV--;
+        }
+        calcLoadRate();
+    }
+
+    // Phase 7-4: 負荷率を計算する（飛行中+待機中）/容量 × 100
+    public void calcLoadRate() {
+        if (initCapacity > 0) {
+            loadRate = (flyingUAV + waitingUAV) / initCapacity * 100.0;
+        } else {
+            loadRate = 0.0;
+        }
+    }
+
+    public double getLoadRate() {
+        return loadRate;
+    }
+
+    // Phase 7-4: リンク状態をリセット
+    public void resetStatus() {
+        this.flyingUAV = 0;
+        this.waitingUAV = 0;
+        this.loadRate = 0.0;
+        this.congestionRate = 0.0;
     }
 }

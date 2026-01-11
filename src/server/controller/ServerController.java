@@ -154,6 +154,35 @@ public class ServerController {
     }
 
     /**
+     * Phase 7-4: staticなリンク情報取得（LinkStatusRecorder用）
+     * @param from 始点ノード
+     * @param to 終点ノード
+     * @return リンク情報（存在しない場合はnull）
+     */
+    public static Link getLinkStatic(int from, int to) {
+        if (link != null && from >= 0 && from < node && to >= 0 && to < node) {
+            return link[from][to];
+        }
+        return null;
+    }
+
+    /**
+     * Phase 7-4: リンク配列を取得
+     * @return リンク配列
+     */
+    public static Link[][] getLinkArray() {
+        return link;
+    }
+
+    /**
+     * Phase 7-4: ノード数を取得
+     * @return ノード数
+     */
+    public static int getNodeCount() {
+        return node;
+    }
+
+    /**
      * フィールドをすべてリセットする
      */
     public void reset() {
