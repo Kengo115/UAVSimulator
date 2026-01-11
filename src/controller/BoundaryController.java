@@ -76,109 +76,32 @@ public class BoundaryController {
         return nodeNum;
     }
 
-    // クライアントを生成する関数
-    public Client createClient1() {
-        int sourceId = 0;
-        int destinationId = 5;
-        Beacon source = beaconCluster.getBeacon(sourceId);
-        Beacon destination = beaconCluster.getBeacon(destinationId);
+    /**
+     * スケジュールエントリからクライアントを生成
+     *
+     * @param entry スケジュールエントリ
+     * @return 生成されたクライアント
+     */
+    public Client createClientFromSchedule(ClientScheduleLoader.ScheduleEntry entry) {
+        Beacon source = beaconCluster.getBeacon(entry.sourceId);
+        Beacon destination = beaconCluster.getBeacon(entry.destinationId);
 
-        int uavNum = 12;
-        // flowListにsource, destination, uavNumを格納
-        flow = new Flow(source, destination, uavNum);
-
-        Client client = new Client(flow, 1);
-        clientController.addClient(client);
-
-        return client;
-    }
-
-    public Client createClient2() {
-        int sourceId = 0;
-        int destinationId = 5;
-        Beacon source = beaconCluster.getBeacon(sourceId);
-        Beacon destination = beaconCluster.getBeacon(destinationId);
-
-        int uavNum = 12;
-        // flowListにsource, destination, uavNumを格納
-        flow = new Flow(source, destination, uavNum);
-
-        Client client = new Client(flow, 2);
-        clientController.addClient(client);
-
-        return client;
-    }
-
-    public Client createClient3() {
-        int sourceId = 2;
-        int destinationId = 4;
-        Beacon source = beaconCluster.getBeacon(sourceId);
-        Beacon destination = beaconCluster.getBeacon(destinationId);
-
-        int uavNum = 14;
-        // flowListにsorrce, destination, uavNumを格納
-        flow = new Flow(source, destination, uavNum);
-
-        Client client = new Client(flow, 3);
-        clientController.addClient(client);
-
-        return client;
-    }
-
-    // sourceId, destinationId, uavNumをランダムに決める
-    public Client createRandomClient() {
-        if (clientId == 1) {
-            int sourceId = 0;
-            int destinationId = 5;
-            while (sourceId == destinationId) {
-                destinationId = (int) (Math.random() * nodeNum);
-            }
-            Beacon source = beaconCluster.getBeacon(sourceId);
-            Beacon destination = beaconCluster.getBeacon(destinationId);
-
-            int uavNum = 25; // + (int)(Math.random() * 20);
-            // flowListにsource, destination, uavNumを格納
-            flow = new Flow(source, destination, uavNum);
-
-            Client client = new Client(flow, clientId);
-            clientController.addClient(client);
-            clientId++;
-            return client;
-        } else if (clientId == 2) {
-            int sourceId = 0;
-            int destinationId = 5;
-            while (sourceId == destinationId) {
-                destinationId = (int) (Math.random() * nodeNum);
-            }
-            Beacon source = beaconCluster.getBeacon(sourceId);
-            Beacon destination = beaconCluster.getBeacon(destinationId);
-
-            int uavNum = 25; // + (int)(Math.random() * 20);
-            // flowListにsource, destination, uavNumを格納
-            flow = new Flow(source, destination, uavNum);
-
-            Client client = new Client(flow, clientId);
-            clientController.addClient(client);
-            clientId++;
-            return client;
-        } else {
-            int sourceId = 2;
-            int destinationId = 4;
-            while (sourceId == destinationId) {
-                destinationId = (int) (Math.random() * nodeNum);
-            }
-            Beacon source = beaconCluster.getBeacon(sourceId);
-            Beacon destination = beaconCluster.getBeacon(destinationId);
-
-            int uavNum = 25; // + (int)(Math.random() * 20);
-            // flowListにsource, destination, uavNumを格納
-            flow = new Flow(source, destination, uavNum);
-
-            Client client = new Client(flow, clientId);
-            clientController.addClient(client);
-            clientId++;
-            return client;
+        if (source == null) {
+            throw new IllegalArgumentException("Invalid source node ID: " + entry.sourceId);
         }
+        if (destination == null) {
+            throw new IllegalArgumentException("Invalid destination node ID: " + entry.destinationId);
+        }
+
+        flow = new Flow(source, destination, entry.uavCount);
+        Client client = new Client(flow, entry.clientId);
+        clientController.addClient(client);
+
+        LogManager.getInstance().log("クライアント生成: client" + client.getId() +
+                                    " (source=" + entry.sourceId + ", dest=" + entry.destinationId +
+                                    ", uavs=" + entry.uavCount + ")");
+
+        return client;
     }
 
     // 経路探索手法の列挙型
@@ -461,6 +384,65 @@ public class BoundaryController {
         return completionListener;
     }
 
+    /**
+     * トポロジをPNG画像として出力する
+     * Pythonスクリプトを呼び出して描画を行う
+     *
+     * @param topologyFilePath トポロジファイルのパス
+     * @param isLargeScale 大規模モードかどうか（true=シンプル表示、false=詳細表示）
+     */
+    private static void renderTopologyImage(String topologyFilePath, boolean isLargeScale) {
+        try {
+            // 出力ファイル名を生成
+            String baseName = new File(topologyFilePath).getName();
+            if (baseName.contains(".")) {
+                baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+            }
+            String outputPath = "output/topology_" + baseName + ".png";
+
+            System.out.println("トポロジ画像を生成しています...");
+            System.out.println("  モード: " + (isLargeScale ? "シンプル（大規模向け）" : "詳細（小規模向け）"));
+
+            // Pythonスクリプトを実行（venv優先、なければシステムPython）
+            String pythonCmd = new File(".venv/bin/python").exists() ? ".venv/bin/python" : "python3";
+            String modeArg = isLargeScale ? "--simple" : "--detailed";
+            ProcessBuilder pb = new ProcessBuilder(
+                pythonCmd,
+                "scripts/plot_topology.py",
+                topologyFilePath,
+                outputPath,
+                modeArg
+            );
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            // 出力を読み取り
+            try (BufferedReader processReader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = processReader.readLine()) != null) {
+                    System.out.println("  " + line);
+                }
+            }
+
+            int exitCode = process.waitFor();
+            if (exitCode == 0) {
+                System.out.println("トポロジ画像を保存しました: " + outputPath);
+            } else {
+                System.err.println("トポロジ画像の生成に失敗しました (exit code: " + exitCode + ")");
+                System.err.println("必要なPythonライブラリがインストールされているか確認してください:");
+                System.err.println("  pip install matplotlib networkx");
+            }
+
+        } catch (IOException | InterruptedException e) {
+            System.err.println("トポロジ画像の生成中にエラーが発生しました: " + e.getMessage());
+            System.err.println("Python3がインストールされているか確認してください。");
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
     public void routeRequest(Client client) throws IOException {
         // Pajekファイルにネットワークトポロジーを出力
         server.nodeConfigureToPajek(filePath, client, beaconCluster);
@@ -508,35 +490,74 @@ public class BoundaryController {
 
         // ランダムクライアント生成実験
         try {
-            // トポロジファイルのパスを入力
             System.out.println("=== UAVシミュレーター ===");
-            System.out.println("ネットワークトポロジファイルのパスを入力してください:");
-            System.out.println("（Enterキーのみを押すとデフォルトトポロジを使用します）");
+
+            // ネットワーク規模の選択
+            System.out.println("ネットワーク規模を選択してください:");
+            System.out.println("1: 小規模（詳細表示: ノードラベル・容量表示あり）");
+            System.out.println("2: 大規模（シンプル表示: 地区タイプで色分け）");
+
+            int scaleChoice = 1;
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    scaleChoice = Integer.parseInt(input);
+                    if (scaleChoice < 1 || scaleChoice > 2) {
+                        System.out.println("無効な選択です。小規模モードを使用します。");
+                        scaleChoice = 1;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。小規模モードを使用します。");
+            }
+
+            boolean isLargeScale = (scaleChoice == 2);
+            String defaultPath = isLargeScale
+                ? "config/topology/koriyama_topology.txt"
+                : TopologyFileReader.DEFAULT_TOPOLOGY_PATH;
+
+            System.out.println("ネットワーク規模: " + (isLargeScale ? "大規模" : "小規模"));
+
+            // トポロジファイルのパスを入力
+            System.out.println("トポロジファイルのパスを入力してください（空欄でデフォルト: " + defaultPath + "）:");
             System.out.print("> ");
 
             String topologyFilePath = reader.readLine().trim();
-
-            // トポロジの初期化
             if (topologyFilePath.isEmpty()) {
-                // デフォルト（ハードコード）
-                System.out.println("デフォルトトポロジを使用します。");
-                boundaryController.setNodeNum(6);
-                beaconCluster = new BeaconCluster(nodeNum);
-                server = new ServerController(nodeNum, beaconCluster);
-            } else {
-                // 外部ファイルから読み込み
-                System.out.println("トポロジファイルを読み込んでいます: " + topologyFilePath);
-                TopologyFileReader.TopologyData topologyData =
-                    TopologyFileReader.readTopologyFile(topologyFilePath);
-
-                // トポロジ情報を表示
-                TopologyFileReader.printTopologyInfo(topologyData);
-
-                // ビーコンとサーバーを初期化
-                boundaryController.setNodeNum(topologyData.nodeCount);
-                beaconCluster = new BeaconCluster(topologyData);
-                server = new ServerController(beaconCluster, topologyData);
+                topologyFilePath = defaultPath;
             }
+
+            // トポロジの初期化（外部ファイルから読み込み）
+            System.out.println("トポロジファイルを読み込んでいます: " + topologyFilePath);
+            TopologyFileReader.TopologyData topologyData =
+                TopologyFileReader.readTopologyFile(topologyFilePath);
+
+            // トポロジ情報を表示
+            TopologyFileReader.printTopologyInfo(topologyData);
+
+            // トポロジ描画オプション
+            System.out.println("トポロジをPNG画像として出力しますか？");
+            System.out.println("1: 出力しない");
+            System.out.println("2: 出力する (output/ディレクトリに保存)");
+
+            int renderChoice = 1;
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    renderChoice = Integer.parseInt(input);
+                }
+            } catch (NumberFormatException e) {
+                // デフォルトのまま
+            }
+
+            if (renderChoice == 2) {
+                renderTopologyImage(topologyFilePath, isLargeScale);
+            }
+
+            // ビーコンとサーバーを初期化
+            boundaryController.setNodeNum(topologyData.nodeCount);
+            beaconCluster = new BeaconCluster(topologyData);
+            server = new ServerController(beaconCluster, topologyData);
 
             // 経路探索アルゴリズムを初期化
             server.initializeRouteSearchers();
@@ -635,22 +656,36 @@ public class BoundaryController {
                 }
             }
 
-            // 標準入力からクライアントの生成回数を取得
-            System.out.println("生成するクライアントの数を入力してください:");
-            int clientCount = 1; // デフォルトは1
-            try {
-                String input = reader.readLine();
-                if (!input.trim().isEmpty()) {
-                    clientCount = Integer.parseInt(input);
-                }
-            } catch (NumberFormatException e) {
-                System.out.println("無効な入力です。クライアント数を1に設定します。");
+            // スケジュールファイルのパスを入力（空ならデフォルト）
+            System.out.println("スケジュールファイルのパスを入力してください（空欄でデフォルト: " + ClientScheduleLoader.DEFAULT_SCHEDULE_PATH + "）:");
+            String schedulePath = reader.readLine().trim();
+            if (schedulePath.isEmpty()) {
+                schedulePath = ClientScheduleLoader.DEFAULT_SCHEDULE_PATH;
             }
 
-            // 指定された回数だけクライアントを生成して処理
-            for (int i = 0; i < clientCount; i++) {
-                System.out.println("クライアント " + (i + 1) + " を生成しています...");
-                client = boundaryController.createRandomClient();
+            // スケジュールファイルを読み込み
+            List<ClientScheduleLoader.ScheduleEntry> schedule;
+            try {
+                schedule = ClientScheduleLoader.load(schedulePath);
+            } catch (IOException e) {
+                System.err.println("スケジュールファイルの読み込みに失敗しました: " + e.getMessage());
+                System.err.println("デフォルトのクライアント設定で続行します。");
+                // フォールバック: デフォルトのクライアント1つ
+                schedule = new ArrayList<>();
+                schedule.add(new ClientScheduleLoader.ScheduleEntry(1, 0, 5, 25, 0));
+            }
+
+            if (schedule.isEmpty()) {
+                System.err.println("スケジュールが空です。終了します。");
+                return;
+            }
+
+            // スケジュールに従ってクライアントを生成して処理
+            for (int i = 0; i < schedule.size(); i++) {
+                ClientScheduleLoader.ScheduleEntry entry = schedule.get(i);
+
+                System.out.println("クライアント " + (i + 1) + "/" + schedule.size() + " を生成しています...");
+                client = boundaryController.createClientFromSchedule(entry);
                 boundaryController.routeRequest(client);
 
                 synchronized (passedClient) {
@@ -678,17 +713,18 @@ public class BoundaryController {
                     // ファイルが空の場合、ヘッダーを追加
                     File file = new File(filePath);
                     if (file.length() == 0) {
-                        writer.write("source,dist,requiredUAVs\n");
+                        writer.write("source,dest,requiredUAVs\n");
                     }
                     // 行を書き込み
-                    writer.write(String.format("%d,%d,%f\n", client.getFlow().getSource().getId(), client.getFlow().getDestination().getId(), client.getFlow().getTheNumberOfUAV()));
+                    writer.write(String.format("%d,%d,%d\n", client.getFlow().getSource().getId(), client.getFlow().getDestination().getId(), (int) client.getFlow().getTheNumberOfUAV()));
                 } catch (IOException e) {
                     System.err.println("ファイル書き込みエラー: " + e.getMessage());
                 }
 
-                // 次のクライアント生成まで30秒待機
-                if (i < clientCount - 1) { // 最後のクライアント以外
-                    Thread.sleep(30000); // 30秒待機
+                // 次のクライアント生成までの待機（スケジュールに従う）
+                if (entry.intervalAfterSec > 0) {
+                    LogManager.getInstance().log("次のクライアント生成まで " + entry.intervalAfterSec + " 秒待機します...");
+                    Thread.sleep(entry.intervalAfterSec * 1000L);
                 }
             }
 
