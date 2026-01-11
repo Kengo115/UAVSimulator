@@ -378,6 +378,13 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                         // キューに投入
                         jobQueue.enqueueJob(job);
                         LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + Arrays.toString(finalPathArray) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
+
+                        // Phase 7-2: 経路割り当て情報を記録
+                        try {
+                            ResultOutputManager.outputRouteAssignment(job, clientId);
+                        } catch (IOException e) {
+                            LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー", e);
+                        }
                     }, delaySeconds, TimeUnit.SECONDS);
 
                     UAV_count++;
@@ -461,6 +468,13 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
 
                 jobQueue.enqueueJob(job);
                 LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " 再割り当てジョブ投入完了 (速度: " + String.format("%.2f", uavSpeed) + "m/s)");
+
+                // Phase 7-2: 経路割り当て情報を記録
+                try {
+                    ResultOutputManager.outputRouteAssignment(job, clientId);
+                } catch (IOException e) {
+                    LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー（再割り当て）", e);
+                }
             }, delaySeconds, TimeUnit.SECONDS);
 
             UAV_count++;
@@ -550,6 +564,19 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                     scheduler.schedule(() -> {
                         currentUAV.setPath(pathArray);
                         server.uav.FlightDataRecorder.recordRoute(currentUAV, getRouteRecordTag());
+
+                        // Phase 7-2: 経路割り当て情報を記録（メモリモード）
+                        try {
+                            ResultOutputManager.outputRouteAssignment(
+                                currentUAV.getId(),
+                                currentUAV.getSource().getId(),
+                                currentUAV.getDistination().getId(),
+                                currentUAV.getPath(),
+                                currentUAV.getClientId()
+                            );
+                        } catch (IOException e) {
+                            LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー（メモリモード）", e);
+                        }
 
                         if (flowCounter[0] < minCapacity) {
                             currentUAV.startTimer();
@@ -731,6 +758,19 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                         Uav currentUAV = client.getFlow().getUav(currentUAVIndex);
                         currentUAV.setPath(assignedPath);
                         server.uav.FlightDataRecorder.recordRoute(currentUAV, getRemainingRouteRecordTag());
+
+                        // Phase 7-2: 経路割り当て情報を記録（メモリモード・再割り当て）
+                        try {
+                            ResultOutputManager.outputRouteAssignment(
+                                currentUAV.getId(),
+                                currentUAV.getSource().getId(),
+                                currentUAV.getDistination().getId(),
+                                currentUAV.getPath(),
+                                currentUAV.getClientId()
+                            );
+                        } catch (IOException e) {
+                            LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー（メモリモード・再割り当て）", e);
+                        }
 
                         if (countOfUAV < minCapacity) {
                             currentUAV.startTimer();

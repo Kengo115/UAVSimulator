@@ -11,6 +11,7 @@ import server.redis.ClientTimeManager;
 import server.redis.UAVJob;
 import server.redis.UAVJobQueue;
 import server.util.LogManager;
+import server.util.ResultOutputManager;
 
 import java.io.IOException;
 import java.util.Queue;
@@ -214,6 +215,13 @@ public class DijkstraRouteSearcher implements RouteSearcher {
                 // キューに投入
                 jobQueue.enqueueJob(job);
                 LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + formatPath(path) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
+
+                // Phase 7-2: 経路割り当て情報を記録
+                try {
+                    ResultOutputManager.outputRouteAssignment(job, clientId);
+                } catch (IOException e) {
+                    LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー", e);
+                }
             }, finalF * 2, TimeUnit.SECONDS);
         }
 

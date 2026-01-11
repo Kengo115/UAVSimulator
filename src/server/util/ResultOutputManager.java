@@ -46,6 +46,11 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputToPajek(Client client, double eps, double Q_allFlow, int ct, Link[][] link, BeaconCluster beaconCluster, int node, int runCounter) throws IOException {
+        // Phase 7-3: 大規模モードではpajek出力をスキップ
+        if (BoundaryController.isLargeScaleMode()) {
+            return;
+        }
+
         Beacon source = client.getFlow().getSource();
         Beacon dist = client.getFlow().getDestination();
 
@@ -102,6 +107,11 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputToExcel(Client client, int ct, Link[][] link, int node, int runCounter, double inflow) throws IOException {
+        // Phase 7-3: 大規模モードではflow出力をスキップ
+        if (BoundaryController.isLargeScaleMode()) {
+            return;
+        }
+
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("flow", runCounter);
         // ファイル名を作成
@@ -168,6 +178,11 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputToTxt(Client client, int ct, Link[][] link, int node, int runCounter, double[][] pressureCoefficient, double[] tubePressure, double inflow) throws IOException {
+        // Phase 7-3: 大規模モードではstatus出力をスキップ
+        if (BoundaryController.isLargeScaleMode()) {
+            return;
+        }
+
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("status", runCounter);
         // ファイル名を作成
@@ -225,6 +240,11 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputIterationSourcePressure(int iteration, double sourcePressure, int runCounter) throws IOException {
+        // Phase 7-3: 大規模モードではiteration出力をスキップ
+        if (BoundaryController.isLargeScaleMode()) {
+            return;
+        }
+
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("iteration/sourcePressure", runCounter);
         // ファイル名を作成（手法ごとに1つのファイル）
@@ -257,6 +277,11 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputIterationFlow(int iteration, double flowValue, int runCounter) throws IOException {
+        // Phase 7-3: 大規模モードではiteration出力をスキップ
+        if (BoundaryController.isLargeScaleMode()) {
+            return;
+        }
+
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("iteration/flow", runCounter);
         // ファイル名を作成（手法ごとに1つのファイル）
@@ -290,6 +315,11 @@ public class ResultOutputManager {
      * @throws IOException 入出力例外
      */
     public static void outputRouteToExcel(Client client, int ct, Link[][] link, int runCounter) throws IOException {
+        // Phase 7-3: 大規模モードではrute出力をスキップ（小規模テスト用のハードコードされた経路出力）
+        if (BoundaryController.isLargeScaleMode()) {
+            return;
+        }
+
         // 現在の経路探索手法に基づいてディレクトリパスを作成
         String dirPath = getDirectoryPath("rute", runCounter);
         // ファイル名を作成
@@ -494,5 +524,57 @@ public class ResultOutputManager {
         }
 
         LogManager.getInstance().log("Phase 3b-7: フローサマリーをファイルに保存しました (" + jobs.size() + "件)");
+    }
+
+    /**
+     * Phase 7-2: UAVの経路割り当て情報を出力する
+     * @param uavId UAV ID
+     * @param sourceId 出発ノードID
+     * @param destId 到着ノードID
+     * @param path 経路配列
+     * @param runCounter 実行カウンター（クライアント番号）
+     * @throws IOException 入出力例外
+     */
+    public static void outputRouteAssignment(int uavId, int sourceId, int destId, int[] path, int runCounter) throws IOException {
+        // 現在の経路探索手法に基づいてディレクトリパスを作成
+        String dirPath = getDirectoryPath("route", runCounter);
+        String filename = dirPath + "/route.csv";
+
+        // ディレクトリが存在しない場合は作成
+        File dir = new File(dirPath);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+
+        // 経路を矢印形式に変換 (0->3->5)
+        String pathString = Arrays.stream(path)
+            .mapToObj(String::valueOf)
+            .collect(Collectors.joining("->"));
+
+        try (FileWriter writer = new FileWriter(filename, true)) {
+            File file = new File(filename);
+            if (file.length() == 0) {
+                writer.write("uav_id,source,dest,path\n");
+            }
+            writer.write(String.format("%d,%d,%d,%s\n", uavId, sourceId, destId, pathString));
+        }
+
+        LogManager.getInstance().log("Phase 7-2: UAV" + uavId + " 経路割り当て記録 (" + pathString + ")");
+    }
+
+    /**
+     * Phase 7-2: UAVJobから経路割り当て情報を出力する
+     * @param job UAVジョブ
+     * @param runCounter 実行カウンター（クライアント番号）
+     * @throws IOException 入出力例外
+     */
+    public static void outputRouteAssignment(UAVJob job, int runCounter) throws IOException {
+        outputRouteAssignment(
+            job.getUavId(),
+            job.getSourceBeaconId(),
+            job.getDestinationBeaconId(),
+            job.getPath(),
+            runCounter
+        );
     }
 }
