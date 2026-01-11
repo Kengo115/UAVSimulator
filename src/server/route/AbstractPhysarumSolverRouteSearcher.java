@@ -328,7 +328,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         while (UAV_count < requiredUAVs && flowAvailable) {
             min_Flow = 100;
 
-            int[] path = new int[20];
+            int[] path = new int[40];
             int pathIndex = 0;
             path[pathIndex++] = startNode;
             maxPathIndex = pathIndex;
@@ -532,7 +532,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             int previousUAVCount = UAV_count;
             min_Flow = 100;
 
-            int[] path = new int[20];
+            int[] path = new int[40];
             int pathIndex = 0;
             path[pathIndex++] = startNode;
 
@@ -696,7 +696,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
      */
     protected void adjustRemainingFlow(int needUAV, int startNode, int goalNode, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
         int countOfUAV = 0;
-        int[] path = new int[20]; // path を再利用
+        int[] path = new int[40]; // path を再利用
         int pathIndex;
 
         while (countOfUAV < needUAV) {

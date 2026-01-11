@@ -1,0 +1,41 @@
+{
+  "seed": 12345,
+  "duration_minutes": 3,
+  "snapshot_interval_sec": 5,
+  "topology": "config/topology/koriyama_topology.txt",
+  "route_search_method": "Bisectional",
+  "phases": {
+    "phase1_generation": {
+      "min_uav_count": 1,
+      "max_uav_count": 3,
+      "min_interval_sec": 0.5,
+      "max_interval_sec": 1.5,
+      "congestion_threshold_percent": 20.0,
+      "min_duration_sec": 20
+    },
+    "phase2_stable": {
+      "min_uav_count": 1,
+      "max_uav_count": 3,
+      "duration_minutes": 1,
+      "dynamic_interval_enabled": true,
+      "target_congestion_percent": 50.0,
+      "min_interval_sec": 0.5,
+      "max_interval_sec": 5.0
+    },
+    "phase3_congestion": {
+      "min_uav_count": 3,
+      "max_uav_count": 5,
+      "duration_minutes": 1,
+      "min_interval_sec": 0.3,
+      "max_interval_sec": 1.0
+    },
+    "phase4_recovery": {
+      "min_uav_count": 1,
+      "max_uav_count": 3,
+      "dynamic_interval_enabled": true,
+      "target_congestion_percent": 50.0,
+      "min_interval_sec": 0.5,
+      "max_interval_sec": 5.0
+    }
+  }
+}

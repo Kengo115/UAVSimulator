@@ -11,6 +11,7 @@ import server.network.TopologyFileReader;
 import server.config.SimulationConfig;
 import server.redis.*;
 import server.scheduler.FlightScheduler;
+import server.scheduler.PhaseController;
 import server.scheduler.RandomClientGenerator;
 import server.uav.UAVFlyScheduler;
 import server.util.LinkStatusRecorder;
@@ -757,17 +758,18 @@ public class BoundaryController {
                 }
             }
 
-            // Phase 7-8: クライアント生成モードを選択
+            // Phase 7-8/7-9: クライアント生成モードを選択
             System.out.println("\nクライアント生成モードを選択してください:");
             System.out.println("1: スケジュールファイルから読み込み");
-            System.out.println("2: ランダム生成（Phase 7-8）");
+            System.out.println("2: ランダム生成（固定数）");
+            System.out.println("3: 4フェーズ制御（Phase 7-9: 動的生成）");
 
             int clientGenMode = 1;
             try {
                 String input = reader.readLine();
                 if (!input.trim().isEmpty()) {
                     clientGenMode = Integer.parseInt(input);
-                    if (clientGenMode < 1 || clientGenMode > 2) {
+                    if (clientGenMode < 1 || clientGenMode > 3) {
                         System.out.println("無効な選択です。スケジュールファイルを使用します。");
                         clientGenMode = 1;
                     }
@@ -776,12 +778,118 @@ public class BoundaryController {
                 System.out.println("無効な入力です。スケジュールファイルを使用します。");
             }
 
-            List<ClientScheduleLoader.ScheduleEntry> schedule;
+            List<ClientScheduleLoader.ScheduleEntry> schedule = new ArrayList<>();
             RandomClientGenerator randomGenerator = null;
-            boolean useRandomMode = (clientGenMode == 2);
+            boolean usePhaseControl = (clientGenMode == 3);
 
-            if (useRandomMode) {
-                // Phase 7-8: ランダム生成モード
+            if (clientGenMode == 3) {
+                // Phase 7-9: 4フェーズ制御モード
+                if (!SimulationConfig.isLoaded()) {
+                    System.out.println("⚠ 設定ファイルが読み込まれていません。デフォルト設定ファイルを読み込みます。");
+                    SimulationConfig.loadDefault();
+                    applySimulationConfig();
+                }
+
+                System.out.println("\n=== 4フェーズ制御モード ===");
+                SimulationConfig config = SimulationConfig.getInstance();
+                System.out.println("シミュレーション時間: " + config.getDurationMinutes() + "分");
+                System.out.println("Phase1(生成期): 混雑率≥" + config.getPhases().getPhase1().getCongestionThresholdPercent() + "%で遷移");
+                System.out.println("Phase2(安定期): " + config.getPhases().getPhase2().getDurationMinutes() + "分間、目標混雑率" + config.getPhases().getPhase2().getTargetCongestionPercent() + "%");
+                System.out.println("Phase3(混雑期): " + config.getPhases().getPhase3().getDurationMinutes() + "分間");
+                System.out.println("Phase4(回復期): シミュレーション終了まで、目標混雑率" + config.getPhases().getPhase4().getTargetCongestionPercent() + "%");
+
+                long seed = config.getSeed();
+                randomGenerator = new RandomClientGenerator(seed, nodeNum, beaconCluster);
+
+                // PhaseControllerを初期化
+                PhaseController phaseController = PhaseController.getInstance();
+                phaseController.initialize(config, randomGenerator, entry -> {
+                    // コールバック（必要に応じて使用）
+                });
+
+                // LinkStatusRecorderを開始
+                LinkStatusRecorder.getInstance().startSimulation();
+
+                // PhaseControllerを開始
+                phaseController.start();
+
+                System.out.println("✓ 4フェーズ制御を開始しました (seed=" + seed + ")");
+
+                // フェーズ制御モードでのクライアント生成ループ
+                long simulationEndTime = System.currentTimeMillis() + config.getDurationMillis();
+                int generatedCount = 0;
+                boolean timerStarted = false;
+
+                while (phaseController.isRunning() && System.currentTimeMillis() < simulationEndTime) {
+                    // クライアントを生成
+                    ClientScheduleLoader.ScheduleEntry entry = phaseController.generateNextClient();
+                    if (entry != null) {
+                        generatedCount++;
+                        System.out.println("クライアント #" + generatedCount + " を生成 (Phase: " +
+                                          phaseController.getCurrentPhase().getName() + ", 間隔: " +
+                                          String.format("%.1f", phaseController.getCurrentIntervalSec()) + "s)");
+
+                        client = boundaryController.createClientFromSchedule(entry);
+                        boundaryController.routeRequest(client);
+
+                        synchronized (passedClient) {
+                            passedClient.add(client);
+                        }
+
+                        if (!timerStarted) {
+                            clientController.startTimer();
+                            timerStarted = true;
+                        }
+
+                        UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeNum);
+
+                        // Phase 7-1: クライアント情報をファイルに記録
+                        String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
+                        String clientDirPath = "src/result/" + scaleDir + "/" + currentMethod.getName() + "/client";
+                        String clientFilePath = clientDirPath + "/client.txt";
+
+                        File clientDir = new File(clientDirPath);
+                        if (!clientDir.exists()) {
+                            clientDir.mkdirs();
+                        }
+
+                        try (FileWriter writer = new FileWriter(clientFilePath, true)) {
+                            File file = new File(clientFilePath);
+                            if (file.length() == 0) {
+                                writer.write("source,dest,requiredUAVs\n");
+                            }
+                            writer.write(String.format("%d,%d,%d\n",
+                                client.getFlow().getSource().getId(),
+                                client.getFlow().getDestination().getId(),
+                                (int) client.getFlow().getTheNumberOfUAV()));
+                        } catch (IOException e) {
+                            System.err.println("クライアント情報ファイル書き込みエラー: " + e.getMessage());
+                        }
+
+                        // 次の生成まで待機
+                        long waitMs = (long) (entry.intervalAfterSec * 1000);
+                        if (waitMs > 0) {
+                            Thread.sleep(waitMs);
+                        }
+                    }
+                }
+
+                // フェーズ制御を停止
+                phaseController.stop();
+                LinkStatusRecorder.getInstance().stopSimulation();
+
+                // Phase 7-10: シミュレーションサマリーを出力
+                long totalElapsedMs = System.currentTimeMillis() - (simulationEndTime - config.getDurationMillis());
+                LogManager.getInstance().logSimulationSummary(generatedCount, totalElapsedMs);
+
+                LogManager.getInstance().log("Phase 7-9: 4フェーズ制御完了 (生成クライアント数=" + generatedCount + ")");
+                System.out.println("\n✓ シミュレーション完了 (生成クライアント数: " + generatedCount + ")");
+
+                // フェーズ制御モードでは以降のスケジュール処理をスキップ
+                schedule = new ArrayList<>();
+
+            } else if (clientGenMode == 2) {
+                // Phase 7-8: ランダム生成モード（固定数）
                 System.out.println("\n=== ランダム生成モード ===");
 
                 // シード値の取得（設定ファイルまたは入力）
@@ -848,12 +956,14 @@ public class BoundaryController {
                 }
             }
 
-            if (schedule.isEmpty()) {
+            // フェーズ制御モードの場合はスケジュール処理をスキップ
+            if (usePhaseControl) {
+                // 既に処理完了
+            } else if (schedule.isEmpty()) {
                 System.err.println("スケジュールが空です。終了します。");
                 return;
-            }
-
-            // スケジュールに従ってクライアントを生成して処理
+            } else {
+                // スケジュールに従ってクライアントを生成して処理
             for (int i = 0; i < schedule.size(); i++) {
                 ClientScheduleLoader.ScheduleEntry entry = schedule.get(i);
 
@@ -904,6 +1014,9 @@ public class BoundaryController {
             }
 
             LogManager.getInstance().log("すべてのクライアント生成と処理が完了しました。");
+            } // else ブロック終了
+
+            if (!usePhaseControl) {
             if (flyingUavQueue.isEmpty() && uavQueue.isEmpty()) {
                 UAVFlyScheduler.stopFlyUAVUpdates(clientController);
             }
@@ -927,6 +1040,7 @@ public class BoundaryController {
                 LogManager.getInstance().log("ログを閉じます。");
                 LogManager.getInstance().close();
             }));
+            } // if (!usePhaseControl) 終了
 
         } catch (IOException e) {
             LogManager.getInstance().error("IOエラーが発生しました", e);

@@ -152,4 +152,49 @@ public class LogManager {
             logWriter = null;
         }
     }
+
+    /**
+     * Phase 7-10: メモリ使用量をログに記録する
+     */
+    public void logMemoryUsage() {
+        Runtime runtime = Runtime.getRuntime();
+        long totalMemory = runtime.totalMemory();
+        long freeMemory = runtime.freeMemory();
+        long usedMemory = totalMemory - freeMemory;
+        long maxMemory = runtime.maxMemory();
+
+        String message = String.format(
+            "Phase 7-10 [メモリ]: 使用=%dMB, 空き=%dMB, 合計=%dMB, 最大=%dMB (使用率=%.1f%%)",
+            usedMemory / (1024 * 1024),
+            freeMemory / (1024 * 1024),
+            totalMemory / (1024 * 1024),
+            maxMemory / (1024 * 1024),
+            (double) usedMemory / totalMemory * 100
+        );
+
+        log(message);
+    }
+
+    /**
+     * Phase 7-10: メモリ使用量を取得する（MB単位）
+     * @return 使用中メモリ（MB）
+     */
+    public long getUsedMemoryMB() {
+        Runtime runtime = Runtime.getRuntime();
+        return (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024);
+    }
+
+    /**
+     * Phase 7-10: 統計サマリーをログに出力
+     * @param clientCount 生成クライアント数
+     * @param elapsedMs 経過時間（ミリ秒）
+     */
+    public void logSimulationSummary(int clientCount, long elapsedMs) {
+        log("=== Phase 7-10 シミュレーションサマリー ===");
+        log("  生成クライアント数: " + clientCount);
+        log("  経過時間: " + (elapsedMs / 1000) + "秒 (" + (elapsedMs / 60000) + "分)");
+        log("  平均生成間隔: " + String.format("%.2f", (double) elapsedMs / clientCount / 1000) + "秒/クライアント");
+        logMemoryUsage();
+        log("==========================================");
+    }
 }
