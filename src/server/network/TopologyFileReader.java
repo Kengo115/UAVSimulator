@@ -18,11 +18,17 @@ public class TopologyFileReader {
         public final int id;
         public final double x;
         public final double y;
+        public final int districtType; // 0=点在地区, 1=集中地区
 
         public NodeInfo(int id, double x, double y) {
+            this(id, x, y, 0);
+        }
+
+        public NodeInfo(int id, double x, double y, int districtType) {
             this.id = id;
             this.x = x;
             this.y = y;
+            this.districtType = districtType;
         }
     }
 
@@ -95,20 +101,21 @@ public class TopologyFileReader {
                         nodeCount = Integer.parseInt(parts[1]);
 
                     } else if (parts[0].equals("NODE")) {
-                        // ノード情報の読み込み
-                        if (parts.length != 4) {
+                        // ノード情報の読み込み（4列または5列対応）
+                        if (parts.length < 4 || parts.length > 5) {
                             throw new IOException("NODE行のフォーマットが不正です (行 " + lineNumber + "): " + line);
                         }
                         int id = Integer.parseInt(parts[1]);
                         double x = Double.parseDouble(parts[2]);
                         double y = Double.parseDouble(parts[3]);
+                        int districtType = (parts.length >= 5) ? Integer.parseInt(parts[4]) : 0;
 
                         // 座標の範囲チェック
                         if (x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) {
                             throw new IOException("座標は0.0～1.0の範囲である必要があります (行 " + lineNumber + "): " + line);
                         }
 
-                        nodes.add(new NodeInfo(id, x, y));
+                        nodes.add(new NodeInfo(id, x, y, districtType));
 
                     } else if (parts[0].equals("LINK")) {
                         // リンク情報の読み込み

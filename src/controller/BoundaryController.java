@@ -384,6 +384,65 @@ public class BoundaryController {
         return completionListener;
     }
 
+    /**
+     * トポロジをPNG画像として出力する
+     * Pythonスクリプトを呼び出して描画を行う
+     *
+     * @param topologyFilePath トポロジファイルのパス
+     * @param isLargeScale 大規模モードかどうか（true=シンプル表示、false=詳細表示）
+     */
+    private static void renderTopologyImage(String topologyFilePath, boolean isLargeScale) {
+        try {
+            // 出力ファイル名を生成
+            String baseName = new File(topologyFilePath).getName();
+            if (baseName.contains(".")) {
+                baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+            }
+            String outputPath = "output/topology_" + baseName + ".png";
+
+            System.out.println("トポロジ画像を生成しています...");
+            System.out.println("  モード: " + (isLargeScale ? "シンプル（大規模向け）" : "詳細（小規模向け）"));
+
+            // Pythonスクリプトを実行（venv優先、なければシステムPython）
+            String pythonCmd = new File(".venv/bin/python").exists() ? ".venv/bin/python" : "python3";
+            String modeArg = isLargeScale ? "--simple" : "--detailed";
+            ProcessBuilder pb = new ProcessBuilder(
+                pythonCmd,
+                "scripts/plot_topology.py",
+                topologyFilePath,
+                outputPath,
+                modeArg
+            );
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            // 出力を読み取り
+            try (BufferedReader processReader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = processReader.readLine()) != null) {
+                    System.out.println("  " + line);
+                }
+            }
+
+            int exitCode = process.waitFor();
+            if (exitCode == 0) {
+                System.out.println("トポロジ画像を保存しました: " + outputPath);
+            } else {
+                System.err.println("トポロジ画像の生成に失敗しました (exit code: " + exitCode + ")");
+                System.err.println("必要なPythonライブラリがインストールされているか確認してください:");
+                System.err.println("  pip install matplotlib networkx");
+            }
+
+        } catch (IOException | InterruptedException e) {
+            System.err.println("トポロジ画像の生成中にエラーが発生しました: " + e.getMessage());
+            System.err.println("Python3がインストールされているか確認してください。");
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
     public void routeRequest(Client client) throws IOException {
         // Pajekファイルにネットワークトポロジーを出力
         server.nodeConfigureToPajek(filePath, client, beaconCluster);
@@ -431,14 +490,41 @@ public class BoundaryController {
 
         // ランダムクライアント生成実験
         try {
-            // トポロジファイルのパスを入力
             System.out.println("=== UAVシミュレーター ===");
-            System.out.println("トポロジファイルのパスを入力してください（空欄でデフォルト: " + TopologyFileReader.DEFAULT_TOPOLOGY_PATH + "）:");
+
+            // ネットワーク規模の選択
+            System.out.println("ネットワーク規模を選択してください:");
+            System.out.println("1: 小規模（詳細表示: ノードラベル・容量表示あり）");
+            System.out.println("2: 大規模（シンプル表示: 地区タイプで色分け）");
+
+            int scaleChoice = 1;
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    scaleChoice = Integer.parseInt(input);
+                    if (scaleChoice < 1 || scaleChoice > 2) {
+                        System.out.println("無効な選択です。小規模モードを使用します。");
+                        scaleChoice = 1;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。小規模モードを使用します。");
+            }
+
+            boolean isLargeScale = (scaleChoice == 2);
+            String defaultPath = isLargeScale
+                ? "config/topology/koriyama_topology.txt"
+                : TopologyFileReader.DEFAULT_TOPOLOGY_PATH;
+
+            System.out.println("ネットワーク規模: " + (isLargeScale ? "大規模" : "小規模"));
+
+            // トポロジファイルのパスを入力
+            System.out.println("トポロジファイルのパスを入力してください（空欄でデフォルト: " + defaultPath + "）:");
             System.out.print("> ");
 
             String topologyFilePath = reader.readLine().trim();
             if (topologyFilePath.isEmpty()) {
-                topologyFilePath = TopologyFileReader.DEFAULT_TOPOLOGY_PATH;
+                topologyFilePath = defaultPath;
             }
 
             // トポロジの初期化（外部ファイルから読み込み）
@@ -448,6 +534,25 @@ public class BoundaryController {
 
             // トポロジ情報を表示
             TopologyFileReader.printTopologyInfo(topologyData);
+
+            // トポロジ描画オプション
+            System.out.println("トポロジをPNG画像として出力しますか？");
+            System.out.println("1: 出力しない");
+            System.out.println("2: 出力する (output/ディレクトリに保存)");
+
+            int renderChoice = 1;
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    renderChoice = Integer.parseInt(input);
+                }
+            } catch (NumberFormatException e) {
+                // デフォルトのまま
+            }
+
+            if (renderChoice == 2) {
+                renderTopologyImage(topologyFilePath, isLargeScale);
+            }
 
             // ビーコンとサーバーを初期化
             boundaryController.setNodeNum(topologyData.nodeCount);
