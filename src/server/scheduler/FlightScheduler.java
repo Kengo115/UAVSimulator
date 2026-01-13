@@ -137,8 +137,9 @@ public class FlightScheduler {
         int fromNode = path[linkIndex];
         int toNode = path[linkIndex + 1];
 
-        // Phase 7-4: 待機解除時は待機終了を記録
-        if (job.getTotalWaitingTime() > 0) {
+        // Phase 7-11: 待機解除時は待機終了を記録
+        // 注: getTotalWaitingTime()ではなくgetWaitingStartTime()で「現在待機中か」を判定
+        if (job.getWaitingStartTime() > 0) {
             LinkStatusRecorder.getInstance().onWaitingEnd(fromNode, toNode);
         }
 
@@ -644,6 +645,42 @@ public class FlightScheduler {
         int poolSize = scheduler.getCorePoolSize();
         int active = scheduler.getActiveCount();
         return poolSize > 0 ? (double) active / poolSize : 0.0;
+    }
+
+    /**
+     * Phase 7-11: 全UAV飛行完了判定
+     * 飛行中UAVと待機中UAVが両方0の場合にtrueを返す
+     *
+     * @return 全UAVが飛行完了している場合true
+     */
+    public boolean isAllFlightsCompleted() {
+        int flying = activeFlights.get();
+        int waiting = waitingManager.getTotalWaitingCount();
+        int pathWaiting = pathWaitingManager != null ? pathWaitingManager.getTotalWaitingCount() : 0;
+
+        boolean completed = (flying == 0 && waiting == 0 && pathWaiting == 0);
+
+        if (completed) {
+            LogManager.getInstance().log(String.format(
+                "Phase 7-11: 全UAV飛行完了確認 (飛行中=%d, 待機中=%d, 経路待ち=%d, 完了済み=%d)",
+                flying, waiting, pathWaiting, completedFlights.get()
+            ));
+        }
+
+        return completed;
+    }
+
+    /**
+     * Phase 7-11: 現在の飛行状況を取得
+     * @return [飛行中, 待機中, 経路待ち, 完了済み]
+     */
+    public int[] getFlightStatus() {
+        return new int[] {
+            activeFlights.get(),
+            waitingManager.getTotalWaitingCount(),
+            pathWaitingManager != null ? pathWaitingManager.getTotalWaitingCount() : 0,
+            completedFlights.get()
+        };
     }
 
     /**

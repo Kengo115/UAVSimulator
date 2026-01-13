@@ -35,6 +35,10 @@ public class LinkStatusRecorder {
     private int snapshotIntervalSeconds = 10;
     private int snapshotCount = 0;
 
+    // 混雑率記録用
+    private String congestionRateFilePath = null;
+    private boolean congestionRateHeaderWritten = false;
+
     private LinkStatusRecorder() {
     }
 
@@ -54,6 +58,8 @@ public class LinkStatusRecorder {
         headerWritten = false;
         outputFilePath = null;
         snapshotCount = 0;
+        congestionRateFilePath = null;
+        congestionRateHeaderWritten = false;
 
         // 全リンクの状態をリセット
         resetAllLinkStatus();
@@ -118,12 +124,43 @@ public class LinkStatusRecorder {
 
         try {
             writeSnapshotToCSV(timestamp);
+
+            // 混雑率をCSVに記録（10秒ごと）
+            writeCongestionRateToCSV(snapshotCount * snapshotIntervalSeconds);
+
             LogManager.getInstance().log(String.format(
                 "Phase 7-5: スナップショット #%d 記録 (timestamp=%dms, 平均負荷率=%.2f%%, 混雑リンク率=%.2f%%)",
                 snapshotCount, timestamp, getAverageLoadRate(), getCongestedLinkRate()
             ));
         } catch (IOException e) {
             LogManager.getInstance().error("Phase 7-5: スナップショット記録エラー", e);
+        }
+    }
+
+    /**
+     * 混雑率をCSVファイルに追記
+     * @param timeSeconds シミュレーション開始からの経過時間（秒）
+     */
+    private synchronized void writeCongestionRateToCSV(int timeSeconds) throws IOException {
+        if (congestionRateFilePath == null) {
+            BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
+            String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
+            String dirPath = "src/result/" + scaleDir + "/" + method.getName() + "/link_status";
+
+            File dir = new File(dirPath);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+            congestionRateFilePath = dirPath + "/congestion_rate.csv";
+        }
+
+        try (FileWriter writer = new FileWriter(congestionRateFilePath, true)) {
+            if (!congestionRateHeaderWritten) {
+                writer.write("time,AverageLoadRate,CongestedLinkRate\n");
+                congestionRateHeaderWritten = true;
+            }
+            writer.write(String.format("%d,%.2f,%.2f\n",
+                timeSeconds, getAverageLoadRate(), getCongestedLinkRate()));
         }
     }
 
@@ -267,8 +304,9 @@ public class LinkStatusRecorder {
 
     /**
      * CSVファイルに書き込む
+     * @param timestampMs タイムスタンプ（ミリ秒）
      */
-    private synchronized void writeToCSV(long timestamp, int fromNode, int toNode,
+    private synchronized void writeToCSV(long timestampMs, int fromNode, int toNode,
                                           int flying, int waiting, double capacity,
                                           double loadRate, String event) throws IOException {
         if (outputFilePath == null) {
@@ -284,13 +322,16 @@ public class LinkStatusRecorder {
             outputFilePath = dirPath + "/link_status.csv";
         }
 
+        // ミリ秒を秒に変換
+        double timestampSec = timestampMs / 1000.0;
+
         try (FileWriter writer = new FileWriter(outputFilePath, true)) {
             if (!headerWritten) {
                 writer.write("timestamp,link_from,link_to,flying_count,waiting_count,capacity,load_rate,event\n");
                 headerWritten = true;
             }
-            writer.write(String.format("%d,%d,%d,%d,%d,%.1f,%.2f,%s\n",
-                    timestamp, fromNode, toNode, flying, waiting, capacity, loadRate, event));
+            writer.write(String.format("%.2f,%d,%d,%d,%d,%.1f,%.2f,%s\n",
+                    timestampSec, fromNode, toNode, flying, waiting, capacity, loadRate, event));
         }
     }
 
@@ -386,6 +427,8 @@ public class LinkStatusRecorder {
         outputFilePath = null;
         headerWritten = false;
         snapshotCount = 0;
+        congestionRateFilePath = null;
+        congestionRateHeaderWritten = false;
 
         // 全リンクの状態をリセット
         resetAllLinkStatus();

@@ -577,4 +577,89 @@ public class ResultOutputManager {
             runCounter
         );
     }
+
+    /**
+     * 全クライアントの飛行データを集計して平均値を出力する
+     * 出力: time/ave_flightStatus.csv
+     */
+    public static void outputAverageFlightStatus() {
+        BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
+        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
+        String timeDirPath = "src/result/" + scaleDir + "/" + method.getName() + "/time";
+
+        File timeDir = new File(timeDirPath);
+        if (!timeDir.exists() || !timeDir.isDirectory()) {
+            LogManager.getInstance().log("警告: timeディレクトリが存在しません: " + timeDirPath);
+            return;
+        }
+
+        // 集計用変数
+        double totalFlightTime = 0;
+        double totalWaitingTime = 0;
+        double totalDistance = 0;
+        int uavCount = 0;
+
+        // 全clientディレクトリを走査
+        File[] clientDirs = timeDir.listFiles((dir, name) -> name.startsWith("client") && new File(dir, name).isDirectory());
+        if (clientDirs == null || clientDirs.length == 0) {
+            LogManager.getInstance().log("警告: clientディレクトリが見つかりません: " + timeDirPath);
+            return;
+        }
+
+        for (File clientDir : clientDirs) {
+            File flightTimesFile = new File(clientDir, "flight_times.csv");
+            if (!flightTimesFile.exists()) {
+                continue;
+            }
+
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(flightTimesFile))) {
+                String line;
+                boolean isHeader = true;
+                while ((line = reader.readLine()) != null) {
+                    if (isHeader) {
+                        isHeader = false;
+                        continue;
+                    }
+                    String[] parts = line.split(",");
+                    if (parts.length >= 10) {
+                        // flightTime (index 2), waitingTime (index 4), distance (index 9)
+                        totalFlightTime += Double.parseDouble(parts[2]);
+                        totalWaitingTime += Double.parseDouble(parts[4]);
+                        totalDistance += Double.parseDouble(parts[9]);
+                        uavCount++;
+                    }
+                }
+            } catch (IOException | NumberFormatException e) {
+                LogManager.getInstance().log("警告: ファイル読み込みエラー: " + flightTimesFile.getPath() + " - " + e.getMessage());
+            }
+        }
+
+        if (uavCount == 0) {
+            LogManager.getInstance().log("警告: 集計対象のUAVデータがありません");
+            return;
+        }
+
+        // 平均値を計算
+        double avgFlightTime = totalFlightTime / uavCount;
+        double avgWaitingTime = totalWaitingTime / uavCount;
+        double avgDistance = totalDistance / uavCount;
+
+        // 結果をファイルに出力
+        String outputPath = timeDirPath + "/ave_flightStatus.csv";
+        try (FileWriter writer = new FileWriter(outputPath)) {
+            writer.write("metric,value,unit\n");
+            writer.write(String.format("avg_flight_time,%.2f,seconds\n", avgFlightTime));
+            writer.write(String.format("avg_waiting_time,%.2f,seconds\n", avgWaitingTime));
+            writer.write(String.format("avg_distance,%.2f,meters\n", avgDistance));
+            writer.write(String.format("total_uav_count,%d,count\n", uavCount));
+            writer.write(String.format("total_client_count,%d,count\n", clientDirs.length));
+        } catch (IOException e) {
+            LogManager.getInstance().log("エラー: 平均飛行ステータス出力失敗: " + e.getMessage());
+            return;
+        }
+
+        LogManager.getInstance().log(String.format(
+            "平均飛行ステータス出力完了: UAV数=%d, 平均飛行時間=%.2fs, 平均待機時間=%.2fs, 平均距離=%.2fm",
+            uavCount, avgFlightTime, avgWaitingTime, avgDistance));
+    }
 }

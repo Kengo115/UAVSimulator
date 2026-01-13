@@ -623,66 +623,95 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     }
 
     /**
-     * 深さ優先探索で経路を探索する
+     * 幅優先探索で最短経路を探索する
      * @param startNode 開始ノード
-     * @param currentNode 現在のノード
+     * @param currentNode 現在のノード（互換性のため、startNodeと同じ値を渡す）
      * @param goalNode 目標ノード
-     * @param path 経路
-     * @param pathIndex 経路インデックス
-     * @param passedFlow 通過フロー
-     * @return フロー
+     * @param path 経路（結果を格納）
+     * @param pathIndex 経路インデックス（互換性のため、1を渡す）
+     * @param passedFlow 通過フロー（互換性のため、0を渡す）
+     * @return フロー（経路上の最小フロー）
      */
     protected int explorePath(int startNode, int currentNode, int goalNode, int[] path, int pathIndex, int passedFlow) {
-        // ゴールノードに到達したら流量を返して経路探索を終了
-        if (currentNode == goalNode) {
-            maxPathIndex = pathIndex; // 正しい最大経路長を記録
-            return passedFlow;
-        }
+        // BFSで最短経路を探索
+        int[] parent = new int[node];
+        Arrays.fill(parent, -1);
+        parent[startNode] = startNode; // 自分自身を親として開始点をマーク
 
-        // `maxPathIndex` を `pathIndex` と比較して更新
-        if (pathIndex > maxPathIndex) {
-            maxPathIndex = pathIndex;
-        }
+        java.util.Queue<Integer> queue = new java.util.LinkedList<>();
+        queue.add(startNode);
 
-        // 次のノードを探索し、経路を進む
-        for (int nextNode = 0; nextNode < node; nextNode++) {
-            if (adjMatrix[currentNode][nextNode] == 1 && tubeFlow[currentNode][nextNode] > 0) {
-                int flow = tubeFlow[currentNode][nextNode]; // 現在ノード間の流量
+        boolean found = false;
 
-                // 最小フローの計算
-                int prevMinFlow = min_Flow;  // バックトラックのために保存
-                min_Flow = (passedFlow == 0) ? flow : Math.min(min_Flow, flow);
+        while (!queue.isEmpty() && !found) {
+            int current = queue.poll();
 
-                // 経路に次のノードを追加
-                path[pathIndex] = nextNode;
+            for (int next = 0; next < node; next++) {
+                if (parent[next] == -1 && adjMatrix[current][next] == 1 && tubeFlow[current][next] > 0) {
+                    parent[next] = current;
 
-                // ゴールに到達した場合、`tubeFlow` を減算
-                if (nextNode == goalNode && min_Flow > 0) {
-                    int nodeA = startNode;
-                    for (int i = 0; i <= pathIndex; i++) {
-                        int nodeB = path[i];
-                        tubeFlow[nodeA][nodeB] -= min_Flow;
-                        Flow_Capacity[nodeA][nodeB] -= min_Flow;
-
-                        if (tubeFlow[nodeA][nodeB] == 0) {
-                            adjMatrix[nodeA][nodeB] = 0;
-                        }
-                        nodeA = nodeB;
+                    if (next == goalNode) {
+                        found = true;
+                        break;
                     }
-                }
 
-                // 再帰的に経路を探索
-                int resultFlow = explorePath(startNode, nextNode, goalNode, path, pathIndex + 1, min_Flow);
-                if (resultFlow > 0) {
-                    return resultFlow; // 成功した場合は流量を返す
+                    queue.add(next);
                 }
-
-                // バックトラック処理
-                min_Flow = prevMinFlow;  // 元の min_Flow を復元
             }
         }
 
-        return 0; // 失敗した場合、流量0を返す
+        if (!found) {
+            return 0; // 経路が見つからない
+        }
+
+        // 経路を復元（ゴールからスタートへ逆順にたどる）
+        java.util.List<Integer> pathList = new java.util.ArrayList<>();
+        int current = goalNode;
+        while (current != startNode) {
+            pathList.add(0, current); // 先頭に追加
+            current = parent[current];
+        }
+
+        // 経路長チェック（path[0]にはstartNodeが既に入っているので、pathList.size() + 1が実際の経路長）
+        if (pathList.size() + 1 > path.length) {
+            LogManager.getInstance().log("警告: 経路長(" + (pathList.size() + 1) + ")が上限(" + path.length + ")を超えています");
+            return 0;
+        }
+
+        // 経路をpath配列にコピー（path[0]はstartNodeのまま、path[1]以降にpathListをコピー）
+        // 注: runUAVFlowRedisでpath[0] = startNode, pathIndex = 1としてこのメソッドを呼んでいる
+        for (int i = 0; i < pathList.size(); i++) {
+            path[i + 1] = pathList.get(i);  // path[1]から始める
+        }
+        maxPathIndex = pathList.size() + 1;  // startNodeを含めた経路長
+
+        // 経路上の最小フローを計算
+        min_Flow = Integer.MAX_VALUE;
+        int prevNode = startNode;
+        for (int i = 0; i < pathList.size(); i++) {
+            int nextNode = pathList.get(i);
+            min_Flow = Math.min(min_Flow, tubeFlow[prevNode][nextNode]);
+            prevNode = nextNode;
+        }
+
+        if (min_Flow <= 0 || min_Flow == Integer.MAX_VALUE) {
+            return 0;
+        }
+
+        // tubeFlowを減算
+        prevNode = startNode;
+        for (int i = 0; i < pathList.size(); i++) {
+            int nextNode = pathList.get(i);
+            tubeFlow[prevNode][nextNode] -= min_Flow;
+            Flow_Capacity[prevNode][nextNode] -= min_Flow;
+
+            if (tubeFlow[prevNode][nextNode] == 0) {
+                adjMatrix[prevNode][nextNode] = 0;
+            }
+            prevNode = nextNode;
+        }
+
+        return min_Flow;
     }
 
     /**
@@ -734,6 +763,12 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 }
 
                 if (nextNode == -1) {
+                    break;
+                }
+
+                // 経路長の上限チェック
+                if (pathIndex >= path.length) {
+                    LogManager.getInstance().log("警告: 経路長が上限(" + path.length + ")を超えました。経路探索を中断します。");
                     break;
                 }
 

@@ -16,6 +16,7 @@ import server.scheduler.RandomClientGenerator;
 import server.uav.UAVFlyScheduler;
 import server.util.LinkStatusRecorder;
 import server.util.LogManager;
+import server.util.ResultOutputManager;
 import server.worker.AsyncUAVWorker;
 
 import java.io.*;
@@ -807,6 +808,9 @@ public class BoundaryController {
                     // コールバック（必要に応じて使用）
                 });
 
+                // PhaseControllerにリンク配列を設定（容量操作用）
+                phaseController.setLinkArray(ServerController.getLinkArray(), nodeNum);
+
                 // LinkStatusRecorderを開始
                 LinkStatusRecorder.getInstance().startSimulation();
 
@@ -816,11 +820,25 @@ public class BoundaryController {
                 System.out.println("✓ 4フェーズ制御を開始しました (seed=" + seed + ")");
 
                 // フェーズ制御モードでのクライアント生成ループ
-                long simulationEndTime = System.currentTimeMillis() + config.getDurationMillis();
+                long simulationStartTime = System.currentTimeMillis();
+                long simulationEndTime = simulationStartTime + config.getDurationMillis();
                 int generatedCount = 0;
                 boolean timerStarted = false;
 
-                while (phaseController.isRunning() && System.currentTimeMillis() < simulationEndTime) {
+                // Phase 7-11: Phase4では全UAV完了まで継続するため、時間制限は削除
+                // PhaseController.isRunning()がfalseになるまでループ継続
+                while (phaseController.isRunning()) {
+                    // Phase4の場合は全UAV完了を待機（クライアント生成なし）
+                    if (phaseController.getCurrentPhase() == PhaseController.Phase.PHASE4_RECOVERY) {
+                        Thread.sleep(100);  // 100msごとにチェック
+                        continue;
+                    }
+
+                    // Phase1-3: 設定時間を超えたらクライアント生成を停止
+                    if (System.currentTimeMillis() >= simulationEndTime) {
+                        Thread.sleep(100);
+                        continue;
+                    }
                     // クライアントを生成
                     ClientScheduleLoader.ScheduleEntry entry = phaseController.generateNextClient();
                     if (entry != null) {
@@ -828,6 +846,9 @@ public class BoundaryController {
                         System.out.println("クライアント #" + generatedCount + " を生成 (Phase: " +
                                           phaseController.getCurrentPhase().getName() + ", 間隔: " +
                                           String.format("%.1f", phaseController.getCurrentIntervalSec()) + "s)");
+
+                        // フェーズ統計にクライアント生成を記録
+                        phaseController.recordClientGeneration(entry.uavCount);
 
                         client = boundaryController.createClientFromSchedule(entry);
                         boundaryController.routeRequest(client);
@@ -874,12 +895,17 @@ public class BoundaryController {
                     }
                 }
 
-                // フェーズ制御を停止
-                phaseController.stop();
+                // Phase 7-11: PhaseControllerが停止したらループを抜ける
+                // （Phase4で全UAV完了時にPhaseController内でstop()が呼ばれる）
+
+                // LinkStatusRecorderを停止
                 LinkStatusRecorder.getInstance().stopSimulation();
 
+                // 平均飛行ステータスを出力
+                ResultOutputManager.outputAverageFlightStatus();
+
                 // Phase 7-10: シミュレーションサマリーを出力
-                long totalElapsedMs = System.currentTimeMillis() - (simulationEndTime - config.getDurationMillis());
+                long totalElapsedMs = System.currentTimeMillis() - simulationStartTime;
                 LogManager.getInstance().logSimulationSummary(generatedCount, totalElapsedMs);
 
                 LogManager.getInstance().log("Phase 7-9: 4フェーズ制御完了 (生成クライアント数=" + generatedCount + ")");

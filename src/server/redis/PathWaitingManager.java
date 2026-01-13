@@ -147,6 +147,30 @@ public class PathWaitingManager {
     }
 
     /**
+     * 全経路待ちキューの合計待機UAV数を取得
+     * Phase 7-11: Phase4終了判定用
+     *
+     * @return 全クライアントで経路待ち中のUAV総数
+     */
+    public int getTotalWaitingCount() {
+        if (client == null) {
+            return 0;
+        }
+
+        int total = 0;
+        try {
+            Iterable<String> keys = client.getKeys().getKeysByPattern(UAVEventChannels.PATH_WAITING_QUEUE_PREFIX + "*");
+            for (String key : keys) {
+                RDeque<UAVJob> queue = client.getDeque(key);
+                total += queue.size();
+            }
+        } catch (Exception e) {
+            LogManager.getInstance().error("PathWaitingManager.getTotalWaitingCount エラー", e);
+        }
+        return total;
+    }
+
+    /**
      * Redis接続状態を確認
      * @return 接続されている場合true
      */

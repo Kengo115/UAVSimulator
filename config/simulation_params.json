@@ -1,41 +1,41 @@
 {
   "seed": 12345,
-  "duration_minutes": 60,
+  "duration_minutes": 90,
   "snapshot_interval_sec": 10,
   "topology": null,
   "route_search_method": null,
   "phases": {
     "phase1_generation": {
-      "min_uav_count": 1,
-      "max_uav_count": 5,
+      "min_uav_count": 5,
+      "max_uav_count": 10,
       "min_interval_sec": 1.0,
       "max_interval_sec": 3.0,
-      "congestion_threshold_percent": 30.0,
+      "congestion_threshold_percent": 50.0,
       "min_duration_sec": 60
     },
     "phase2_stable": {
-      "min_uav_count": 1,
-      "max_uav_count": 5,
-      "duration_minutes": 30,
+      "min_uav_count": 4,
+      "max_uav_count": 6,
+      "duration_minutes": 20,
       "dynamic_interval_enabled": true,
-      "target_congestion_percent": 50.0,
-      "min_interval_sec": 1.0,
-      "max_interval_sec": 10.0
+      "target_congestion_percent": 55.0,
+      "min_interval_sec": 5.0,
+      "max_interval_sec": 15.0
     },
     "phase3_congestion": {
       "min_uav_count": 5,
       "max_uav_count": 10,
-      "duration_minutes": 5,
+      "duration_minutes": 10,
       "min_interval_sec": 1.0,
       "max_interval_sec": 2.0
     },
     "phase4_recovery": {
-      "min_uav_count": 1,
-      "max_uav_count": 5,
-      "dynamic_interval_enabled": true,
-      "target_congestion_percent": 50.0,
-      "min_interval_sec": 1.0,
-      "max_interval_sec": 10.0
+      "min_uav_count": 0,
+      "max_uav_count": 0,
+      "dynamic_interval_enabled": false,
+      "target_congestion_percent": 55.0,
+      "min_interval_sec": 999.0,
+      "max_interval_sec": 999.0
     }
   }
 }

@@ -30,7 +30,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
     // ソースノード圧力専用閾値
     private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値
-    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.30; // 20%変化率閾値（フロー減少用）
+    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.50; // 20%変化率閾値（フロー減少用）
     private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 20%減少閾値（フロー増加用）
 
     // フロー減少（UAV整数値対応）

@@ -32,13 +32,13 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
     private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 150; // 収束判定用の連続安定回数
+    private static final int REQUIRED_STABLE_ITERATIONS = 100; // 収束判定用の連続安定回数
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 10; // 二分探索の最大回数
 
     // ソースノード圧力専用閾値
     private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値
-    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.30; // 20%変化率閾値（フロー減少用）
-    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 20%減少閾値（フロー増加用）
+    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.50; // 50%変化率閾値（フロー減少用）
+    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 50%減少閾値（フロー増加用）
 
     // フロー減少（UAV整数値対応）
     private static final double MINIMUM_FLOW_RATIO = 0.1; // 最小安全フロー（要求フローの10%）

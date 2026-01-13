@@ -89,27 +89,32 @@ def parse_snapshot_file(filepath):
 
 
 def get_load_color(load_rate):
-    """負荷率に応じた色を返す（0%=緑, 50%=黄, 100%+=赤）"""
-    # 0-100%を0-1に正規化（100%以上は1にクリップ）
-    normalized = min(load_rate / 100.0, 1.5)  # 150%まで許容
-
-    if normalized <= 0.5:
-        # 0-50%: 緑→黄
-        r = normalized * 2
-        g = 1.0
-        b = 0.0
-    elif normalized <= 1.0:
-        # 50-100%: 黄→赤
-        r = 1.0
-        g = 1.0 - (normalized - 0.5) * 2
-        b = 0.0
+    """負荷率に応じた色を返す
+    0%: 色なし（グレー）
+    0-25%: 薄青色
+    25-50%: 緑色
+    50-75%: オレンジ色
+    75-100%: 赤色
+    100%以上: 深い赤紫色
+    """
+    if load_rate == 0:
+        # 0%は色なし（薄いグレー）
+        return (0.85, 0.85, 0.85)
+    elif load_rate <= 25:
+        # より薄い青色
+        return (0.6, 0.75, 1.0)
+    elif load_rate <= 50:
+        # 緑色
+        return (0.0, 0.8, 0.0)
+    elif load_rate <= 75:
+        # オレンジ色
+        return (1.0, 0.6, 0.0)
+    elif load_rate <= 100:
+        # 赤色
+        return (1.0, 0.0, 0.0)
     else:
-        # 100%以上: 赤→暗赤
-        r = 1.0 - (normalized - 1.0) * 0.5
-        g = 0.0
-        b = 0.0
-
-    return (r, g, b)
+        # 深い赤紫色（100%以上）黒を少し入れる
+        return (0.45, 0.0, 0.3)
 
 
 def plot_congestion_heatmap(nodes, links, link_load, output_path, title=None):
@@ -148,42 +153,53 @@ def plot_congestion_heatmap(nodes, links, link_load, output_path, title=None):
     for u, v, data in G.edges(data=True):
         load_rate = data.get('load_rate', 0)
         edge_colors.append(get_load_color(load_rate))
-        # 負荷がある場合は太く
-        if load_rate > 0:
-            edge_widths.append(1.5 + min(load_rate / 50, 3))
-        else:
-            edge_widths.append(0.5)
 
-    # リンク描画
+        # 線の太さ:
+        # - 0%: とても細い線
+        # - 0-25%: 薄い線
+        # - 25-75%: 中程度
+        # - 75-100%: 太い線
+        # - 100%超: 太さで差を表現（赤紫色は同じなので）
+        if load_rate == 0:
+            edge_widths.append(0.3)
+        elif load_rate <= 25:
+            edge_widths.append(0.6)
+        elif load_rate <= 75:
+            edge_widths.append(1.0)
+        elif load_rate <= 100:
+            edge_widths.append(1.5)
+        else:
+            # 100%を超えた分に応じて太くする（控えめに）
+            edge_widths.append(1.5 + (load_rate - 100) / 300 * 1.0)
+
+    # リンク描画（直線、矢印なし）
     edges = list(G.edges())
     nx.draw_networkx_edges(G, pos, ax=ax,
                            edgelist=edges,
                            width=edge_widths,
                            edge_color=edge_colors,
                            alpha=0.8,
-                           arrows=True,
-                           arrowsize=8,
-                           connectionstyle="arc3,rad=0.1")
+                           arrows=False)
 
-    # ノード描画（地区タイプで形を変える）
+    # ノード描画（地区タイプで色を変える）
     scattered_nodes = [n for n, d in G.nodes(data=True) if d.get('district_type', 0) == 0]
     concentrated_nodes = [n for n, d in G.nodes(data=True) if d.get('district_type', 0) == 1]
 
-    # 点在地区（丸）
+    # 点在地区（青色・丸）
     if scattered_nodes:
         nx.draw_networkx_nodes(G, pos, ax=ax,
                                nodelist=scattered_nodes,
                                node_size=40,
-                               node_color='#333333',
+                               node_color='#3366FF',
                                edgecolors='white',
                                linewidths=0.5)
 
-    # 集中地区（四角）
+    # 集中地区（赤色・四角）
     if concentrated_nodes:
         nx.draw_networkx_nodes(G, pos, ax=ax,
                                nodelist=concentrated_nodes,
                                node_size=40,
-                               node_color='#333333',
+                               node_color='#FF3333',
                                node_shape='s',
                                edgecolors='white',
                                linewidths=0.5)
@@ -201,15 +217,25 @@ def plot_congestion_heatmap(nodes, links, link_load, output_path, title=None):
     ax.set_xlabel('X coordinate')
     ax.set_ylabel('Y coordinate')
 
-    # カラーバー用のカラーマップを作成
-    cmap_colors = [get_load_color(i) for i in range(0, 151, 10)]
+    # カラーバー用のカラーマップを作成（段階的な色）
+    cmap_colors = [
+        (0.6, 0.75, 1.0),  # 0-25%: 薄青
+        (0.6, 0.75, 1.0),  #
+        (0.0, 0.8, 0.0),   # 25-50%: 緑
+        (0.0, 0.8, 0.0),   #
+        (1.0, 0.6, 0.0),   # 50-75%: オレンジ
+        (1.0, 0.6, 0.0),   #
+        (1.0, 0.0, 0.0),   # 75-100%: 赤
+        (1.0, 0.0, 0.0),   #
+        (0.45, 0.0, 0.3),  # 100%+: 深い赤紫（黒入り）
+    ]
     cmap = mcolors.LinearSegmentedColormap.from_list('load_rate', cmap_colors, N=256)
-    norm = mcolors.Normalize(vmin=0, vmax=150)
+    norm = mcolors.Normalize(vmin=0, vmax=125)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = plt.colorbar(sm, ax=ax, shrink=0.6, pad=0.02)
     cbar.set_label('Load Rate (%)', fontsize=10)
-    cbar.set_ticks([0, 25, 50, 75, 100, 125, 150])
+    cbar.set_ticks([0, 25, 50, 75, 100, 125])
 
     # 統計情報
     if link_load:
@@ -225,10 +251,11 @@ def plot_congestion_heatmap(nodes, links, link_load, output_path, title=None):
 
     # 凡例
     legend_elements = [
-        mpatches.Patch(color='#00ff00', label='0% (Empty)'),
-        mpatches.Patch(color='#ffff00', label='50% (Medium)'),
-        mpatches.Patch(color='#ff0000', label='100% (Full)'),
-        mpatches.Patch(color='#800000', label='>100% (Congested)'),
+        mpatches.Patch(color=(0.6, 0.75, 1.0), label='0-25%'),
+        mpatches.Patch(color=(0.0, 0.8, 0.0), label='25-50%'),
+        mpatches.Patch(color=(1.0, 0.6, 0.0), label='50-75%'),
+        mpatches.Patch(color=(1.0, 0.0, 0.0), label='75-100%'),
+        mpatches.Patch(color=(0.45, 0.0, 0.3), label='>100% (width=load)'),
     ]
     ax.legend(handles=legend_elements, loc='lower right', fontsize=8)
 
@@ -247,6 +274,63 @@ def extract_timestamp(filename):
         return int(basename.replace('snapshot_', '').replace('.csv', ''))
     except ValueError:
         return 0
+
+
+def load_phase_transitions(result_dir):
+    """フェーズ遷移CSVを読み込む
+
+    Args:
+        result_dir: 結果ディレクトリ（例: src/result/large_scale/Bisectional）
+
+    Returns:
+        フェーズ遷移のリスト [(timestamp, phase), ...]
+    """
+    # result_dirからphase_transitions.csvを探す
+    # snapshot_dir の親ディレクトリを探す
+    if result_dir.endswith('/snapshot') or result_dir.endswith('/snapshot/'):
+        parent_dir = os.path.dirname(result_dir.rstrip('/'))
+    else:
+        parent_dir = result_dir
+
+    phase_file = os.path.join(parent_dir, 'phase_transitions.csv')
+
+    if not os.path.exists(phase_file):
+        print(f"  Warning: phase_transitions.csv not found: {phase_file}")
+        return []
+
+    transitions = []
+    try:
+        df = pd.read_csv(phase_file)
+        for _, row in df.iterrows():
+            transitions.append((int(row['timestamp']), int(row['phase'])))
+        print(f"  Loaded {len(transitions)} phase transitions from {phase_file}")
+    except Exception as e:
+        print(f"  Warning: Failed to read phase_transitions.csv: {e}")
+
+    return transitions
+
+
+def get_phase_for_timestamp(timestamp, transitions):
+    """タイムスタンプに対応するフェーズを取得
+
+    Args:
+        timestamp: スナップショットのタイムスタンプ（ミリ秒）
+        transitions: フェーズ遷移リスト [(timestamp, phase), ...]
+
+    Returns:
+        フェーズ番号（1-4）、遷移情報がない場合は1
+    """
+    if not transitions:
+        return 1
+
+    current_phase = 1
+    for trans_time, phase in transitions:
+        if timestamp >= trans_time:
+            current_phase = phase
+        else:
+            break
+
+    return current_phase
 
 
 def main():
@@ -290,14 +374,18 @@ def main():
         if not os.path.exists(output_path):
             os.makedirs(output_path)
 
+        # フェーズ遷移情報を読み込む
+        transitions = load_phase_transitions(snapshot_path)
+
         print(f"Processing {len(snapshot_files)} snapshots...")
 
         for i, snapshot_file in enumerate(snapshot_files):
             timestamp = extract_timestamp(snapshot_file)
-            output_file = os.path.join(output_path, f'heatmap_{timestamp}.png')
+            phase = get_phase_for_timestamp(timestamp, transitions)
+            output_file = os.path.join(output_path, f'phase{phase}_heatmap_{timestamp}.png')
 
             link_load = parse_snapshot_file(snapshot_file)
-            title = f'Congestion Heatmap (t={timestamp}ms)'
+            title = f'Phase {phase} - Congestion Heatmap (t={timestamp}ms)'
 
             plot_congestion_heatmap(nodes, links, link_load, output_file, title=title)
             print(f"  [{i+1}/{len(snapshot_files)}] {output_file}")
@@ -310,10 +398,24 @@ def main():
             print(f"Snapshot file not found: {snapshot_path}")
             sys.exit(1)
 
+        # フェーズ遷移情報を読み込む
+        snapshot_dir = os.path.dirname(snapshot_path)
+        transitions = load_phase_transitions(snapshot_dir)
+
+        timestamp = extract_timestamp(snapshot_path)
+        phase = get_phase_for_timestamp(timestamp, transitions)
+
         # 出力ファイル名決定
         if output_path is None:
-            timestamp = extract_timestamp(snapshot_path)
-            output_path = f'output/heatmap_{timestamp}.png'
+            output_path = f'output/phase{phase}_heatmap_{timestamp}.png'
+        elif output_path.endswith('/') or os.path.isdir(output_path):
+            # ディレクトリが指定された場合
+            output_dir = output_path.rstrip('/')
+            output_path = os.path.join(output_dir, f'phase{phase}_heatmap_{timestamp}.png')
+        else:
+            # ファイルパスが指定された場合、フェーズを含めた名前に変更
+            output_dir = os.path.dirname(output_path)
+            output_path = os.path.join(output_dir, f'phase{phase}_heatmap_{timestamp}.png')
 
         # 出力ディレクトリ作成
         output_dir = os.path.dirname(output_path)
@@ -332,8 +434,7 @@ def main():
 
         # 描画
         print(f"Generating heatmap...")
-        timestamp = extract_timestamp(snapshot_path)
-        title = f'Congestion Heatmap (t={timestamp}ms)'
+        title = f'Phase {phase} - Congestion Heatmap (t={timestamp}ms)'
 
         plot_congestion_heatmap(nodes, links, link_load, output_path, title=title)
         print(f"Output saved to: {output_path}")
