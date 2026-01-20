@@ -28,7 +28,7 @@ public class ClientScheduleLoader {
         public final int sourceId;
         public final int destinationId;
         public final int uavCount;
-        public final int intervalAfterSec;
+        public final double intervalAfterSec;
 
         public ScheduleEntry(int clientId, int sourceId, int destinationId, int uavCount, int intervalAfterSec) {
             this.clientId = clientId;
@@ -38,9 +38,17 @@ public class ClientScheduleLoader {
             this.intervalAfterSec = intervalAfterSec;
         }
 
+        public ScheduleEntry(int clientId, int sourceId, int destinationId, int uavCount, double intervalAfterSec) {
+            this.clientId = clientId;
+            this.sourceId = sourceId;
+            this.destinationId = destinationId;
+            this.uavCount = uavCount;
+            this.intervalAfterSec = intervalAfterSec;
+        }
+
         @Override
         public String toString() {
-            return String.format("ScheduleEntry[client=%d, source=%d, dest=%d, uavs=%d, interval=%ds]",
+            return String.format("ScheduleEntry[client=%d, source=%d, dest=%d, uavs=%d, interval=%.2fs]",
                                  clientId, sourceId, destinationId, uavCount, intervalAfterSec);
         }
     }

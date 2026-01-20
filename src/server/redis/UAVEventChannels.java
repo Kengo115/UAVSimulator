@@ -41,12 +41,27 @@ public final class UAVEventChannels {
 
     /**
      * 待機キューのキーを生成（容量待ち）
+     * Phase 8-Fix: 双方向リンクを無向グラフとして扱うため、正規化キーを使用
+     * 小さいノードIDを先に配置することで、117→123 と 123→117 が同一キューを共有
+     *
      * @param fromNode 始点ノード
      * @param toNode 終点ノード
-     * @return Redis キー
+     * @return Redis キー（正規化済み）
      */
     public static String getWaitingQueueKey(int fromNode, int toNode) {
-        return WAITING_QUEUE_PREFIX + fromNode + ":" + toNode;
+        int minNode = Math.min(fromNode, toNode);
+        int maxNode = Math.max(fromNode, toNode);
+        return WAITING_QUEUE_PREFIX + minNode + ":" + maxNode;
+    }
+
+    /**
+     * リンクを正規化して取得（小さいノードIDを先に）
+     * @param nodeA ノードA
+     * @param nodeB ノードB
+     * @return [minNode, maxNode]
+     */
+    public static int[] normalizeLink(int nodeA, int nodeB) {
+        return new int[] { Math.min(nodeA, nodeB), Math.max(nodeA, nodeB) };
     }
 
     /**

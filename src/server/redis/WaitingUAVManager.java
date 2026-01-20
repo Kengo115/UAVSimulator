@@ -7,9 +7,11 @@ import server.util.LogManager;
 /**
  * 待機UAV管理クラス
  * Phase 3b-2d: Redis RDequeを使用した本実装
+ * Phase 8-Fix: 双方向リンクを無向グラフとして扱い、単一キューを共有
  *
  * リンク別の待機キュー（FIFO）を管理する
- * 待機キーの形式: waiting:link:{fromNode}:{toNode}
+ * 待機キーの形式: waiting:link:{minNode}:{maxNode} (正規化キー)
+ * 例: 117→123 と 123→117 は同じキュー waiting:link:117:123 を共有
  */
 public class WaitingUAVManager {
 
@@ -29,6 +31,7 @@ public class WaitingUAVManager {
 
     /**
      * 待機UAVをリンク別キューに登録（FIFO）
+     * Phase 8-Fix: 正規化キーにより双方向リンクで単一キューを共有
      *
      * @param fromNode リンクの始点ノード
      * @param toNode リンクの終点ノード
@@ -44,14 +47,16 @@ public class WaitingUAVManager {
         RDeque<UAVJob> queue = client.getDeque(key);
         queue.addLast(job);
 
+        int[] normalized = UAVEventChannels.normalizeLink(fromNode, toNode);
         LogManager.getInstance().log(
-            "Phase 3b-2d: client" + job.getClientId() + " UAV" + job.getUavId() + " を待機キュー (" +
-            fromNode + "→" + toNode + ") に追加 (待機数=" + queue.size() + ")"
+            "Phase 8-Fix: client" + job.getClientId() + " UAV" + job.getUavId() + " を待機キュー (link " +
+            normalized[0] + "-" + normalized[1] + ", 飛行方向=" + fromNode + "→" + toNode + ") に追加 (待機数=" + queue.size() + ")"
         );
     }
 
     /**
      * 待機UAVをリンク別キューから取り出し（FIFO）
+     * Phase 8-Fix: 正規化キーにより双方向リンクで単一キューを共有
      *
      * @param fromNode リンクの始点ノード
      * @param toNode リンクの終点ノード
@@ -68,9 +73,10 @@ public class WaitingUAVManager {
         UAVJob job = queue.pollFirst();
 
         if (job != null) {
+            int[] normalized = UAVEventChannels.normalizeLink(fromNode, toNode);
             LogManager.getInstance().log(
-                "Phase 3b-2d: client" + job.getClientId() + " UAV" + job.getUavId() + " を待機キュー (" +
-                fromNode + "→" + toNode + ") から取り出し (残り待機数=" + queue.size() + ")"
+                "Phase 8-Fix: client" + job.getClientId() + " UAV" + job.getUavId() + " を待機キュー (link " +
+                normalized[0] + "-" + normalized[1] + ") から取り出し (残り待機数=" + queue.size() + ")"
             );
         }
 
@@ -113,6 +119,7 @@ public class WaitingUAVManager {
 
     /**
      * 指定リンクの待機キューをクリア
+     * Phase 8-Fix: 正規化キーにより双方向リンクで単一キューを共有
      *
      * @param fromNode リンクの始点ノード
      * @param toNode リンクの終点ノード
@@ -127,8 +134,9 @@ public class WaitingUAVManager {
         int count = queue.size();
         queue.clear();
 
+        int[] normalized = UAVEventChannels.normalizeLink(fromNode, toNode);
         LogManager.getInstance().log(
-            "Phase 3b-2d: 待機キュー (" + fromNode + "→" + toNode + ") をクリア (削除数=" + count + ")"
+            "Phase 8-Fix: 待機キュー (link " + normalized[0] + "-" + normalized[1] + ") をクリア (削除数=" + count + ")"
         );
     }
 

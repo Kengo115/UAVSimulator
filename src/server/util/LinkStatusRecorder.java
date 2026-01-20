@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Phase 7-4: リンク状態を記録するクラス
  * Phase 7-5: 10秒ごとのスナップショット記録機能を追加
+ * Phase 8-Fix: 双方向リンクを無向グラフとして扱い、正規化キーで出力
  * Link.javaを使用して各リンクの利用状況を時系列で記録
  */
 public class LinkStatusRecorder {
@@ -166,6 +167,7 @@ public class LinkStatusRecorder {
 
     /**
      * Phase 7-5: スナップショットをCSVファイルに書き込む
+     * Phase 8-Fix: 正規化キー（小さいノードIDを先）で出力し、冗長な逆方向リンクを除外
      */
     private synchronized void writeSnapshotToCSV(long timestamp) throws IOException {
         Link[][] links = ServerController.getLinkArray();
@@ -189,20 +191,22 @@ public class LinkStatusRecorder {
 
         try (FileWriter writer = new FileWriter(filename)) {
             // ヘッダー
-            writer.write("link_from,link_to,flying_count,waiting_count,capacity,load_rate\n");
+            writer.write("node_a,node_b,flying_count,waiting_count,current_capacity,init_capacity,load_rate\n");
 
-            // 全リンクの状態を出力
+            // Phase 8-Fix: 正規化キーで出力（i < j のみ、双方向リンクを1行にまとめる）
             for (int i = 0; i < nodeCount; i++) {
-                for (int j = 0; j < nodeCount; j++) {
+                for (int j = i + 1; j < nodeCount; j++) {
                     Link link = links[i][j];
                     if (link != null && link.getInitCapacity() > 0) {
                         int flying = (int) link.getFlyingUAV();
                         int waiting = link.getWaitingUAV();
-                        double capacity = link.getInitCapacity();
+                        double initCapacity = link.getInitCapacity();
+                        double currentCapacity = link.getCapacity();
                         double loadRate = link.getLoadRate();
 
-                        writer.write(String.format("%d,%d,%d,%d,%.1f,%.2f\n",
-                                i, j, flying, waiting, capacity, loadRate));
+                        // Phase 8-Fix: 正規化キー (node_a < node_b) で出力
+                        writer.write(String.format("%d,%d,%d,%d,%.1f,%.1f,%.2f\n",
+                                i, j, flying, waiting, currentCapacity, initCapacity, loadRate));
                     }
                 }
             }
@@ -240,6 +244,11 @@ public class LinkStatusRecorder {
             link.incrementFlyingUAV();
             recordStatus(fromNode, toNode, link, "ENTER");
         }
+        // 双方向リンク対応: 逆方向も更新
+        Link reverseLink = ServerController.getLinkStatic(toNode, fromNode);
+        if (reverseLink != null) {
+            reverseLink.incrementFlyingUAV();
+        }
     }
 
     /**
@@ -253,10 +262,16 @@ public class LinkStatusRecorder {
             link.decrementFlyingUAV();
             recordStatus(fromNode, toNode, link, "EXIT");
         }
+        // 双方向リンク対応: 逆方向も更新
+        Link reverseLink = ServerController.getLinkStatic(toNode, fromNode);
+        if (reverseLink != null) {
+            reverseLink.decrementFlyingUAV();
+        }
     }
 
     /**
      * UAVがリンクで待機開始した時に呼び出す
+     * Phase 8-Fix: 双方向リンク対応（両方向を更新）
      * @param fromNode 始点ノード
      * @param toNode 終点ノード
      */
@@ -266,10 +281,16 @@ public class LinkStatusRecorder {
             link.incrementWaitingUAV();
             recordStatus(fromNode, toNode, link, "WAIT_START");
         }
+        // Phase 8-Fix: 双方向リンク対応（逆方向も更新）
+        Link reverseLink = ServerController.getLinkStatic(toNode, fromNode);
+        if (reverseLink != null) {
+            reverseLink.incrementWaitingUAV();
+        }
     }
 
     /**
      * UAVがリンクでの待機終了した時に呼び出す
+     * Phase 8-Fix: 双方向リンク対応（両方向を更新）
      * @param fromNode 始点ノード
      * @param toNode 終点ノード
      */
@@ -278,6 +299,11 @@ public class LinkStatusRecorder {
         if (link != null) {
             link.decrementWaitingUAV();
             recordStatus(fromNode, toNode, link, "WAIT_END");
+        }
+        // Phase 8-Fix: 双方向リンク対応（逆方向も更新）
+        Link reverseLink = ServerController.getLinkStatic(toNode, fromNode);
+        if (reverseLink != null) {
+            reverseLink.decrementWaitingUAV();
         }
     }
 
@@ -351,6 +377,7 @@ public class LinkStatusRecorder {
 
     /**
      * 全リンクの平均負荷率を取得
+     * Phase 8-Fix: 正規化キー（i < j）で重複カウントを防止
      * @return 平均負荷率（%）
      */
     public double getAverageLoadRate() {
@@ -364,8 +391,9 @@ public class LinkStatusRecorder {
         double totalLoadRate = 0.0;
         int linkCount = 0;
 
+        // Phase 8-Fix: i < j のみカウント（双方向リンクを1回だけカウント）
         for (int i = 0; i < nodeCount; i++) {
-            for (int j = 0; j < nodeCount; j++) {
+            for (int j = i + 1; j < nodeCount; j++) {
                 Link link = links[i][j];
                 if (link != null && link.getInitCapacity() > 0) {
                     totalLoadRate += link.getLoadRate();
@@ -387,6 +415,7 @@ public class LinkStatusRecorder {
 
     /**
      * 混雑リンク率を取得（指定閾値以上のリンクの割合）
+     * Phase 8-Fix: 正規化キー（i < j）で重複カウントを防止
      * @param threshold 混雑判定閾値（%）
      * @return 混雑リンク率（%）
      */
@@ -401,8 +430,9 @@ public class LinkStatusRecorder {
         int congestedCount = 0;
         int linkCount = 0;
 
+        // Phase 8-Fix: i < j のみカウント（双方向リンクを1回だけカウント）
         for (int i = 0; i < nodeCount; i++) {
-            for (int j = 0; j < nodeCount; j++) {
+            for (int j = i + 1; j < nodeCount; j++) {
                 Link link = links[i][j];
                 if (link != null && link.getInitCapacity() > 0) {
                     if (link.getLoadRate() >= threshold) {

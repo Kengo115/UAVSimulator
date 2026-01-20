@@ -77,11 +77,25 @@ def parse_snapshot_file(filepath):
     # リンクごとの負荷率を辞書に変換
     link_load = {}
     for _, row in df.iterrows():
-        key = (int(row['link_from']), int(row['link_to']))
+        # カラム名の互換性対応（node_a/node_b または link_from/link_to）
+        if 'node_a' in df.columns:
+            from_node = int(row['node_a'])
+            to_node = int(row['node_b'])
+        else:
+            from_node = int(row['link_from'])
+            to_node = int(row['link_to'])
+
+        # 容量カラムの互換性対応
+        if 'current_capacity' in df.columns:
+            capacity = float(row['current_capacity'])
+        else:
+            capacity = float(row['capacity'])
+
+        key = (from_node, to_node)
         link_load[key] = {
             'flying': int(row['flying_count']),
             'waiting': int(row['waiting_count']),
-            'capacity': float(row['capacity']),
+            'capacity': capacity,
             'load_rate': float(row['load_rate'])
         }
 

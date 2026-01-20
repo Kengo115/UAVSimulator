@@ -401,6 +401,12 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         }
 
         LogManager.getInstance().log("Phase 3b-6: 全" + UAV_count + "件のジョブをスケジュールしました");
+
+        // Phase 8-Fix: ScheduledExecutorServiceをシャットダウン
+        // shutdown()を呼ぶと新しいタスクは受け付けなくなるが、
+        // スケジュール済みタスクは実行され、完了後にスレッドは自動終了する
+        // awaitTermination()で待機すると次のクライアント生成が遅延するため、待機しない
+        enqueueScheduler.shutdown();
     }
 
     /**

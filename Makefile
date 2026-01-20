@@ -35,14 +35,24 @@ compile:
 	@echo "プロジェクトをコンパイルします..."
 	mvn compile
 
+# JVMメモリ設定（長時間シミュレーション用）
+JVM_OPTS := -Xms2g -Xmx4g
+
 # シミュレータを実行（コンパイル後）
 run: compile kill-old
 	@echo "UAVシミュレータを起動します..."
-	mvn exec:java -Dexec.mainClass="controller.BoundaryController"
+	@echo "  JVM設定: $(JVM_OPTS)"
+	MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="controller.BoundaryController"
 
 # シミュレータを実行（コンパイルなし）
 run-quick: kill-old
 	@echo "UAVシミュレータを起動します..."
+	@echo "  JVM設定: $(JVM_OPTS)"
+	MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="controller.BoundaryController"
+
+# シミュレータを実行（メモリ制限なし、短時間テスト用）
+run-light: compile kill-old
+	@echo "UAVシミュレータを起動します（軽量モード）..."
 	mvn exec:java -Dexec.mainClass="controller.BoundaryController"
 
 # 古いシミュレータプロセスを終了
@@ -74,8 +84,9 @@ help:
 	@echo "  make logs        - Redisコンテナのログを表示"
 	@echo "  make redis-clear - Redisデータをクリア"
 	@echo "  make compile     - プロジェクトをコンパイル"
-	@echo "  make run         - シミュレータを実行（コンパイル込み、古いプロセス自動終了）"
-	@echo "  make run-quick   - シミュレータを実行（コンパイルなし、古いプロセス自動終了）"
+	@echo "  make run         - シミュレータを実行（コンパイル込み、メモリ4GB、古いプロセス自動終了）"
+	@echo "  make run-quick   - シミュレータを実行（コンパイルなし、メモリ4GB、古いプロセス自動終了）"
+	@echo "  make run-light   - シミュレータを実行（コンパイル込み、メモリ制限なし、短時間テスト用）"
 	@echo "  make kill-old    - 古いシミュレータプロセスを終了"
 	@echo "  make clean       - ビルド成果物をクリーンアップ"
 	@echo "  make help        - このヘルプを表示"

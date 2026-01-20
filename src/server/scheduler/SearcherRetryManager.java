@@ -117,12 +117,17 @@ public class SearcherRetryManager {
 
         // サーチャーの取得を待つ
         synchronized (searcherLock) {
+            boolean addedToQueue = false;
+
             while (searcherInUse.get()) {
-                // 待機キューに追加
-                waitingQueue.add(request);
-                LogManager.getInstance().log(
-                    "Phase 5: client" + clientId + " 待機キューに追加 (キュー長=" + waitingQueue.size() + ")"
-                );
+                // 待機キューに追加（初回のみ）
+                if (!addedToQueue) {
+                    waitingQueue.add(request);
+                    addedToQueue = true;
+                    LogManager.getInstance().log(
+                        "Phase 5: client" + clientId + " 待機キューに追加 (キュー長=" + waitingQueue.size() + ")"
+                    );
+                }
 
                 try {
                     searcherLock.wait();
@@ -136,13 +141,12 @@ public class SearcherRetryManager {
                 // 起きた時、自分の番かチェック
                 if (waitingQueue.peek() == request) {
                     waitingQueue.poll();
+                    break;
                 } else if (!waitingQueue.contains(request)) {
                     // 既にキューから取り出されている（自分の番）
-                } else {
-                    // まだ自分の番ではない、再度待機
-                    continue;
+                    break;
                 }
-                break;
+                // まだ自分の番ではない、再度wait（addはしない）
             }
             searcherInUse.set(true);
         }

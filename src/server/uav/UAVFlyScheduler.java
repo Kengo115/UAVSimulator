@@ -51,6 +51,11 @@ public class UAVFlyScheduler {
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 if (flyingUavQueue.isEmpty() && uavQueue.isEmpty()) {
+                    // Phase 8: 統計的シミュレーションモード中は自動停止をスキップ
+                    if (BoundaryController.isStatisticalSimulationMode()) {
+                        // 統計的シミュレーション中は継続（UAVは継続的に生成される）
+                        return;
+                    }
                     LogManager.getInstance().log("飛行中UAV, 待機中UAVが存在しません");
                     clientController.stopTimer();
                     stopFlyUAVUpdates(clientController);

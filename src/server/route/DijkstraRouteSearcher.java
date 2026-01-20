@@ -217,8 +217,9 @@ public class DijkstraRouteSearcher implements RouteSearcher {
                 LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + formatPath(path) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
 
                 // Phase 7-2: 経路割り当て情報を記録
+                // clientIdは1始まり、runCounterは0始まりなので-1して調整
                 try {
-                    ResultOutputManager.outputRouteAssignment(job, clientId);
+                    ResultOutputManager.outputRouteAssignment(job, clientId - 1);
                 } catch (IOException e) {
                     LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー", e);
                 }
@@ -226,6 +227,12 @@ public class DijkstraRouteSearcher implements RouteSearcher {
         }
 
         LogManager.getInstance().log("Phase 3b-6: 全" + requiredUAVs + "件のジョブを2秒間隔でスケジュールしました");
+
+        // Phase 8-Fix: ScheduledExecutorServiceをシャットダウン
+        // shutdown()を呼ぶと新しいタスクは受け付けなくなるが、
+        // スケジュール済みタスクは実行され、完了後にスレッドは自動終了する
+        // awaitTermination()で待機すると次のクライアント生成が遅延するため、待機しない
+        enqueueScheduler.shutdown();
     }
 
     /**
