@@ -124,7 +124,10 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
 
         // 前回チューブ厚の初期化
         initializePreviousThickness();
-        
+
+        // 容量0のリンクを一時的に切断（EPSが選択しないようにする）
+        disconnectZeroCapacityLinks();
+
         try {
             // 適応的フロー制御メインループ
             while (ct < MAX_ITERATIONS && stableIterationCount < REQUIRED_STABLE_ITERATIONS) {
@@ -453,6 +456,9 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
             // エラー詳細をログ出力
             LogManager.getInstance().error("Error in incremental EPS process: ", e);
             throw e; // 再スローして上位で処理
+        } finally {
+            // 切断したリンクを復元（例外発生時も確実に復元）
+            restoreDisconnectedLinks();
         }
     }
 

@@ -135,7 +135,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         // EPSセーブポイントの初期化
         epsSavePoint = new EPSSavePoint(node);
         LogManager.getInstance().log("BisectionalPGEPS: EPSSavePoint initialized");
-        
+
+        // 容量0のリンクを一時的に切断（EPSが選択しないようにする）
+        disconnectZeroCapacityLinks();
+
         // 動的二分探索EPS実行
         performDynamicBinarySearchEPS(client, eps);
 
@@ -207,6 +210,9 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         } catch (Exception e) {
             LogManager.getInstance().error("Error in binary search EPS process: ", e);
             throw e;
+        } finally {
+            // 切断したリンクを復元（例外発生時も確実に復元）
+            restoreDisconnectedLinks();
         }
     }
 

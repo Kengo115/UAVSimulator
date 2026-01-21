@@ -73,66 +73,82 @@ public class NetworkTopologyManager {
         // デフォルト（ハードコード）
         link[0][1].setD_tubeThickness(INIT_THICKNESS);
         link[0][1].setL_tubeLength(1);
+        link[0][1].setInitL_tubeLength(1);
         adjMatrix[0][1] = 1;
 
         link[1][0].setD_tubeThickness(INIT_THICKNESS);
         link[1][0].setL_tubeLength(1);
+        link[1][0].setInitL_tubeLength(1);
         adjMatrix[1][0] = 1;
 
         link[0][2].setD_tubeThickness(INIT_THICKNESS);
         link[0][2].setL_tubeLength(2);
+        link[0][2].setInitL_tubeLength(2);
         adjMatrix[0][2] = 1;
 
         link[2][0].setD_tubeThickness(INIT_THICKNESS);
         link[2][0].setL_tubeLength(2);
+        link[2][0].setInitL_tubeLength(2);
         adjMatrix[2][0] = 1;
 
         link[0][3].setD_tubeThickness(INIT_THICKNESS);
         link[0][3].setL_tubeLength(2);
+        link[0][3].setInitL_tubeLength(2);
         adjMatrix[0][3] = 1;
 
         link[3][0].setD_tubeThickness(INIT_THICKNESS);
         link[3][0].setL_tubeLength(2);
+        link[3][0].setInitL_tubeLength(2);
         adjMatrix[3][0] = 1;
 
         link[1][4].setD_tubeThickness(INIT_THICKNESS);
         link[1][4].setL_tubeLength(2);
+        link[1][4].setInitL_tubeLength(2);
         adjMatrix[1][4] = 1;
 
         link[4][1].setD_tubeThickness(INIT_THICKNESS);
         link[4][1].setL_tubeLength(2);
+        link[4][1].setInitL_tubeLength(2);
         adjMatrix[4][1] = 1;
 
         link[2][3].setD_tubeThickness(INIT_THICKNESS);
         link[2][3].setL_tubeLength(1);
+        link[2][3].setInitL_tubeLength(1);
         adjMatrix[2][3] = 1;
 
         link[3][2].setD_tubeThickness(INIT_THICKNESS);
         link[3][2].setL_tubeLength(1);
+        link[3][2].setInitL_tubeLength(1);
         adjMatrix[3][2] = 1;
 
         link[2][5].setD_tubeThickness(INIT_THICKNESS);
         link[2][5].setL_tubeLength(3);
+        link[2][5].setInitL_tubeLength(3);
         adjMatrix[2][5] = 1;
 
         link[5][2].setD_tubeThickness(INIT_THICKNESS);
         link[5][2].setL_tubeLength(3);
+        link[5][2].setInitL_tubeLength(3);
         adjMatrix[5][2] = 1;
 
         link[3][5].setD_tubeThickness(INIT_THICKNESS);
         link[3][5].setL_tubeLength(2);
+        link[3][5].setInitL_tubeLength(2);
         adjMatrix[3][5] = 1;
 
         link[5][3].setD_tubeThickness(INIT_THICKNESS);
         link[5][3].setL_tubeLength(2);
+        link[5][3].setInitL_tubeLength(2);
         adjMatrix[5][3] = 1;
 
         link[4][5].setD_tubeThickness(INIT_THICKNESS);
         link[4][5].setL_tubeLength(3.3);
+        link[4][5].setInitL_tubeLength(3.3);
         adjMatrix[4][5] = 1;
 
         link[5][4].setD_tubeThickness(INIT_THICKNESS);
         link[5][4].setL_tubeLength(3.3);
+        link[5][4].setInitL_tubeLength(3.3);
         adjMatrix[5][4] = 1;
     }
 
@@ -150,6 +166,7 @@ public class NetworkTopologyManager {
         link[0][1].setLink(beaconCluster.getBeacon(0), beaconCluster.getBeacon(1), 5);
         link[0][1].setD_tubeThickness(INIT_THICKNESS);
         link[0][1].setL_tubeLength(1);
+        link[0][1].setInitL_tubeLength(1);
         link[0][1].setDistance(250);
         link[0][1].setCongestionRate(INIT_RATE);
         adjMatrix[0][1] = 1;
@@ -157,6 +174,7 @@ public class NetworkTopologyManager {
         link[1][0].setLink(beaconCluster.getBeacon(1), beaconCluster.getBeacon(0), 5);
         link[1][0].setD_tubeThickness(INIT_THICKNESS);
         link[1][0].setL_tubeLength(1);
+        link[1][0].setInitL_tubeLength(1);
         link[1][0].setDistance(250);
         link[1][0].setCongestionRate(INIT_RATE);
         adjMatrix[1][0] = 1;
@@ -164,6 +182,7 @@ public class NetworkTopologyManager {
         link[0][2].setLink(beaconCluster.getBeacon(0), beaconCluster.getBeacon(2), 15);
         link[0][2].setD_tubeThickness(INIT_THICKNESS);
         link[0][2].setL_tubeLength(3);
+        link[0][2].setInitL_tubeLength(3);
         link[0][2].setDistance(750);
         link[0][2].setCongestionRate(INIT_RATE);
         adjMatrix[0][2] = 1;
@@ -171,6 +190,7 @@ public class NetworkTopologyManager {
         link[2][0].setLink(beaconCluster.getBeacon(2), beaconCluster.getBeacon(0), 15);
         link[2][0].setD_tubeThickness(INIT_THICKNESS);
         link[2][0].setL_tubeLength(3);
+        link[2][0].setInitL_tubeLength(3);
         link[2][0].setDistance(750);
         link[2][0].setCongestionRate(INIT_RATE);
         adjMatrix[2][0] = 1;
@@ -178,6 +198,7 @@ public class NetworkTopologyManager {
         link[0][3].setLink(beaconCluster.getBeacon(0), beaconCluster.getBeacon(3), 10);
         link[0][3].setD_tubeThickness(INIT_THICKNESS);
         link[0][3].setL_tubeLength(2);
+        link[0][3].setInitL_tubeLength(2);
         link[0][3].setDistance(500);
         link[0][3].setCongestionRate(INIT_RATE);
         adjMatrix[0][3] = 1;
@@ -185,6 +206,7 @@ public class NetworkTopologyManager {
         link[3][0].setLink(beaconCluster.getBeacon(3), beaconCluster.getBeacon(0), 10);
         link[3][0].setD_tubeThickness(INIT_THICKNESS);
         link[3][0].setL_tubeLength(2);
+        link[3][0].setInitL_tubeLength(2);
         link[3][0].setDistance(500);
         link[3][0].setCongestionRate(INIT_RATE);
         adjMatrix[3][0] = 1;
@@ -192,6 +214,7 @@ public class NetworkTopologyManager {
         link[1][4].setLink(beaconCluster.getBeacon(1), beaconCluster.getBeacon(4), 10);
         link[1][4].setD_tubeThickness(INIT_THICKNESS);
         link[1][4].setL_tubeLength(2);
+        link[1][4].setInitL_tubeLength(2);
         link[1][4].setDistance(500);
         link[1][4].setCongestionRate(INIT_RATE);
         adjMatrix[1][4] = 1;
@@ -199,6 +222,7 @@ public class NetworkTopologyManager {
         link[4][1].setLink(beaconCluster.getBeacon(4), beaconCluster.getBeacon(1), 10);
         link[4][1].setD_tubeThickness(INIT_THICKNESS);
         link[4][1].setL_tubeLength(2);
+        link[4][1].setInitL_tubeLength(2);
         link[4][1].setDistance(500);
         link[4][1].setCongestionRate(INIT_RATE);
         adjMatrix[4][1] = 1;
@@ -206,6 +230,7 @@ public class NetworkTopologyManager {
         link[2][3].setLink(beaconCluster.getBeacon(2), beaconCluster.getBeacon(3), 5);
         link[2][3].setD_tubeThickness(INIT_THICKNESS);
         link[2][3].setL_tubeLength(1);
+        link[2][3].setInitL_tubeLength(1);
         link[2][3].setDistance(250);
         link[2][3].setCongestionRate(INIT_RATE);
         adjMatrix[2][3] = 1;
@@ -213,6 +238,7 @@ public class NetworkTopologyManager {
         link[3][2].setLink(beaconCluster.getBeacon(3), beaconCluster.getBeacon(2), 5);
         link[3][2].setD_tubeThickness(INIT_THICKNESS);
         link[3][2].setL_tubeLength(1);
+        link[3][2].setInitL_tubeLength(1);
         link[3][2].setDistance(250);
         link[3][2].setCongestionRate(INIT_RATE);
         adjMatrix[3][2] = 1;
@@ -220,6 +246,7 @@ public class NetworkTopologyManager {
         link[2][5].setLink(beaconCluster.getBeacon(2), beaconCluster.getBeacon(5), 15);
         link[2][5].setD_tubeThickness(INIT_THICKNESS);
         link[2][5].setL_tubeLength(3);
+        link[2][5].setInitL_tubeLength(3);
         link[2][5].setDistance(750);
         link[2][5].setCongestionRate(INIT_RATE);
         adjMatrix[2][5] = 1;
@@ -227,6 +254,7 @@ public class NetworkTopologyManager {
         link[5][2].setLink(beaconCluster.getBeacon(5), beaconCluster.getBeacon(2), 15);
         link[5][2].setD_tubeThickness(INIT_THICKNESS);
         link[5][2].setL_tubeLength(3);
+        link[5][2].setInitL_tubeLength(3);
         link[5][2].setDistance(750);
         link[5][2].setCongestionRate(INIT_RATE);
         adjMatrix[5][2] = 1;
@@ -234,6 +262,7 @@ public class NetworkTopologyManager {
         link[3][5].setLink(beaconCluster.getBeacon(3), beaconCluster.getBeacon(5), 10);
         link[3][5].setD_tubeThickness(INIT_THICKNESS);
         link[3][5].setL_tubeLength(2);
+        link[3][5].setInitL_tubeLength(2);
         link[3][5].setDistance(500);
         link[3][5].setCongestionRate(INIT_RATE);
         adjMatrix[3][5] = 1;
@@ -241,6 +270,7 @@ public class NetworkTopologyManager {
         link[5][3].setLink(beaconCluster.getBeacon(5), beaconCluster.getBeacon(3), 10);
         link[5][3].setD_tubeThickness(INIT_THICKNESS);
         link[5][3].setL_tubeLength(2);
+        link[5][3].setInitL_tubeLength(2);
         link[5][3].setDistance(500);
         link[5][3].setCongestionRate(INIT_RATE);
         adjMatrix[5][3] = 1;
@@ -248,6 +278,7 @@ public class NetworkTopologyManager {
         link[4][5].setLink(beaconCluster.getBeacon(4), beaconCluster.getBeacon(5), 15);
         link[4][5].setD_tubeThickness(INIT_THICKNESS);
         link[4][5].setL_tubeLength(3.3);
+        link[4][5].setInitL_tubeLength(3.3);
         link[4][5].setDistance(850);
         link[4][5].setCongestionRate(INIT_RATE);
         adjMatrix[4][5] = 1;
@@ -255,6 +286,7 @@ public class NetworkTopologyManager {
         link[5][4].setLink(beaconCluster.getBeacon(5), beaconCluster.getBeacon(4), 15);
         link[5][4].setD_tubeThickness(INIT_THICKNESS);
         link[5][4].setL_tubeLength(3.3);
+        link[5][4].setInitL_tubeLength(3.3);
         link[5][4].setDistance(850);
         link[5][4].setCongestionRate(INIT_RATE);
         adjMatrix[5][4] = 1;
@@ -273,11 +305,13 @@ public class NetworkTopologyManager {
             // i -> j
             link[i][j].setD_tubeThickness(INIT_THICKNESS);
             link[i][j].setL_tubeLength(linkInfo.lTubeLength);
+            link[i][j].setInitL_tubeLength(linkInfo.lTubeLength);  // 初期値を保存
             adjMatrix[i][j] = 1;
 
             // j -> i（双方向）
             link[j][i].setD_tubeThickness(INIT_THICKNESS);
             link[j][i].setL_tubeLength(linkInfo.lTubeLength);
+            link[j][i].setInitL_tubeLength(linkInfo.lTubeLength);  // 初期値を保存
             adjMatrix[j][i] = 1;
         }
     }
@@ -296,6 +330,7 @@ public class NetworkTopologyManager {
             link[i][j].setLink(beaconCluster.getBeacon(i), beaconCluster.getBeacon(j), linkInfo.capacity);
             link[i][j].setD_tubeThickness(INIT_THICKNESS);
             link[i][j].setL_tubeLength(linkInfo.lTubeLength);
+            link[i][j].setInitL_tubeLength(linkInfo.lTubeLength);  // 初期値を保存
             link[i][j].setDistance(linkInfo.distance);
             link[i][j].setCongestionRate(INIT_RATE);
             adjMatrix[i][j] = 1;
@@ -304,6 +339,7 @@ public class NetworkTopologyManager {
             link[j][i].setLink(beaconCluster.getBeacon(j), beaconCluster.getBeacon(i), linkInfo.capacity);
             link[j][i].setD_tubeThickness(INIT_THICKNESS);
             link[j][i].setL_tubeLength(linkInfo.lTubeLength);
+            link[j][i].setInitL_tubeLength(linkInfo.lTubeLength);  // 初期値を保存
             link[j][i].setDistance(linkInfo.distance);
             link[j][i].setCongestionRate(INIT_RATE);
             adjMatrix[j][i] = 1;
