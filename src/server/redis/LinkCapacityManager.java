@@ -6,6 +6,7 @@ import org.redisson.api.RAtomicLong;
 import org.redisson.api.RBucket;
 import org.redisson.api.RScript;
 import org.redisson.api.RedissonClient;
+import server.util.Link117DebugLogger;
 import server.util.LogManager;
 
 import java.util.Collections;
@@ -315,10 +316,17 @@ public class LinkCapacityManager {
                 LogManager.getInstance().log(
                     "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量消費成功（双方向、Lua原子操作）"
                 );
+
+                // DEBUG: 117-123リンクの容量変化を専用ログに記録
+                double newCap = getCapacity(srcNode, dstNode);
+                Link117DebugLogger.getInstance().logCapacityChange(srcNode, dstNode, "CONSUME", newCap + 1, newCap);
             } else {
                 LogManager.getInstance().log(
                     "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量不足（Lua原子操作）"
                 );
+
+                // DEBUG: 117-123リンクの容量不足を専用ログに記録
+                Link117DebugLogger.getInstance().logCapacityChange(srcNode, dstNode, "CONSUME_FAIL", 0, 0);
             }
 
             return success;
@@ -378,6 +386,10 @@ public class LinkCapacityManager {
             LogManager.getInstance().log(
                 "Phase 3b-4: link[" + srcNode + "][" + dstNode + "] 容量回復 → " + newCapacity + "（双方向、Lua原子操作）"
             );
+
+            // DEBUG: 117-123リンクの容量回復を専用ログに記録
+            Link117DebugLogger.getInstance().logCapacityChange(srcNode, dstNode, "RECOVER", newCapacity - 1, newCapacity);
+
             return newCapacity;
         } catch (Exception e) {
             LogManager.getInstance().error("容量回復エラー: link[" + srcNode + "][" + dstNode + "]", e);
@@ -435,8 +447,15 @@ public class LinkCapacityManager {
                 for (int j = 0; j < node; j++) {
                     if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY) {
                         double redisCapacity = getCapacity(i, j);
+                        double oldCapacity = link[i][j].getCapacity();
                         link[i][j].setCapacity(redisCapacity);
                         synced++;
+
+                        // DEBUG: 117-123リンクの容量同期ログ（専用ログファイル）
+                        if ((i == 117 && j == 123) || (i == 123 && j == 117)) {
+                            Link117DebugLogger.getInstance().logSync(
+                                i, j, redisCapacity, oldCapacity, link[i][j].getInitCapacity());
+                        }
                     }
                 }
             }

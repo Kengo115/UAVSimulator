@@ -8,8 +8,10 @@ import item.Link;
 import item.Uav;
 import server.controller.ServerController;
 import server.redis.ClientTimeManager;
+import server.redis.LinkCapacityManager;
 import server.redis.UAVJob;
 import server.redis.UAVJobQueue;
+import server.util.Link117DebugLogger;
 import server.util.LogManager;
 import server.util.MathUtils;
 import server.util.ResultOutputManager;
@@ -316,6 +318,9 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         UAVJobQueue jobQueue = new UAVJobQueue();
         int clientId = client.getId();
 
+        // Phase 8-Fix: 容量予約用のLinkCapacityManager
+        LinkCapacityManager capacityManager = new LinkCapacityManager();
+
         // 同一リンクごとに2秒間隔でジョブ投入するためのスケジューラ
         ScheduledExecutorService enqueueScheduler = Executors.newScheduledThreadPool(1);
 
@@ -338,6 +343,9 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             if (flow > 0) {
                 int pathLength = maxPathIndex;
                 int[] pathArray = Arrays.copyOf(path, pathLength);
+
+                // 容量消費はAsyncUAVWorker/FlightSchedulerで各リンク進入時に行う
+                // （FlightSchedulerのRace condition対策により待機UAVがいるリンクは容量0のまま）
 
                 // 一ホップ目リンクのキーを作成
                 String firstLinkKey = pathArray[0] + "-" + pathArray[1];
@@ -378,6 +386,9 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                         // キューに投入
                         jobQueue.enqueueJob(job);
                         LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + Arrays.toString(finalPathArray) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
+
+                        // DEBUG: 117-123を含む経路の場合、専用ログに記録
+                        Link117DebugLogger.getInstance().logRouteAssign(clientId, uavId, finalPathArray, 1);
 
                         // Phase 7-2: 経路割り当て情報を記録
                         try {
@@ -437,6 +448,8 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             LogManager.getInstance().error("Phase 3b-6: 再割り当て用の経路が見つかりませんでした");
             return;
         }
+
+        // 容量消費はAsyncUAVWorker/FlightSchedulerで各リンク進入時に行う
 
         // 一ホップ目リンクのキーを作成
         String firstLinkKey = simplePath[0] + "-" + simplePath[1];

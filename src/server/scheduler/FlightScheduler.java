@@ -3,6 +3,7 @@ package server.scheduler;
 import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import server.redis.*;
+import server.util.Link117DebugLogger;
 import server.util.LinkStatusRecorder;
 import server.util.LogManager;
 import server.util.ResultOutputManager;
@@ -234,22 +235,33 @@ public class FlightScheduler {
             processFirstHopPathCopy(job);
         }
 
-        // 3. 容量回復（順方向・逆方向両方）
-        double newCapacity = capacityManager.recoverCapacity(fromNode, toNode);
-
-        // 4. 待機UAVがいれば再ジョブ化
-        // Phase 8-Fix: 正規化キーにより双方向リンクで単一キューを共有するため、
-        // 1回の容量回復で1つのUAVのみを再ジョブ化
+        // 3. 待機UAVの有無をチェック（容量回復と消費をアトミックに処理）
+        // Phase 8-Fix: Race condition防止のため、容量回復と待機UAV消費を同時に行う
         int[] normalized = UAVEventChannels.normalizeLink(fromNode, toNode);
-        if (waitingManager.hasWaitingUAV(normalized[0], normalized[1])) {
+        boolean hasWaitingUAV = waitingManager.hasWaitingUAV(normalized[0], normalized[1]);
+
+        if (hasWaitingUAV) {
+            // 待機UAVがいる場合: 容量回復と消費が相殺 → Redis容量変化なし
+            // キュー経由せず直接飛行開始させる（Race condition防止）
             UAVJob waitingJob = waitingManager.dequeue(normalized[0], normalized[1]);
             if (waitingJob != null) {
-                jobQueue.enqueueJob(waitingJob);
+                // DEBUG: 117-123リンクの待機キュー削除を専用ログに記録
+                int remainingCount = waitingManager.getWaitingCount(normalized[0], normalized[1]);
+                Link117DebugLogger.getInstance().logWaitingQueue(normalized[0], normalized[1], "DEQUEUE", remainingCount);
+
+                // 直接飛行開始（容量は0のまま、回復も消費もしない）
+                startFlight(waitingJob);
                 LogManager.getInstance().log(
                     "Phase 8-Fix: 待機 client" + waitingJob.getClientId() + " UAV" + waitingJob.getUavId() +
-                    " を再ジョブ化 (link " + normalized[0] + "-" + normalized[1] + ")"
+                    " を直接飛行開始（容量変化なし）(link " + normalized[0] + "-" + normalized[1] + ")"
                 );
             }
+        } else {
+            // 待機UAVがいない場合: 容量を回復
+            double newCapacity = capacityManager.recoverCapacity(fromNode, toNode);
+            LogManager.getInstance().log(
+                "Phase 8-Fix: link[" + fromNode + "][" + toNode + "] 容量回復 → " + newCapacity
+            );
         }
 
         // 6. 最終リンクか判定
@@ -299,6 +311,9 @@ public class FlightScheduler {
 
         // Phase 8-Debug: 待機数が異常に多い場合に警告ログ出力
         int waitingCount = waitingManager.getWaitingCount(fromNode, toNode);
+
+        // DEBUG: 117-123リンクの待機キュー追加を専用ログに記録
+        Link117DebugLogger.getInstance().logWaitingQueue(fromNode, toNode, "ENQUEUE", waitingCount);
         if (waitingCount > 50) {
             LogManager.getInstance().log(
                 "WARNING: リンク " + fromNode + "→" + toNode + " で待機UAVが " + waitingCount + " 台に達しました！"

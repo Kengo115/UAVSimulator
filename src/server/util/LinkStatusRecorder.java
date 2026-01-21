@@ -318,11 +318,12 @@ public class LinkStatusRecorder {
         long timestamp = System.currentTimeMillis() - simulationStartTime;
         int flying = (int) link.getFlyingUAV();
         int waiting = link.getWaitingUAV();
-        double capacity = link.getInitCapacity();
+        double initCapacity = link.getInitCapacity();
+        double currentCapacity = link.getCapacity();
         double loadRate = link.getLoadRate();
 
         try {
-            writeToCSV(timestamp, fromNode, toNode, flying, waiting, capacity, loadRate, event);
+            writeToCSV(timestamp, fromNode, toNode, flying, waiting, initCapacity, currentCapacity, loadRate, event);
         } catch (IOException e) {
             LogManager.getInstance().error("Phase 7-4: リンク状態記録エラー", e);
         }
@@ -333,8 +334,8 @@ public class LinkStatusRecorder {
      * @param timestampMs タイムスタンプ（ミリ秒）
      */
     private synchronized void writeToCSV(long timestampMs, int fromNode, int toNode,
-                                          int flying, int waiting, double capacity,
-                                          double loadRate, String event) throws IOException {
+                                          int flying, int waiting, double initCapacity,
+                                          double currentCapacity, double loadRate, String event) throws IOException {
         if (outputFilePath == null) {
             // 出力先パスを決定
             BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
@@ -353,11 +354,11 @@ public class LinkStatusRecorder {
 
         try (FileWriter writer = new FileWriter(outputFilePath, true)) {
             if (!headerWritten) {
-                writer.write("timestamp,link_from,link_to,flying_count,waiting_count,capacity,load_rate,event\n");
+                writer.write("timestamp,link_from,link_to,flying_count,waiting_count,init_capacity,current_capacity,load_rate,event\n");
                 headerWritten = true;
             }
-            writer.write(String.format("%.2f,%d,%d,%d,%d,%.1f,%.2f,%s\n",
-                    timestampSec, fromNode, toNode, flying, waiting, capacity, loadRate, event));
+            writer.write(String.format("%.2f,%d,%d,%d,%d,%.1f,%.1f,%.2f,%s\n",
+                    timestampSec, fromNode, toNode, flying, waiting, initCapacity, currentCapacity, loadRate, event));
         }
     }
 
