@@ -77,7 +77,11 @@ def main():
     print(f"  Records: {len(df)}")
     print(f"  Time range: {df['timestamp'].min():.1f}s - {df['timestamp'].max():.1f}s ({df['time_min'].max():.1f} min)")
     print(f"  Load rate: min={df['load_rate'].min():.1f}%, max={df['load_rate'].max():.1f}%, avg={df['load_rate'].mean():.1f}%")
-    print(f"  Capacity: {df['capacity'].iloc[0]}")
+    # init_capacity列があれば表示（古いデータはcapacity列の場合もある）
+    if 'init_capacity' in df.columns:
+        print(f"  Init Capacity: {df['init_capacity'].iloc[0]}")
+    elif 'capacity' in df.columns:
+        print(f"  Capacity: {df['capacity'].iloc[0]}")
 
     plt.close()
 

@@ -166,11 +166,8 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 }
             }
 
-            // 最後のループで流量を整数に丸める（ソース流出を基準に、流量保存則を維持）
-            if (ct == numLoop - 1) {
-                int requiredFlow = (int) Math.round(Q_Kirchhoff[source]);
-                roundSourceOutflowsAndPropagate(link, source, dist, requiredFlow);
-            }
+            // フロー分解アルゴリズムでは整数丸め込みは不要
+            // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
 
             // シグモイド関数
             for (int i = 0; i < node; i++) {
@@ -209,22 +206,9 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
 
             ct++;
             
-            // 最後のループの場合に実行する処理
+            // 最後のループの場合に実行する処理（フロー分解アルゴリズムによる経路割り当て）
             if (ct == numLoop) {
-                // 初期設定として、Flow_CapacityにQ_tubeFlowを代入,各リンクを流れる流量の整数値をtubeFlowに追加
-                LogManager.getInstance().log("breakout point");
-                for (int i = 0; i < node; i++) {
-                    for (int j = 0; j < node; j++) {
-                        if (link[i][j].getL_tubeLength() != INF) {
-                            adjMatrix[i][j] = 1;
-                            if (link[i][j].getQ_tubeFlow() > 0) {
-                                Flow_Capacity[i][j] = link[i][j].getQ_tubeFlow();
-                                int flow = (int) Math.floor(Flow_Capacity[i][j]);
-                                tubeFlow[i][j] = flow;
-                            }
-                        }
-                    }
-                }
+                LogManager.getInstance().log("EPS計算完了: フロー分解アルゴリズムで経路割り当てを開始");
 
                 // スタートノード、ゴールノード、必要なUAV台数を取得
                 int startNode = client.getFlow().getSource().getId();
@@ -232,6 +216,8 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 int requiredUAVs = (int) client.getFlow().getTheNumberOfUAV();
 
                 // 実際のUAVに経路を割り当てるためのメイン処理
+                // Phase 1: BFSでフロー≥1.0の経路を探索
+                // Phase 2: グリーディ探索で残りのUAVに経路を割り当て
                 runUAVFlow(startNode, goalNode, requiredUAVs, client, flyingUavQueue, uavQueue);
             }
         }
@@ -434,40 +420,49 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     }
 
     /**
-     * Phase 3b-6: 残りのUAVをRedis経由で再割り当てする
+     * Phase 2: 残りのUAVをグリーディ探索で割り当てる（Redis版）
+     * 各UAVごとに最大残存フローのリンクを選択して経路を決定
      * 同一リンクのUAVは2秒間隔でジョブを投入
      */
     protected void adjustRemainingFlowRedis(int needUAV, int startNode, int goalNode, Client client,
                                             UAVJobQueue jobQueue, ScheduledExecutorService enqueueScheduler,
                                             Map<String, Integer> linkEnqueueOrder) {
         int clientId = client.getId();
-
-        // 簡易的な経路を探索（Dijkstra的なアプローチ）
-        int[] simplePath = findSimplePath(startNode, goalNode);
-        if (simplePath == null || simplePath.length < 2) {
-            LogManager.getInstance().error("Phase 3b-6: 再割り当て用の経路が見つかりませんでした");
-            return;
-        }
-
-        // 容量消費はAsyncUAVWorker/FlightSchedulerで各リンク進入時に行う
-
-        // 一ホップ目リンクのキーを作成
-        String firstLinkKey = simplePath[0] + "-" + simplePath[1];
-
-        double[] linkDistances = calculateLinkDistances(simplePath);
+        LogManager.getInstance().log("Phase 2: グリーディ探索で残り" + needUAV + "台を割り当て");
 
         for (int i = 0; i < needUAV; i++) {
+            // 各UAVごとにグリーディ経路を探索
+            int[] path = new int[40];
+            boolean found = explorePathGreedy(startNode, goalNode, path);
+
+            if (!found) {
+                LogManager.getInstance().error("Phase 2: UAV " + (UAV_count + 1) + "/" + (UAV_count + needUAV - i) + " の経路が見つかりませんでした");
+                // フォールバック: BFSで最短経路を探索
+                int[] fallbackPath = findSimplePath(startNode, goalNode);
+                if (fallbackPath == null || fallbackPath.length < 2) {
+                    LogManager.getInstance().error("Phase 2: フォールバック経路も見つかりませんでした");
+                    continue;
+                }
+                path = fallbackPath;
+            } else {
+                // explorePathGreedyはmaxPathIndexを設定するので、それを使用
+                path = Arrays.copyOf(path, maxPathIndex);
+            }
+
+            final int[] pathArray = path;
             Uav uav = client.getFlow().getUav(UAV_count);
             int uavId = uav.getId();
-            // 各UAVの個別速度を使用（8~16 m/sのランダム値）
             double uavSpeed = uav.getSpeed();
+
+            // 一ホップ目リンクのキーを作成
+            String firstLinkKey = pathArray[0] + "-" + pathArray[1];
 
             // このリンクの現在の投入順序を取得・更新
             int currentOrder = linkEnqueueOrder.getOrDefault(firstLinkKey, 0);
             linkEnqueueOrder.put(firstLinkKey, currentOrder + 1);
 
             final int delaySeconds = currentOrder * 2;
-            final int[] finalSimplePath = simplePath;
+            double[] linkDistances = calculateLinkDistances(pathArray);
             final double[] finalLinkDistances = linkDistances;
 
             // 同一リンクのUAVは2秒間隔でジョブ投入をスケジュール
@@ -475,24 +470,25 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 UAVJob job = new UAVJob(
                     uavId,
                     clientId,
-                    finalSimplePath,
+                    pathArray,
                     uavSpeed,
                     System.currentTimeMillis(),
                     startNode,
                     goalNode
                 );
                 job.setLinkDistances(finalLinkDistances);
-                // Phase 3b-8: セッションIDを設定
                 job.setSessionId(BoundaryController.getCurrentSessionId());
 
                 jobQueue.enqueueJob(job);
-                LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " 再割り当てジョブ投入完了 (速度: " + String.format("%.2f", uavSpeed) + "m/s)");
+                LogManager.getInstance().log("Phase 2: UAV" + uavId + " グリーディ経路ジョブ投入完了 (経路: " + Arrays.toString(pathArray) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
 
-                // Phase 7-2: 経路割り当て情報を記録
+                // DEBUG: 117-123を含む経路の場合、専用ログに記録
+                Link117DebugLogger.getInstance().logRouteAssign(clientId, uavId, pathArray, 2);
+
                 try {
                     ResultOutputManager.outputRouteAssignment(job, clientId);
                 } catch (IOException e) {
-                    LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー（再割り当て）", e);
+                    LogManager.getInstance().error("Phase 2: 経路割り当て記録エラー", e);
                 }
             }, delaySeconds, TimeUnit.SECONDS);
 
@@ -642,17 +638,19 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     }
 
     /**
-     * 幅優先探索で最短経路を探索する
+     * Phase 1: 幅優先探索でフロー≥1.0の経路を探索し、floor(minFlow)台のUAVを割り当てる
+     * Ford-Fulkerson法に基づくフロー分解アルゴリズム
+     *
      * @param startNode 開始ノード
      * @param currentNode 現在のノード（互換性のため、startNodeと同じ値を渡す）
      * @param goalNode 目標ノード
      * @param path 経路（結果を格納）
      * @param pathIndex 経路インデックス（互換性のため、1を渡す）
      * @param passedFlow 通過フロー（互換性のため、0を渡す）
-     * @return フロー（経路上の最小フロー）
+     * @return フロー（経路上の最小フローのfloor値、0以上の整数）
      */
     protected int explorePath(int startNode, int currentNode, int goalNode, int[] path, int pathIndex, int passedFlow) {
-        // BFSで最短経路を探索
+        // BFSで最短経路を探索（フロー≥1.0のリンクのみ使用）
         int[] parent = new int[node];
         Arrays.fill(parent, -1);
         parent[startNode] = startNode; // 自分自身を親として開始点をマーク
@@ -666,7 +664,10 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             int current = queue.poll();
 
             for (int next = 0; next < node; next++) {
-                if (parent[next] == -1 && adjMatrix[current][next] == 1 && tubeFlow[current][next] > 0) {
+                // Phase 1: フロー≥1.0のリンクのみを使用（tubeFlowではなくlink.getQ_tubeFlow()を直接参照）
+                if (parent[next] == -1 &&
+                    link[current][next].getL_tubeLength() != INF &&
+                    link[current][next].getQ_tubeFlow() >= 1.0) {
                     parent[next] = current;
 
                     if (next == goalNode) {
@@ -698,43 +699,154 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         }
 
         // 経路をpath配列にコピー（path[0]はstartNodeのまま、path[1]以降にpathListをコピー）
-        // 注: runUAVFlowRedisでpath[0] = startNode, pathIndex = 1としてこのメソッドを呼んでいる
         for (int i = 0; i < pathList.size(); i++) {
             path[i + 1] = pathList.get(i);  // path[1]から始める
         }
         maxPathIndex = pathList.size() + 1;  // startNodeを含めた経路長
 
-        // 経路上の最小フローを計算
-        min_Flow = Integer.MAX_VALUE;
+        // 経路上の最小フローを計算（実数値）
+        double minFlowDouble = Double.MAX_VALUE;
         int prevNode = startNode;
         for (int i = 0; i < pathList.size(); i++) {
             int nextNode = pathList.get(i);
-            min_Flow = Math.min(min_Flow, tubeFlow[prevNode][nextNode]);
+            minFlowDouble = Math.min(minFlowDouble, link[prevNode][nextNode].getQ_tubeFlow());
             prevNode = nextNode;
         }
 
-        if (min_Flow <= 0 || min_Flow == Integer.MAX_VALUE) {
+        // floor(minFlow)を取得（整数台数）
+        int floorMinFlow = (int) Math.floor(minFlowDouble);
+        if (floorMinFlow <= 0) {
             return 0;
         }
 
-        // tubeFlowを減算
+        // 経路上の各リンクからfloorMinFlowを減算
         prevNode = startNode;
         for (int i = 0; i < pathList.size(); i++) {
             int nextNode = pathList.get(i);
-            tubeFlow[prevNode][nextNode] -= min_Flow;
-            Flow_Capacity[prevNode][nextNode] -= min_Flow;
-
-            if (tubeFlow[prevNode][nextNode] == 0) {
-                adjMatrix[prevNode][nextNode] = 0;
+            double currentFlow = link[prevNode][nextNode].getQ_tubeFlow();
+            link[prevNode][nextNode].setQ_tubeFlow(currentFlow - floorMinFlow);
+            // 逆方向のフローも更新（双方向リンクの場合）
+            if (link[nextNode][prevNode].getL_tubeLength() != INF) {
+                double reverseFlow = link[nextNode][prevNode].getQ_tubeFlow();
+                link[nextNode][prevNode].setQ_tubeFlow(reverseFlow + floorMinFlow);
             }
             prevNode = nextNode;
         }
 
-        return min_Flow;
+        min_Flow = floorMinFlow;
+        return floorMinFlow;
     }
 
     /**
-     * 残りのUAVに経路を割り当てる
+     * Phase 2: フロー優先探索で1台分の経路を見つける
+     * 正のフロー(>0)があるリンクのみを使用し、フロー値が大きいリンクを優先
+     * 優先度付きキュー（最大フロー優先）を使用してダイクストラ的に探索
+     * 経路発見後、各リンクのフローを1減少させる
+     *
+     * @param startNode 開始ノード
+     * @param goalNode 目標ノード
+     * @param path 経路（結果を格納）
+     * @return true: 経路が見つかった, false: 経路が見つからない
+     */
+    protected boolean explorePathGreedy(int startNode, int goalNode, int[] path) {
+        // 各ノードへの「最大の最小フロー」を記録（ボトルネックフロー最大化）
+        double[] maxMinFlow = new double[node];
+        Arrays.fill(maxMinFlow, Double.NEGATIVE_INFINITY);
+        maxMinFlow[startNode] = Double.MAX_VALUE;
+
+        int[] parent = new int[node];
+        Arrays.fill(parent, -1);
+        parent[startNode] = startNode;
+
+        // 優先度付きキュー: (ノード, そのノードまでの経路の最小フロー) - 最小フローが大きい順
+        java.util.PriorityQueue<double[]> pq = new java.util.PriorityQueue<>(
+            (a, b) -> Double.compare(b[1], a[1])  // 降順（大きいフロー優先）
+        );
+        pq.add(new double[]{startNode, Double.MAX_VALUE});
+
+        boolean found = false;
+
+        while (!pq.isEmpty() && !found) {
+            double[] curr = pq.poll();
+            int current = (int) curr[0];
+            double currentMinFlow = curr[1];
+
+            // より良い経路が既に見つかっている場合はスキップ
+            if (currentMinFlow < maxMinFlow[current]) {
+                continue;
+            }
+
+            for (int next = 0; next < node; next++) {
+                if (link[current][next].getL_tubeLength() != INF) {
+                    double edgeFlow = link[current][next].getQ_tubeFlow();
+
+                    // 正のフローがあるリンクのみ使用
+                    if (edgeFlow > 0) {
+                        // このリンクを通った場合の最小フロー
+                        double newMinFlow = Math.min(currentMinFlow, edgeFlow);
+
+                        // より良い経路が見つかった場合のみ更新
+                        if (newMinFlow > maxMinFlow[next]) {
+                            maxMinFlow[next] = newMinFlow;
+                            parent[next] = current;
+
+                            if (next == goalNode) {
+                                found = true;
+                                break;
+                            }
+
+                            pq.add(new double[]{next, newMinFlow});
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!found) {
+            return false;
+        }
+
+        // 経路を復元（ゴールからスタートへ逆順にたどる）
+        java.util.List<Integer> pathList = new java.util.ArrayList<>();
+        int current = goalNode;
+        while (current != startNode) {
+            pathList.add(0, current);
+            current = parent[current];
+        }
+        pathList.add(0, startNode);
+
+        // 経路長チェック
+        if (pathList.size() > path.length) {
+            LogManager.getInstance().log("警告: Phase 2 経路長(" + pathList.size() + ")が上限(" + path.length + ")を超えています");
+            return false;
+        }
+
+        // 経路をpath配列にコピー
+        for (int i = 0; i < pathList.size(); i++) {
+            path[i] = pathList.get(i);
+        }
+        maxPathIndex = pathList.size();
+
+        // 経路上の各リンクからフローを1減少
+        for (int i = 0; i < pathList.size() - 1; i++) {
+            int from = pathList.get(i);
+            int to = pathList.get(i + 1);
+            double currentFlow = link[from][to].getQ_tubeFlow();
+            link[from][to].setQ_tubeFlow(currentFlow - 1.0);
+            // 逆方向のフローも更新
+            if (link[to][from].getL_tubeLength() != INF) {
+                double reverseFlow = link[to][from].getQ_tubeFlow();
+                link[to][from].setQ_tubeFlow(reverseFlow + 1.0);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Phase 2: 残りのUAVにグリーディ探索で経路を割り当てる（メモリ版）
+     * 各UAVごとに最大残存フローのリンクを選択して経路を決定
+     *
      * @param needUAV 必要なUAV数
      * @param startNode 開始ノード
      * @param goalNode 目標ノード
@@ -743,116 +855,70 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
      * @param uavQueue 待機中のUAVキュー
      */
     protected void adjustRemainingFlow(int needUAV, int startNode, int goalNode, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
+        LogManager.getInstance().log("Phase 2: グリーディ探索で残り" + needUAV + "台を割り当て（メモリモード）");
         int countOfUAV = 0;
-        int[] path = new int[40]; // path を再利用
-        int pathIndex;
 
         while (countOfUAV < needUAV) {
-            pathIndex = 0;
-            Arrays.fill(path, 0);
-            path[pathIndex++] = startNode;
+            // 各UAVごとにグリーディ経路を探索
+            int[] path = new int[40];
+            boolean found = explorePathGreedy(startNode, goalNode, path);
 
-            int currentNode = startNode;
-            boolean pathFound = false;
-
-            while (currentNode != goalNode) {
-                int nextNode = -1;
-                double maxCapacity = -1.0;
-
-                for (int j = 0; j < node; j++) {
-                    if (tubeFlow[currentNode][j] > 0 && Flow_Capacity[currentNode][j] >= 1) {
-                        if (Flow_Capacity[currentNode][j] > maxCapacity) {
-                            maxCapacity = Flow_Capacity[currentNode][j];
-                            nextNode = j;
-                        }
-                    }
-                }
-
-                if (nextNode == -1) {
-                    for (int j = 0; j < node; j++) {
-                        if (Flow_Capacity[currentNode][j] > maxCapacity) {
-                            maxCapacity = Flow_Capacity[currentNode][j];
-                            nextNode = j;
-                        }
-                    }
-                    if (nextNode != -1) {
-                        tubeFlow[currentNode][nextNode] = 1;
-                        Flow_Capacity[currentNode][nextNode] = 1.0;
-                    }
-                }
-
-                if (nextNode == -1) {
+            if (!found) {
+                LogManager.getInstance().error("Phase 2: UAV " + (UAV_count + countOfUAV + 1) + " の経路が見つかりませんでした");
+                // フォールバック: BFSで最短経路を探索
+                int[] fallbackPath = findSimplePath(startNode, goalNode);
+                if (fallbackPath == null || fallbackPath.length < 2) {
+                    LogManager.getInstance().error("Phase 2: フォールバック経路も見つかりませんでした。処理を中断します。");
                     break;
                 }
-
-                // 経路長の上限チェック
-                if (pathIndex >= path.length) {
-                    LogManager.getInstance().log("警告: 経路長が上限(" + path.length + ")を超えました。経路探索を中断します。");
-                    break;
-                }
-
-                path[pathIndex++] = nextNode;
-                int flow = tubeFlow[currentNode][nextNode];
-                tubeFlow[currentNode][nextNode] -= flow;
-                Flow_Capacity[currentNode][nextNode] -= flow;
-
-                currentNode = nextNode;
-
-                if (currentNode == goalNode) {
-                    pathFound = true;
-                    int[] assignedPath = new int[pathIndex];
-                    System.arraycopy(path, 0, assignedPath, 0, pathIndex);
-
-                    int u = assignedPath[0];
-                    int v = assignedPath[1];
-                    double minCapacity = link[u][v].getCapacity();
-
-                    for (int uav = 0; uav < flow && countOfUAV < needUAV; uav++) {
-                        int currentUAVIndex = UAV_count + countOfUAV;
-                        Uav currentUAV = client.getFlow().getUav(currentUAVIndex);
-                        currentUAV.setPath(assignedPath);
-                        server.uav.FlightDataRecorder.recordRoute(currentUAV, getRemainingRouteRecordTag());
-
-                        // Phase 7-2: 経路割り当て情報を記録（メモリモード・再割り当て）
-                        try {
-                            ResultOutputManager.outputRouteAssignment(
-                                currentUAV.getId(),
-                                currentUAV.getSource().getId(),
-                                currentUAV.getDistination().getId(),
-                                currentUAV.getPath(),
-                                currentUAV.getClientId()
-                            );
-                        } catch (IOException e) {
-                            LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー（メモリモード・再割り当て）", e);
-                        }
-
-                        if (countOfUAV < minCapacity) {
-                            currentUAV.startTimer();
-                            currentUAV.setFlyingLink(link[u][v]);
-                            currentUAV.setPassedLink(link[u][v]);
-                            flyingUavQueue.add(currentUAV);
-                            link[u][v].decrementCapacity();
-                            LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v + " adjustRemainingFlow");
-                        } else {
-                            currentUAV.startWaitingTimer();
-                            currentUAV.setStayedBeaconId(u);
-                            beaconCluster.getBeacon(u).addUav(currentUAV);
-                            beaconCluster.getBeacon(u).incrementWaitingUavCount();
-                            uavQueue.add(currentUAV);
-                            LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ") adjustRemainingFlow");
-                        }
-                        countOfUAV++;
-                    }
-                }
+                path = fallbackPath;
+            } else {
+                // explorePathGreedyはmaxPathIndexを設定するので、それを使用
+                path = Arrays.copyOf(path, maxPathIndex);
             }
 
-            if (!pathFound) {
-                LogManager.getInstance().log("有効な経路が見つかりませんでした");
-                break;
+            int[] assignedPath = path;
+            int u = assignedPath[0];
+            int v = assignedPath[1];
+            double minCapacity = link[u][v].getCapacity();
+
+            int currentUAVIndex = UAV_count + countOfUAV;
+            Uav currentUAV = client.getFlow().getUav(currentUAVIndex);
+            currentUAV.setPath(assignedPath);
+            server.uav.FlightDataRecorder.recordRoute(currentUAV, getRemainingRouteRecordTag());
+
+            // Phase 7-2: 経路割り当て情報を記録（メモリモード・Phase 2）
+            try {
+                ResultOutputManager.outputRouteAssignment(
+                    currentUAV.getId(),
+                    currentUAV.getSource().getId(),
+                    currentUAV.getDistination().getId(),
+                    currentUAV.getPath(),
+                    currentUAV.getClientId()
+                );
+            } catch (IOException e) {
+                LogManager.getInstance().error("Phase 2: 経路割り当て記録エラー（メモリモード）", e);
             }
+
+            if (countOfUAV < minCapacity) {
+                currentUAV.startTimer();
+                currentUAV.setFlyingLink(link[u][v]);
+                currentUAV.setPassedLink(link[u][v]);
+                flyingUavQueue.add(currentUAV);
+                link[u][v].decrementCapacity();
+                LogManager.getInstance().log("Phase 2: client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " flying " + u + "->" + v + " (経路: " + Arrays.toString(assignedPath) + ")");
+            } else {
+                currentUAV.startWaitingTimer();
+                currentUAV.setStayedBeaconId(u);
+                beaconCluster.getBeacon(u).addUav(currentUAV);
+                beaconCluster.getBeacon(u).incrementWaitingUavCount();
+                uavQueue.add(currentUAV);
+                LogManager.getInstance().log("Phase 2: client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " waiting at " + u + " (経路: " + Arrays.toString(assignedPath) + ")");
+            }
+            countOfUAV++;
         }
 
-        UAV_count += countOfUAV; // UAV_count を適切に更新
+        UAV_count += countOfUAV;
     }
 
     /**

@@ -484,7 +484,10 @@ public class LinkCapacityManager {
             int initialized = 0;
             for (int i = 0; i < node; i++) {
                 for (int j = 0; j < node; j++) {
-                    if (link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY) {
+                    // リンクが存在する条件: L_tubeLengthが0より大きく、INFでない、かつ初期容量が0より大きい
+                    if (link[i][j].getL_tubeLength() > 0 &&
+                        link[i][j].getL_tubeLength() != Double.POSITIVE_INFINITY &&
+                        link[i][j].getInitCapacity() > 0) {
                         // 初期容量をRedisに保存
                         saveInitCapacity(i, j, link[i][j].getInitCapacity());
                         // 現在容量（=初期容量）をRedisに保存

@@ -1,5 +1,6 @@
 .PHONY: up down restart run compile clean status logs kill-old \
-       heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link
+       heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
+       plot-topology plot-topology-labels
 
 # Dockerコンテナを起動
 up:
@@ -106,6 +107,8 @@ help:
 	@echo "  make plot-congestion         - 混雑率グラフ生成"
 	@echo "  make heatmap-video           - ヒートマップ動画生成"
 	@echo "  make plot-link               - リンク別load_rateグラフ生成"
+	@echo "  make plot-topology           - トポロジ描画"
+	@echo "  make plot-topology-labels    - トポロジ描画（ノード番号付き）"
 	@echo ""
 	@echo "分析ツール使用例:"
 	@echo "  make heatmap SNAPSHOT=src/result/large_scale/Bisectional/snapshot/snapshot_1420045.csv"
@@ -228,3 +231,21 @@ plot-link: venv-setup
 	@mkdir -p $(OUTPUT_DIR)/graphs
 	$(PYTHON) scripts/plot_link_load.py $(RESULT_DIR)/link_status/links $(OUTPUT_DIR)/graphs $(FROM) $(TO)
 	@echo "✓ リンク別グラフを生成しました"
+
+# トポロジ描画（ノード番号なし）
+# Usage: make plot-topology [TOPOLOGY=path/to/topology.txt]
+plot-topology: venv-setup
+	@echo "トポロジを描画します..."
+	@echo "  入力: $(TOPOLOGY)"
+	@mkdir -p $(OUTPUT_DIR)
+	$(PYTHON) scripts/plot_topology.py $(TOPOLOGY) $(OUTPUT_DIR)/topology_$(notdir $(basename $(TOPOLOGY))).png --simple
+	@echo "✓ トポロジを描画しました: $(OUTPUT_DIR)/topology_$(notdir $(basename $(TOPOLOGY))).png"
+
+# トポロジ描画（ノード番号あり）
+# Usage: make plot-topology-labels [TOPOLOGY=path/to/topology.txt]
+plot-topology-labels: venv-setup
+	@echo "トポロジを描画します（ノード番号付き）..."
+	@echo "  入力: $(TOPOLOGY)"
+	@mkdir -p $(OUTPUT_DIR)
+	$(PYTHON) scripts/plot_topology.py $(TOPOLOGY) $(OUTPUT_DIR)/topology_$(notdir $(basename $(TOPOLOGY)))_labels.png --simple --show-labels
+	@echo "✓ トポロジを描画しました: $(OUTPUT_DIR)/topology_$(notdir $(basename $(TOPOLOGY)))_labels.png"

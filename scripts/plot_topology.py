@@ -3,15 +3,19 @@
 トポロジファイルからネットワーク図を生成するスクリプト
 
 Usage:
-    python3 scripts/plot_topology.py <topology_file> [output_file] [--simple|--detailed]
+    python3 scripts/plot_topology.py <topology_file> [output_file] [--simple|--detailed] [--show-labels]
 
 Modes:
     --detailed (default for small networks): ノードラベル、容量表示あり
     --simple (default for large networks): シンプル表示、地区タイプで色分け
 
+Options:
+    --show-labels: ノード番号を表示（simpleモード用）
+
 Example:
     python3 scripts/plot_topology.py config/topology/default_topology.txt output/topology.png
     python3 scripts/plot_topology.py config/topology/koriyama_topology.txt output/koriyama.png --simple
+    python3 scripts/plot_topology.py config/topology/koriyama_topology.txt output/koriyama.png --simple --show-labels
 """
 
 import sys
@@ -143,7 +147,7 @@ def plot_topology_detailed(nodes, links, output_path, title=None):
     return output_path
 
 
-def plot_topology_simple(nodes, links, output_path, title=None):
+def plot_topology_simple(nodes, links, output_path, title=None, show_labels=False):
     """シンプルモード: 大規模ネットワーク向け、地区タイプで色分け"""
 
     G = nx.Graph()
@@ -154,7 +158,11 @@ def plot_topology_simple(nodes, links, output_path, title=None):
     for link in links:
         G.add_edge(link['source'], link['dest'])
 
-    fig, ax = plt.subplots(1, 1, figsize=(12, 10))
+    # ノード番号表示時は大きめのサイズ
+    if show_labels:
+        fig, ax = plt.subplots(1, 1, figsize=(20, 16))
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(12, 10))
 
     pos = nx.get_node_attributes(G, 'pos')
 
@@ -168,11 +176,14 @@ def plot_topology_simple(nodes, links, output_path, title=None):
     scattered_nodes = [n for n, d in G.nodes(data=True) if d.get('district_type', 0) == 0]
     concentrated_nodes = [n for n, d in G.nodes(data=True) if d.get('district_type', 0) == 1]
 
+    # ノードサイズ（ラベル表示時は大きめ）
+    node_size = 80 if show_labels else 30
+
     # 点在地区（青）
     if scattered_nodes:
         nx.draw_networkx_nodes(G, pos, ax=ax,
                                nodelist=scattered_nodes,
-                               node_size=30,
+                               node_size=node_size,
                                node_color='#2196F3',
                                edgecolors='#1565C0',
                                linewidths=0.5)
@@ -181,10 +192,18 @@ def plot_topology_simple(nodes, links, output_path, title=None):
     if concentrated_nodes:
         nx.draw_networkx_nodes(G, pos, ax=ax,
                                nodelist=concentrated_nodes,
-                               node_size=30,
+                               node_size=node_size,
                                node_color='#F44336',
                                edgecolors='#C62828',
                                linewidths=0.5)
+
+    # ノード番号を表示
+    if show_labels:
+        # ノードの少し上にラベルを表示
+        label_pos = {node: (x, y + 0.008) for node, (x, y) in pos.items()}
+        nx.draw_networkx_labels(G, label_pos, ax=ax,
+                                font_size=6,
+                                font_color='#333333')
 
     if title:
         ax.set_title(title, fontsize=14, fontweight='bold')
@@ -215,7 +234,7 @@ def plot_topology_simple(nodes, links, output_path, title=None):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 plot_topology.py <topology_file> [output_file] [--simple|--detailed]")
+        print("Usage: python3 plot_topology.py <topology_file> [output_file] [--simple|--detailed] [--show-labels]")
         sys.exit(1)
 
     topology_file = sys.argv[1]
@@ -223,12 +242,15 @@ def main():
     # 出力ファイル名を決定
     output_file = None
     mode = None
+    show_labels = False
 
     for arg in sys.argv[2:]:
         if arg == '--simple':
             mode = 'simple'
         elif arg == '--detailed':
             mode = 'detailed'
+        elif arg == '--show-labels':
+            show_labels = True
         elif not output_file:
             output_file = arg
 
@@ -260,10 +282,12 @@ def main():
 
     # 描画
     print(f"Generating topology image...")
+    if show_labels:
+        print(f"  Show labels: enabled")
     title = os.path.basename(topology_file)
 
     if mode == 'simple':
-        plot_topology_simple(nodes, links, output_file, title=title)
+        plot_topology_simple(nodes, links, output_file, title=title, show_labels=show_labels)
     else:
         plot_topology_detailed(nodes, links, output_file, title=title)
 
