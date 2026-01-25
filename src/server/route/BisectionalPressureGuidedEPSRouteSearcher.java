@@ -32,8 +32,9 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
     private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 100; // 収束判定用の連続安定回数
+    private static final int REQUIRED_STABLE_ITERATIONS = 200; // 収束判定用の連続安定回数（100→200に変更）
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 10; // 二分探索の最大回数
+    private static final double MIN_ASSIGNMENT_RATIO = 1.0 / 4.0; // EPS最低割当比率（1/4 = 25%）
 
     // ソースノード圧力専用閾値
     private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値
@@ -152,6 +153,14 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             int remainingUAVs = requiredUAVs - (int)epsAssignedFlow;
 
             LogManager.getInstance().log("BisectionalPGEPS: EPS assigned flow " + epsAssignedFlow + " out of " + requiredUAVs + " required UAVs");
+
+            // 1/4最低保証チェック: EPS割当が要求の1/4(25%)未満の場合はリトライ
+            int minRequired = (int) Math.ceil(requiredUAVs * MIN_ASSIGNMENT_RATIO);
+            if (epsAssignedFlow < minRequired) {
+                LogManager.getInstance().log("BisectionalPGEPS: [MinAssignment] EPS assigned " + (int)epsAssignedFlow +
+                    " UAVs, but minimum required is " + minRequired + " (1/4 of " + requiredUAVs + "). Triggering retry.");
+                throw new SolverFailedException(currentClientId, 0, "BisectionalPGEPS-MinAssignment");
+            }
 
             // Phase 4: 事業者の時間計測開始（経路割り当て開始時点）
             ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);

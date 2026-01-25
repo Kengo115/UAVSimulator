@@ -56,4 +56,11 @@ public class SolverFailedException extends RuntimeException {
     public String getSearcherType() {
         return searcherType;
     }
+
+    /**
+     * 失敗理由を取得（searcherTypeと同じ）
+     */
+    public String getReason() {
+        return searcherType;
+    }
 }

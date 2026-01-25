@@ -436,14 +436,10 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             boolean found = explorePathGreedy(startNode, goalNode, path);
 
             if (!found) {
-                LogManager.getInstance().error("Phase 2: UAV " + (UAV_count + 1) + "/" + (UAV_count + needUAV - i) + " の経路が見つかりませんでした");
-                // フォールバック: BFSで最短経路を探索
-                int[] fallbackPath = findSimplePath(startNode, goalNode);
-                if (fallbackPath == null || fallbackPath.length < 2) {
-                    LogManager.getInstance().error("Phase 2: フォールバック経路も見つかりませんでした");
-                    continue;
-                }
-                path = fallbackPath;
+                // 経路が見つからない場合はEPSリトライをトリガー
+                LogManager.getInstance().log("Phase 2: UAV " + (UAV_count + 1) + "/" + (UAV_count + needUAV - i) +
+                    " の経路が見つかりませんでした。EPSリトライをトリガーします。");
+                throw new SolverFailedException(clientId, 0, "Phase2-PathNotFound");
             } else {
                 // explorePathGreedyはmaxPathIndexを設定するので、それを使用
                 path = Arrays.copyOf(path, maxPathIndex);
@@ -864,14 +860,10 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             boolean found = explorePathGreedy(startNode, goalNode, path);
 
             if (!found) {
-                LogManager.getInstance().error("Phase 2: UAV " + (UAV_count + countOfUAV + 1) + " の経路が見つかりませんでした");
-                // フォールバック: BFSで最短経路を探索
-                int[] fallbackPath = findSimplePath(startNode, goalNode);
-                if (fallbackPath == null || fallbackPath.length < 2) {
-                    LogManager.getInstance().error("Phase 2: フォールバック経路も見つかりませんでした。処理を中断します。");
-                    break;
-                }
-                path = fallbackPath;
+                // 経路が見つからない場合はEPSリトライをトリガー
+                LogManager.getInstance().log("Phase 2: UAV " + (UAV_count + countOfUAV + 1) +
+                    " の経路が見つかりませんでした（メモリモード）。EPSリトライをトリガーします。");
+                throw new SolverFailedException(client.getId(), 0, "Phase2-PathNotFound-Memory");
             } else {
                 // explorePathGreedyはmaxPathIndexを設定するので、それを使用
                 path = Arrays.copyOf(path, maxPathIndex);

@@ -58,6 +58,10 @@ public class BoundaryController {
     // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
     private static String currentSessionId;
 
+    // Phase 5-2: 非同期ルートリクエスト用ExecutorService
+    private static ExecutorService routeRequestExecutor;
+    private static final int ROUTE_REQUEST_THREAD_COUNT = 4;
+
     String filePath = "src/result/practice.net";
 
     private static int trial = 5;
@@ -599,6 +603,66 @@ public class BoundaryController {
         }
     }
 
+    /**
+     * Phase 5-2: 非同期ルートリクエスト用ExecutorServiceを初期化
+     */
+    private static void initializeRouteRequestExecutor() {
+        if (routeRequestExecutor == null || routeRequestExecutor.isShutdown()) {
+            routeRequestExecutor = Executors.newFixedThreadPool(ROUTE_REQUEST_THREAD_COUNT, r -> {
+                Thread t = new Thread(r, "RouteRequestExecutor");
+                t.setDaemon(true);
+                return t;
+            });
+            LogManager.getInstance().log("Phase 5-2: 非同期ルートリクエストExecutorを初期化しました (threads=" + ROUTE_REQUEST_THREAD_COUNT + ")");
+        }
+    }
+
+    /**
+     * Phase 5-2: 非同期ルートリクエスト用ExecutorServiceをシャットダウン
+     */
+    private static void shutdownRouteRequestExecutor() {
+        if (routeRequestExecutor != null && !routeRequestExecutor.isShutdown()) {
+            routeRequestExecutor.shutdown();
+            try {
+                if (!routeRequestExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    routeRequestExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                routeRequestExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            LogManager.getInstance().log("Phase 5-2: 非同期ルートリクエストExecutorをシャットダウンしました");
+        }
+    }
+
+    /**
+     * Phase 5-2: 経路探索を非同期で実行
+     * リトライ待ち中でも新しいクライアント生成をブロックしない
+     *
+     * @param client クライアント
+     * @param postRouteAction 経路探索完了後に実行するアクション（nullの場合は何もしない）
+     */
+    public void routeRequestAsync(Client client, Runnable postRouteAction) {
+        if (routeRequestExecutor == null || routeRequestExecutor.isShutdown()) {
+            initializeRouteRequestExecutor();
+        }
+
+        routeRequestExecutor.submit(() -> {
+            try {
+                routeRequest(client);
+                if (postRouteAction != null) {
+                    postRouteAction.run();
+                }
+            } catch (IOException e) {
+                LogManager.getInstance().error("Phase 5-2: 非同期ルートリクエストでIOエラー (client" + client.getId() + ")", e);
+            } catch (RuntimeException e) {
+                LogManager.getInstance().error("Phase 5-2: 非同期ルートリクエストでRuntimeException (client" + client.getId() + ")", e);
+            }
+        });
+
+        LogManager.getInstance().log("Phase 5-2: client" + client.getId() + " のルートリクエストを非同期で発行しました");
+    }
+
     public static void main(String[] args) {
         BoundaryController boundaryController = new BoundaryController();
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
@@ -880,6 +944,9 @@ public class BoundaryController {
                 // コントローラーを開始
                 statController.start();
 
+                // Phase 5-2: 非同期ルートリクエスト用Executorを初期化
+                initializeRouteRequestExecutor();
+
                 System.out.println("✓ 統計的シミュレーションを開始しました (seed=" + statConfig.getSeed() + ")");
                 System.out.println("シミュレーション時間: " + statConfig.getSimulationDurationHours() + "時間 (" + statConfig.getDurationSeconds() + "秒)");
 
@@ -920,9 +987,7 @@ public class BoundaryController {
                         lastOperation = "createClientFromSchedule";
                         client = boundaryController.createClientFromSchedule(entry);
 
-                        lastOperation = "routeRequest";
-                        boundaryController.routeRequest(client);
-
+                        // Phase 5-2: passedClientとタイマーは即座に処理（ルートリクエスト完了を待たない）
                         lastOperation = "passedClient.add";
                         synchronized (passedClient) {
                             passedClient.add(client);
@@ -934,8 +999,15 @@ public class BoundaryController {
                             timerStarted = true;
                         }
 
-                        lastOperation = "UAVFlyScheduler.startFlyUAVUpdates";
-                        UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeNum);
+                        // Phase 5-2: 非同期でルートリクエストを実行（リトライ待ちでもクライアント生成をブロックしない）
+                        lastOperation = "routeRequestAsync";
+                        final Client currentClient = client;
+                        boundaryController.routeRequestAsync(client, () -> {
+                            // 経路探索完了後のコールバック
+                            LogManager.getInstance().log("Phase 5-2: client" + currentClient.getId() + " の経路探索が完了しました");
+                            // UAVFlySchedulerを開始（最初のクライアントではpostSearchAction内で呼ばれないため、ここで呼び出す）
+                            UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeNum);
+                        });
 
                         // Phase 8: クライアント情報をファイルに記録
                         lastOperation = "writeClientInfo";
@@ -978,13 +1050,6 @@ public class BoundaryController {
                             Thread.sleep(Math.min(waitMs, remainingMs));
                         }
                     }
-                } catch (IOException e) {
-                    loopException = e;
-                    statController.logDiagnostic("LOOP_EXCEPTION",
-                        String.format("type=IOException,operation=%s,iteration=%d,message=%s",
-                            lastOperation, loopIterationCount, e.getMessage()));
-                    System.err.println("[Phase 8] IOException発生: " + lastOperation + " (iteration=" + loopIterationCount + ")");
-                    e.printStackTrace();
                 } catch (RuntimeException e) {
                     loopException = e;
                     statController.logDiagnostic("LOOP_EXCEPTION",
@@ -1027,6 +1092,9 @@ public class BoundaryController {
 
                 // UAVFlySchedulerを強制停止
                 UAVFlyScheduler.stopFlyUAVUpdates(clientController);
+
+                // Phase 5-2: 非同期ルートリクエストExecutorをシャットダウン
+                shutdownRouteRequestExecutor();
 
                 // 平均飛行ステータスを出力
                 ResultOutputManager.outputAverageFlightStatus();
