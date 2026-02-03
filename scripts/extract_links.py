@@ -16,13 +16,14 @@ import sys
 import os
 from collections import defaultdict
 
-def extract_links(input_csv: str, output_dir: str = None):
+def extract_links(input_csv: str, output_dir: str = None, link_stats: dict = None):
     """
     link_status.csv から各リンクのデータを個別のCSVファイルに抽出
 
     Args:
         input_csv: 入力CSVファイルのパス
         output_dir: 出力ディレクトリ（指定しない場合は入力ファイルと同じ場所にlinksディレクトリを作成）
+        link_stats: print_link_stats()から取得した統計情報（AvgFlying, MaxLoad用）
     """
     # 入力ファイル確認
     if not os.path.exists(input_csv):
@@ -68,13 +69,23 @@ def extract_links(input_csv: str, output_dir: str = None):
             writer.writerow(header)
             writer.writerows(rows)
 
-        summary.append((link_from, link_to, len(rows)))
+        # 統計情報を取得（link_statsがある場合）
+        avg_flying = 0.0
+        max_load = 0.0
+        max_waiting = 0
+        if link_stats and (link_from, link_to) in link_stats:
+            stats = link_stats[(link_from, link_to)]
+            avg_flying = stats['flying_sum'] / stats['count'] if stats['count'] > 0 else 0
+            max_load = stats['load_rate_max']
+            max_waiting = stats['waiting_max']
 
-    # サマリー情報を出力
+        summary.append((link_from, link_to, len(rows), avg_flying, max_load, max_waiting))
+
+    # サマリー情報を出力（AvgFlying, MaxLoad, MaxWaiting追加）
     summary_path = os.path.join(output_dir, "_summary.csv")
     with open(summary_path, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['link_from', 'link_to', 'record_count'])
+        writer.writerow(['link_from', 'link_to', 'record_count', 'avg_flying', 'max_load_rate', 'max_waiting'])
         writer.writerows(sorted(summary, key=lambda x: -x[2]))  # レコード数降順
 
     print(f"\n{len(link_data)} 個のリンクファイルを出力しました")
@@ -132,9 +143,9 @@ if __name__ == "__main__":
     input_csv = sys.argv[1]
     output_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
-    # 統計表示
-    print_link_stats(input_csv)
+    # 統計表示（統計情報も取得）
+    link_stats = print_link_stats(input_csv)
 
-    # 抽出実行
+    # 抽出実行（統計情報を渡してサマリーCSVに含める）
     print("\n" + "="*50)
-    extract_links(input_csv, output_dir)
+    extract_links(input_csv, output_dir, link_stats)
