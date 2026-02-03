@@ -399,18 +399,31 @@ public class SearcherRetryManager {
 
     /**
      * searcher_failure.log にログを出力する
+     * Phase 10: sim_N ディレクトリ配下に出力するように修正
      */
-    private static final String FAILURE_LOG_PATH = "src/log/searcher_failure.log";
     private static final DateTimeFormatter LOG_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+
+    /**
+     * Phase 10: searcher_failure.logのパスを動的に生成
+     * @return searcher_failure.logのパス（例: src/log/sim_1/searcher_failure.log）
+     */
+    private String getFailureLogPath() {
+        String logBaseDir = controller.BoundaryController.getLogBaseDir();
+        String simId = controller.BoundaryController.getSimId();
+        return logBaseDir + "/sim_" + simId + "/searcher_failure.log";
+    }
 
     private void logToSearcherFailureFile(String message) {
         try {
-            File logDir = new File("src/log");
+            String failureLogPath = getFailureLogPath();
+            File logFile = new File(failureLogPath);
+            File logDir = logFile.getParentFile();
+
             if (!logDir.exists()) {
                 logDir.mkdirs();
             }
 
-            try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(FAILURE_LOG_PATH, true)))) {
+            try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(failureLogPath, true)))) {
                 String timestamp = LocalDateTime.now().format(LOG_TIME_FORMAT);
                 writer.println(timestamp + " - " + message);
             }

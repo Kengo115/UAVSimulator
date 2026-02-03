@@ -11,15 +11,35 @@ import java.util.Date;
  * ログを管理するクラス
  * コンソールへの出力とログファイルへの書き込みを管理する
  * 1時間ごとにログファイルをローテーションする機能を持つ
+ * Phase 9: 環境変数LOG_DIRに対応
  */
 public class LogManager {
     // シングルトンインスタンス
     private static LogManager instance;
 
-    // ログファイルのパス
-    private static final String LOG_DIRECTORY = "src/log";
+    // Phase 9: ログファイルのパス（環境変数から取得、デフォルトは src/log）
+    private static final String LOG_DIRECTORY = initLogDirectory();
     private static final String LOG_FILE_PREFIX = LOG_DIRECTORY + "/simulator_";
     private static final String LOG_FILE_SUFFIX = ".log";
+
+    /**
+     * Phase 9: 環境変数からログディレクトリを取得
+     */
+    private static String initLogDirectory() {
+        String envLogDir = System.getenv("LOG_DIR");
+        if (envLogDir != null && !envLogDir.isEmpty()) {
+            return envLogDir;
+        }
+        return "src/log";  // デフォルト
+    }
+
+    /**
+     * Phase 9: ログディレクトリを取得
+     * @return ログディレクトリのパス
+     */
+    public static String getLogDirectory() {
+        return LOG_DIRECTORY;
+    }
 
     // ログモード
     private boolean loggingEnabled = false;
@@ -32,8 +52,8 @@ public class LogManager {
     private int currentLogHour = 0;
     private String currentLogFilePath;
 
-    // スレッド数遷移ログ
-    private static final String THREAD_COUNT_LOG_FILE = LOG_DIRECTORY + "/thread_count.log";
+    // Phase 9: スレッド数遷移ログ（LOG_DIRECTORYを使用）
+    private String threadCountLogFile;
     private PrintWriter threadCountWriter;
     private int lastRecordedThreadCount = -1;
 
@@ -280,12 +300,14 @@ public class LogManager {
      */
     public void initThreadCountLog() {
         try {
-            threadCountWriter = new PrintWriter(new FileWriter(THREAD_COUNT_LOG_FILE, false));
+            // Phase 9: LOG_DIRECTORYを使用
+            threadCountLogFile = LOG_DIRECTORY + "/thread_count.log";
+            threadCountWriter = new PrintWriter(new FileWriter(threadCountLogFile, false));
             threadCountWriter.println("# スレッド数遷移ログ");
             threadCountWriter.println("# timestamp,elapsed_sec,thread_count,event");
             threadCountWriter.flush();
             lastRecordedThreadCount = -1;
-            System.out.println("[LogManager] スレッド数遷移ログを初期化: " + THREAD_COUNT_LOG_FILE);
+            System.out.println("[LogManager] スレッド数遷移ログを初期化: " + threadCountLogFile);
         } catch (IOException e) {
             System.err.println("スレッド数遷移ログのオープンに失敗しました: " + e.getMessage());
         }

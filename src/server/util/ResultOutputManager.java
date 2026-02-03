@@ -21,16 +21,16 @@ public class ResultOutputManager {
     /**
      * 現在の経路探索手法に基づいてディレクトリパスを取得する
      * Phase 7-1: small_scale/large_scale分離、client形式に変更
+     * Phase 9: 環境変数RESULT_DIRに対応
      * @param baseDir ベースディレクトリ
      * @param runCounter 実行カウンター（0始まり）
      * @return ディレクトリパス
      */
     private static String getDirectoryPath(String baseDir, int runCounter) {
-        BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
+        // Phase 9: BoundaryController.getResultDir()を使用して環境変数対応
         // runCounterは0始まりなので+1してclient1, client2, ...にする
         int clientNumber = runCounter + 1;
-        return "src/result/" + scaleDir + "/" + method.getName() + "/" + baseDir + "/client" + clientNumber;
+        return BoundaryController.getResultDir() + "/" + baseDir + "/client" + clientNumber;
     }
 
     /**
@@ -396,25 +396,27 @@ public class ResultOutputManager {
             .mapToObj(String::valueOf)
             .collect(Collectors.joining("-"));
 
-        // Phase 3b-9: 時間情報を取得
-        double realFlightTime = job.getElapsedFlightTime();    // 純粋な飛行時間
-        double waitingTime = job.getTotalWaitingTime();         // 待機時間（リンク容量待ち）
-        double pathWaitTime = job.getPathWaitTime();            // Phase 4: 経路待ち時間
-        double flightTime = job.getTotalTime();                 // 合計時間（飛行＋待機）
+        // Phase 5/11: 時間情報を取得
+        double realFlightTime = job.getElapsedFlightTime();       // 純粋な飛行時間
+        double waitingTime = job.getTotalWaitingTime();           // 飛行中待機時間（バッテリー消費あり）
+        double pathWaitTime = job.getPathWaitTime();              // 経路待ち時間
+        double flightStayingTime = job.getFlightStayingTime();    // 飛行前待機時間（1ホップ目のみ、バッテリー消費なし）
+        double flightTime = job.getTotalTime();                   // 合計時間（realFlightTime + waitingTime + flightStayingTime、pathWaitTimeは含まない）
 
         try (FileWriter writer = new FileWriter(filename, true)) {
             File file = new File(filename);
             if (file.length() == 0) {
-                // Phase 4: ヘッダーにpathWaitTimeを追加
-                writer.write("source,dest,flightTime,realFlightTime,waitingTime,pathWaitTime,clientId,uavId,speed,distance,path\n");
+                // Phase 11: pathWaitTimeとflightStayingTimeを分離
+                writer.write("source,dest,flightTime,realFlightTime,waitingTime,pathWaitTime,flightStayingTime,clientId,uavId,speed,distance,path\n");
             }
-            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
+            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
                 job.getSourceBeaconId(),
                 job.getDestinationBeaconId(),
-                flightTime,         // 合計時間（飛行＋待機）
-                realFlightTime,     // 純粋な飛行時間
-                waitingTime,        // 待機時間（リンク容量待ち）
-                pathWaitTime,       // Phase 4: 経路待ち時間
+                flightTime,           // 合計時間（realFlightTime + waitingTime + flightStayingTime）
+                realFlightTime,       // 純粋な飛行時間
+                waitingTime,          // 飛行中待機時間（2ホップ目以降、バッテリー消費あり）
+                pathWaitTime,         // 経路待ち時間（バッテリー消費なし）
+                flightStayingTime,    // 飛行前待機時間（1ホップ目のみ、バッテリー消費なし）
                 job.getClientId(),
                 job.getUavId(),
                 job.getSpeed(),
@@ -422,11 +424,12 @@ public class ResultOutputManager {
                 pathString));
         }
 
-        LogManager.getInstance().log("Phase 4: UAV" + job.getUavId() +
+        LogManager.getInstance().log("Phase 11: UAV" + job.getUavId() +
             " 飛行結果保存 (合計=" + String.format("%.2f", flightTime) +
             "s, 飛行=" + String.format("%.2f", realFlightTime) +
-            "s, 容量待機=" + String.format("%.2f", waitingTime) +
-            "s, 経路待ち=" + String.format("%.2f", pathWaitTime) + "s)");
+            "s, 飛行中待機=" + String.format("%.2f", waitingTime) +
+            "s, 経路待ち=" + String.format("%.2f", pathWaitTime) +
+            "s, 1ホップ目待機=" + String.format("%.2f", flightStayingTime) + "s)");
     }
 
     /**
@@ -581,11 +584,12 @@ public class ResultOutputManager {
     /**
      * 全クライアントの飛行データを集計して平均値を出力する
      * 出力: time/ave_flightStatus.csv
+     * Phase 9: 環境変数RESULT_DIRに対応
+     * Phase 11: avg_real_flight_time, avg_staying_time, avg_path_wait_time を追加
      */
     public static void outputAverageFlightStatus() {
-        BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
-        String timeDirPath = "src/result/" + scaleDir + "/" + method.getName() + "/time";
+        // Phase 9: BoundaryController.getResultDir()を使用
+        String timeDirPath = BoundaryController.getResultDir() + "/time";
 
         File timeDir = new File(timeDirPath);
         if (!timeDir.exists() || !timeDir.isDirectory()) {
@@ -593,11 +597,22 @@ public class ResultOutputManager {
             return;
         }
 
-        // 集計用変数
-        double totalFlightTime = 0;
-        double totalWaitingTime = 0;
+        // Phase 11: 集計用変数を追加
+        double totalFlightTime = 0;       // flightTime (realFlightTime + waitingTime + flightStayingTime)
+        double totalRealFlightTime = 0;   // 実飛行時間
+        double totalWaitingTime = 0;      // 飛行中待機時間
+        double totalPathWaitTime = 0;     // 経路待ち時間
+        double totalStayingTime = 0;      // 1ホップ目待機時間
         double totalDistance = 0;
         int uavCount = 0;
+
+        // Phase 11: 評価・デバッグ用統計
+        int fullyCompletedClientCount = 0;  // 10台全て完了したclient数
+        int partiallyCompletedClientCount = 0;  // 1-9台完了したclient数
+        double maxFlightTime = 0;
+        double minFlightTime = Double.MAX_VALUE;
+        double maxWaitingTime = 0;
+        double minWaitingTime = Double.MAX_VALUE;
 
         // 全clientディレクトリを走査
         File[] clientDirs = timeDir.listFiles((dir, name) -> name.startsWith("client") && new File(dir, name).isDirectory());
@@ -612,6 +627,8 @@ public class ResultOutputManager {
                 continue;
             }
 
+            int clientUavCount = 0;  // このclientのUAV完了数
+
             try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(flightTimesFile))) {
                 String line;
                 boolean isHeader = true;
@@ -621,16 +638,41 @@ public class ResultOutputManager {
                         continue;
                     }
                     String[] parts = line.split(",");
-                    if (parts.length >= 10) {
-                        // flightTime (index 2), waitingTime (index 4), distance (index 9)
-                        totalFlightTime += Double.parseDouble(parts[2]);
-                        totalWaitingTime += Double.parseDouble(parts[4]);
-                        totalDistance += Double.parseDouble(parts[9]);
+                    // Phase 11: 新しいCSVフォーマット
+                    // source,dest,flightTime,realFlightTime,waitingTime,pathWaitTime,flightStayingTime,clientId,uavId,speed,distance,path
+                    if (parts.length >= 11) {
+                        double flightTime = Double.parseDouble(parts[2]);       // flightTime (index 2)
+                        double realFlightTime = Double.parseDouble(parts[3]);   // realFlightTime (index 3)
+                        double waitingTime = Double.parseDouble(parts[4]);      // waitingTime (index 4)
+                        double pathWaitTime = Double.parseDouble(parts[5]);     // pathWaitTime (index 5)
+                        double stayingTime = Double.parseDouble(parts[6]);      // flightStayingTime (index 6)
+                        double distance = Double.parseDouble(parts[10]);        // distance (index 10)
+
+                        totalFlightTime += flightTime;
+                        totalRealFlightTime += realFlightTime;
+                        totalWaitingTime += waitingTime;
+                        totalPathWaitTime += pathWaitTime;
+                        totalStayingTime += stayingTime;
+                        totalDistance += distance;
                         uavCount++;
+                        clientUavCount++;
+
+                        // 最大/最小値の更新
+                        if (flightTime > maxFlightTime) maxFlightTime = flightTime;
+                        if (flightTime < minFlightTime) minFlightTime = flightTime;
+                        if (waitingTime > maxWaitingTime) maxWaitingTime = waitingTime;
+                        if (waitingTime < minWaitingTime) minWaitingTime = waitingTime;
                     }
                 }
             } catch (IOException | NumberFormatException e) {
                 LogManager.getInstance().log("警告: ファイル読み込みエラー: " + flightTimesFile.getPath() + " - " + e.getMessage());
+            }
+
+            // このclientのUAV完了数をカウント
+            if (clientUavCount == 10) {
+                fullyCompletedClientCount++;
+            } else if (clientUavCount > 0) {
+                partiallyCompletedClientCount++;
             }
         }
 
@@ -641,25 +683,58 @@ public class ResultOutputManager {
 
         // 平均値を計算
         double avgFlightTime = totalFlightTime / uavCount;
+        double avgRealFlightTime = totalRealFlightTime / uavCount;
         double avgWaitingTime = totalWaitingTime / uavCount;
+        double avgPathWaitTime = totalPathWaitTime / uavCount;
+        double avgStayingTime = totalStayingTime / uavCount;
         double avgDistance = totalDistance / uavCount;
+
+        // Phase 11: 評価・デバッグ用の統計値を計算
+        int totalClientCount = clientDirs.length;
+        double avgUavPerClient = (double) uavCount / totalClientCount;
+        double uavCompletionRate = (uavCount * 100.0) / (totalClientCount * 10);  // 全clientが10台と仮定
+        double fullyCompletedRate = (fullyCompletedClientCount * 100.0) / totalClientCount;
+
+        // 最小値が更新されていない場合は0にする
+        if (minFlightTime == Double.MAX_VALUE) minFlightTime = 0;
+        if (minWaitingTime == Double.MAX_VALUE) minWaitingTime = 0;
 
         // 結果をファイルに出力
         String outputPath = timeDirPath + "/ave_flightStatus.csv";
         try (FileWriter writer = new FileWriter(outputPath)) {
             writer.write("metric,value,unit\n");
+
+            // 平均値
             writer.write(String.format("avg_flight_time,%.2f,seconds\n", avgFlightTime));
+            writer.write(String.format("avg_real_flight_time,%.2f,seconds\n", avgRealFlightTime));
             writer.write(String.format("avg_waiting_time,%.2f,seconds\n", avgWaitingTime));
+            writer.write(String.format("avg_path_wait_time,%.2f,seconds\n", avgPathWaitTime));
+            writer.write(String.format("avg_staying_time,%.2f,seconds\n", avgStayingTime));
             writer.write(String.format("avg_distance,%.2f,meters\n", avgDistance));
+
+            // 最大/最小値（デバッグ用）
+            writer.write(String.format("max_flight_time,%.2f,seconds\n", maxFlightTime));
+            writer.write(String.format("min_flight_time,%.2f,seconds\n", minFlightTime));
+            writer.write(String.format("max_waiting_time,%.2f,seconds\n", maxWaitingTime));
+            writer.write(String.format("min_waiting_time,%.2f,seconds\n", minWaitingTime));
+
+            // 総数・完了率
             writer.write(String.format("total_uav_count,%d,count\n", uavCount));
-            writer.write(String.format("total_client_count,%d,count\n", clientDirs.length));
+            writer.write(String.format("total_client_count,%d,count\n", totalClientCount));
+            writer.write(String.format("fully_completed_client_count,%d,count\n", fullyCompletedClientCount));
+            writer.write(String.format("partially_completed_client_count,%d,count\n", partiallyCompletedClientCount));
+
+            // 完了率（評価用）
+            writer.write(String.format("avg_uav_per_client,%.2f,count\n", avgUavPerClient));
+            writer.write(String.format("uav_completion_rate,%.2f,percent\n", uavCompletionRate));
+            writer.write(String.format("fully_completed_client_rate,%.2f,percent\n", fullyCompletedRate));
         } catch (IOException e) {
             LogManager.getInstance().log("エラー: 平均飛行ステータス出力失敗: " + e.getMessage());
             return;
         }
 
         LogManager.getInstance().log(String.format(
-            "平均飛行ステータス出力完了: UAV数=%d, 平均飛行時間=%.2fs, 平均待機時間=%.2fs, 平均距離=%.2fm",
-            uavCount, avgFlightTime, avgWaitingTime, avgDistance));
+            "Phase 11: 平均飛行ステータス出力完了: UAV数=%d, Client数=%d, 完全完了Client=%d (%.1f%%), UAV完了率=%.1f%%, 平均UAV/Client=%.2f",
+            uavCount, totalClientCount, fullyCompletedClientCount, fullyCompletedRate, uavCompletionRate, avgUavPerClient));
     }
 }

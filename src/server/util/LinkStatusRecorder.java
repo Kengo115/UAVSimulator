@@ -140,13 +140,13 @@ public class LinkStatusRecorder {
 
     /**
      * 混雑率をCSVファイルに追記
+     * Phase 9: 環境変数RESULT_DIRに対応
      * @param timeSeconds シミュレーション開始からの経過時間（秒）
      */
     private synchronized void writeCongestionRateToCSV(int timeSeconds) throws IOException {
         if (congestionRateFilePath == null) {
-            BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-            String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
-            String dirPath = "src/result/" + scaleDir + "/" + method.getName() + "/link_status";
+            // Phase 9: BoundaryController.getResultDir()を使用
+            String dirPath = BoundaryController.getResultDir() + "/link_status";
 
             File dir = new File(dirPath);
             if (!dir.exists()) {
@@ -168,6 +168,7 @@ public class LinkStatusRecorder {
     /**
      * Phase 7-5: スナップショットをCSVファイルに書き込む
      * Phase 8-Fix: 正規化キー（小さいノードIDを先）で出力し、冗長な逆方向リンクを除外
+     * Phase 9: 環境変数RESULT_DIRに対応
      */
     private synchronized void writeSnapshotToCSV(long timestamp) throws IOException {
         Link[][] links = ServerController.getLinkArray();
@@ -177,10 +178,8 @@ public class LinkStatusRecorder {
             return;
         }
 
-        // 出力先パスを決定
-        BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
-        String dirPath = "src/result/" + scaleDir + "/" + method.getName() + "/snapshot";
+        // Phase 9: BoundaryController.getResultDir()を使用
+        String dirPath = BoundaryController.getResultDir() + "/snapshot";
 
         File dir = new File(dirPath);
         if (!dir.exists()) {
@@ -331,16 +330,15 @@ public class LinkStatusRecorder {
 
     /**
      * CSVファイルに書き込む
+     * Phase 9: 環境変数RESULT_DIRに対応
      * @param timestampMs タイムスタンプ（ミリ秒）
      */
     private synchronized void writeToCSV(long timestampMs, int fromNode, int toNode,
                                           int flying, int waiting, double initCapacity,
                                           double currentCapacity, double loadRate, String event) throws IOException {
         if (outputFilePath == null) {
-            // 出力先パスを決定
-            BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-            String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
-            String dirPath = "src/result/" + scaleDir + "/" + method.getName() + "/link_status";
+            // Phase 9: BoundaryController.getResultDir()を使用
+            String dirPath = BoundaryController.getResultDir() + "/link_status";
 
             File dir = new File(dirPath);
             if (!dir.exists()) {

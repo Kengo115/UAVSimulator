@@ -10,20 +10,24 @@ import java.util.Date;
 /**
  * Link 117-123 専用デバッグロガー
  * 問題調査のための詳細ログを専用ファイルに出力
+ * Phase 9: 環境変数LOG_DIRに対応
  */
 public class Link117DebugLogger {
     private static Link117DebugLogger instance;
-    private static final String LOG_FILE_PATH = "src/log/link_117_123_debug.log";
+    private String logFilePath;
     private PrintWriter writer;
     private long startTime = 0;
 
     private Link117DebugLogger() {
         try {
-            File logDir = new File("src/log");
-            if (!logDir.exists()) {
-                logDir.mkdirs();
+            // Phase 9: LogManager.getLogDirectory()を使用
+            String logDir = LogManager.getLogDirectory();
+            File logDirFile = new File(logDir);
+            if (!logDirFile.exists()) {
+                logDirFile.mkdirs();
             }
-            writer = new PrintWriter(new FileWriter(LOG_FILE_PATH, false));
+            logFilePath = logDir + "/link_117_123_debug.log";
+            writer = new PrintWriter(new FileWriter(logFilePath, false));
             startTime = System.currentTimeMillis();
             writer.println("# Link 117-123 Debug Log");
             writer.println("# Started at: " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));

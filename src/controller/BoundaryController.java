@@ -231,6 +231,43 @@ public class BoundaryController {
 
     // Phase 8: 統計的シミュレーションモード（UAVFlySchedulerの自動停止を無効化）
     private static boolean isStatisticalSimulationMode = false;
+
+    // Phase 9: 並列シミュレーション用 - 環境変数からベースディレクトリを取得
+    private static final String RESULT_BASE_DIR = initResultBaseDir();
+    private static final String LOG_BASE_DIR = initLogBaseDir();
+    private static final String SIM_ID = System.getenv("SIM_ID") != null ? System.getenv("SIM_ID") : "1";
+
+    private static String initResultBaseDir() {
+        String envResultDir = System.getenv("RESULT_DIR");
+        if (envResultDir != null && !envResultDir.isEmpty()) {
+            return envResultDir;
+        }
+        return "src/result";  // デフォルト
+    }
+
+    private static String initLogBaseDir() {
+        String envLogDir = System.getenv("LOG_DIR");
+        if (envLogDir != null && !envLogDir.isEmpty()) {
+            return envLogDir;
+        }
+        return "src/log";  // デフォルト
+    }
+
+    /**
+     * Phase 9: ログベースディレクトリを取得する
+     * @return ログベースディレクトリのパス
+     */
+    public static String getLogBaseDir() {
+        return LOG_BASE_DIR;
+    }
+
+    /**
+     * Phase 9: シミュレーションIDを取得する
+     * @return シミュレーションID
+     */
+    public static String getSimId() {
+        return SIM_ID;
+    }
     
     /**
      * 経路探索手法を設定する
@@ -318,9 +355,17 @@ public class BoundaryController {
 
     /**
      * Phase 8: 結果出力ディレクトリを取得する
+     * Phase 9: 環境変数RESULT_DIRが設定されている場合はそのディレクトリを使用
      * @return 結果出力ディレクトリのパス
      */
     public static String getResultDir() {
+        // Phase 9: 環境変数RESULT_DIRが設定されている場合は、method名のサブディレクトリを使用
+        String envResultDir = System.getenv("RESULT_DIR");
+        if (envResultDir != null && !envResultDir.isEmpty()) {
+            String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
+            return envResultDir + "/" + scaleDir + "/" + currentMethod.getName();
+        }
+        // デフォルト動作
         String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
         return "src/result/" + scaleDir + "/" + currentMethod.getName();
     }
@@ -973,6 +1018,16 @@ public class BoundaryController {
                                     (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024.0 / 1024.0));
                         }
 
+                        // Phase 10: シミュレーション時間制限チェック（generateNextClient呼び出し前）
+                        // 35999秒時点での大量client生成を防止
+                        if (statController.getElapsedSeconds() >= statController.getConfig().getDurationSeconds()) {
+                            System.out.println("\n[Phase 8] シミュレーション時間終了");
+                            statController.logDiagnostic("LOOP_END_TIME_LIMIT",
+                                String.format("elapsed_sec=%d,iteration=%d",
+                                    statController.getElapsedSeconds(), loopIterationCount));
+                            break;
+                        }
+
                         lastOperation = "generateNextClient";
                         // クライアントを生成（時間超過時はnullが返され、内部でstop()が呼ばれる）
                         ClientScheduleLoader.ScheduleEntry entry = statController.generateNextClient();
@@ -1011,8 +1066,8 @@ public class BoundaryController {
 
                         // Phase 8: クライアント情報をファイルに記録
                         lastOperation = "writeClientInfo";
-                        String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
-                        String clientDirPath = "src/result/" + scaleDir + "/" + currentMethod.getName() + "/client";
+                        // Phase 9: getResultDir()を使用して環境変数対応
+                        String clientDirPath = getResultDir() + "/client";
                         String clientFilePath = clientDirPath + "/client.txt";
 
                         File clientDir = new File(clientDirPath);
@@ -1196,8 +1251,8 @@ public class BoundaryController {
                         UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeNum);
 
                         // Phase 7-1: クライアント情報をファイルに記録
-                        String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
-                        String clientDirPath = "src/result/" + scaleDir + "/" + currentMethod.getName() + "/client";
+                        // Phase 9: getResultDir()を使用して環境変数対応
+                        String clientDirPath = getResultDir() + "/client";
                         String clientFilePath = clientDirPath + "/client.txt";
 
                         File clientDir = new File(clientDirPath);
@@ -1341,8 +1396,8 @@ public class BoundaryController {
                 UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, nodeNum);
 
                 // Phase 7-1: スケール別のディレクトリに出力
-                String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
-                String dirPath = "src/result/" + scaleDir + "/" + currentMethod.getName() + "/client";
+                // Phase 9: getResultDir()を使用して環境変数対応
+                String dirPath = getResultDir() + "/client";
                 String filePath = dirPath + "/client.txt";
 
                 // ディレクトリが存在しない場合は作成
