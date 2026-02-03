@@ -44,8 +44,16 @@ public class UAVJob implements Serializable {
     private double pathWaitTime;           // 経路待ち時間（秒）- 経路割り当てまでの待機時間
     private long pathWaitingStartTime;     // 経路待ち開始時刻（ミリ秒）
 
+    // Phase 5: 飛行前待機時間（1ホップ目待機のみ）- バッテリー消費なし
+    // Phase 11: pathWaitTimeは別カラムで出力するため、flightStayingTimeには含めない
+    private double flightStayingTime;      // 飛行前待機時間（秒）- 1ホップ目の待機のみ
+    private boolean hasStartedFlight;      // 飛行を開始したかどうか（1ホップ目の飛行開始時にtrue）
+
     // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
     private String sessionId;
+
+    // Phase 10: 二重完了防止フラグ
+    private boolean isCompleted;         // 飛行が完了したかどうか（onFlightCompleted呼び出し時にtrue）
 
     /**
      * デフォルトコンストラクタ（シリアライゼーション用）
@@ -203,21 +211,29 @@ public class UAVJob implements Serializable {
 
     /**
      * 待機を終了し、待機時間を加算
+     * 飛行開始前は flightStayingTime に、飛行開始後は totalWaitingTime に加算
      */
     public void endWaiting() {
         if (waitingStartTime > 0) {
             double waitingSeconds = (System.currentTimeMillis() - waitingStartTime) / 1000.0;
-            this.totalWaitingTime += waitingSeconds;
+            if (hasStartedFlight) {
+                // 飛行開始後の待機 -> バッテリー消費あり
+                this.totalWaitingTime += waitingSeconds;
+            } else {
+                // 飛行開始前の待機（1ホップ目） -> バッテリー消費なし
+                this.flightStayingTime += waitingSeconds;
+            }
             this.waitingStartTime = 0;
         }
     }
 
     /**
-     * 総経過時間（飛行時間＋待機時間）を取得
-     * @return 総経過時間（秒）
+     * 総経過時間（飛行前待機＋飛行時間＋飛行中待機時間）を取得
+     * Phase 11: pathWaitTimeは含まない
+     * @return 総経過時間（秒）= realFlightTime + waitingTime + flightStayingTime
      */
     public double getTotalTime() {
-        return elapsedFlightTime + totalWaitingTime;
+        return flightStayingTime + elapsedFlightTime + totalWaitingTime;
     }
 
     // Phase 4: 経路待ち時間関連メソッド
@@ -246,13 +262,45 @@ public class UAVJob implements Serializable {
     }
 
     /**
-     * 経路待ちを終了し、経路待ち時間を確定
+     * 経路待ちを終了し、pathWaitTimeを記録
+     * Phase 11: pathWaitTimeは別カラムで出力するため、flightStayingTimeには加算しない
      */
     public void endPathWaiting() {
         if (pathWaitingStartTime > 0) {
             this.pathWaitTime = (System.currentTimeMillis() - pathWaitingStartTime) / 1000.0;
+            // Phase 11: flightStayingTimeへの加算を削除（pathWaitTimeは独立）
             this.pathWaitingStartTime = 0;
         }
+    }
+
+    // Phase 5/11: 飛行前待機時間関連メソッド
+
+    /**
+     * 飛行前待機時間を取得（1ホップ目待機のみ）
+     * Phase 11: pathWaitTimeは別カラムで出力するため含まない
+     * @return 飛行前待機時間（秒）
+     */
+    public double getFlightStayingTime() {
+        return flightStayingTime;
+    }
+
+    public void setFlightStayingTime(double flightStayingTime) {
+        this.flightStayingTime = flightStayingTime;
+    }
+
+    /**
+     * 飛行を開始したかどうか
+     * @return 飛行開始済みならtrue
+     */
+    public boolean hasStartedFlight() {
+        return hasStartedFlight;
+    }
+
+    /**
+     * 飛行開始をマーク（1ホップ目の飛行開始時に呼び出す）
+     */
+    public void markFlightStarted() {
+        this.hasStartedFlight = true;
     }
 
     // Phase 3b-2b: リンク距離関連メソッド
@@ -315,6 +363,28 @@ public class UAVJob implements Serializable {
 
     public void setSessionId(String sessionId) {
         this.sessionId = sessionId;
+    }
+
+    // Phase 10: 二重完了防止関連メソッド
+
+    /**
+     * 飛行が完了したかどうか
+     * @return 完了済みならtrue
+     */
+    public boolean isCompleted() {
+        return isCompleted;
+    }
+
+    /**
+     * 飛行完了をマーク（onFlightCompleted呼び出し時に呼び出す）
+     * @return 初めて完了マークされた場合true、既にマーク済みならfalse
+     */
+    public synchronized boolean markCompleted() {
+        if (isCompleted) {
+            return false;  // 既に完了済み
+        }
+        isCompleted = true;
+        return true;  // 初めて完了マーク
     }
 
     @Override

@@ -151,6 +151,12 @@ public class FlightScheduler {
         // Phase 3b-9: 待機中だった場合は待機時間を確定
         job.endWaiting();
 
+        // Phase 5: 1ホップ目の場合は飛行開始をマーク
+        // これ以降の待機はtotalWaitingTime（バッテリー消費あり）に記録される
+        if (linkIndex == 0 && !job.hasStartedFlight()) {
+            job.markFlightStarted();
+        }
+
         // 飛行開始時刻を記録
         job.setCurrentLinkStartTime(System.currentTimeMillis());
 
@@ -163,7 +169,8 @@ public class FlightScheduler {
         LogManager.getInstance().log(
             "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 飛行開始 " +
             "(path=" + formatPath(job.getPath()) + ", linkIndex=" + linkIndex +
-            ", 累積待機=" + String.format("%.2f", job.getTotalWaitingTime()) + "s)"
+            ", 飛行前待機=" + String.format("%.2f", job.getFlightStayingTime()) + "s" +
+            ", 飛行中待機=" + String.format("%.2f", job.getTotalWaitingTime()) + "s)"
         );
 
         // 最初のリンク飛行をスケジュール
@@ -346,19 +353,30 @@ public class FlightScheduler {
      * @param job 完了したジョブ
      */
     private void onFlightCompleted(UAVJob job) {
+        // Phase 10: 二重完了防止チェック
+        if (!job.markCompleted()) {
+            LogManager.getInstance().log(
+                "Phase 10: client" + job.getClientId() + " UAV" + job.getUavId() +
+                " の二重完了を検出しスキップしました"
+            );
+            return;
+        }
+
         activeFlights.decrementAndGet();
         int completed = completedFlights.incrementAndGet();
 
-        // Phase 3b-9: 時間情報を取得
-        double realFlightTime = job.getElapsedFlightTime();   // 純粋な飛行時間
-        double waitingTime = job.getTotalWaitingTime();        // 待機時間
-        double totalTime = job.getTotalTime();                 // 合計時間
+        // Phase 5: 時間情報を取得
+        double realFlightTime = job.getElapsedFlightTime();       // 純粋な飛行時間
+        double flightStayingTime = job.getFlightStayingTime();    // 飛行前待機時間（バッテリー消費なし）
+        double waitingTime = job.getTotalWaitingTime();           // 飛行中待機時間（バッテリー消費あり）
+        double totalTime = job.getTotalTime();                    // 合計時間
 
         LogManager.getInstance().log(
             "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 飛行完了 " +
             "(総距離=" + String.format("%.2f", job.getTotalDistance()) + "m, " +
             "飛行時間=" + String.format("%.2f", realFlightTime) + "s, " +
-            "待機時間=" + String.format("%.2f", waitingTime) + "s, " +
+            "飛行前待機=" + String.format("%.2f", flightStayingTime) + "s, " +
+            "飛行中待機=" + String.format("%.2f", waitingTime) + "s, " +
             "合計=" + String.format("%.2f", totalTime) + "s, " +
             "総完了数=" + completed + ")"
         );
