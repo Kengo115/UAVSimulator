@@ -17,8 +17,10 @@ import server.util.MathUtils;
 import server.util.ResultOutputManager;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.CountDownLatch;
@@ -294,9 +296,37 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     }
 
     /**
-     * Phase 3b-6: Redis経由でUAVジョブを投入する
+     * Phase 12: UAVジョブの保留情報を保持する内部クラス
+     * 全UAVの経路が確定するまで投入を保留する（Atomic処理）
+     */
+    private static class PendingUAVJob {
+        final int uavId;
+        final int clientId;
+        final int[] path;
+        final double[] linkDistances;
+        final double speed;
+        final int delaySeconds;
+        final int startNode;
+        final int goalNode;
+
+        PendingUAVJob(int uavId, int clientId, int[] path, double[] linkDistances,
+                      double speed, int delaySeconds, int startNode, int goalNode) {
+            this.uavId = uavId;
+            this.clientId = clientId;
+            this.path = path;
+            this.linkDistances = linkDistances;
+            this.speed = speed;
+            this.delaySeconds = delaySeconds;
+            this.startNode = startNode;
+            this.goalNode = goalNode;
+        }
+    }
+
+    /**
+     * Phase 3b-6/Phase 12: Redis経由でUAVジョブを投入する
      * 同一の一ホップ目リンクを飛行するUAVは2秒間隔で投入
      * 異なるリンクを飛行するUAVは同時に投入可能
+     * Phase 12: 全UAVの経路が確定するまで投入を保留（Atomic処理）
      */
     protected void runUAVFlowRedis(int startNode, int goalNode, int requiredUAVs, Client client) {
         LogManager.getInstance().log("Phase 3b-6: Redisモードでジョブ投入 (" + requiredUAVs + "機) [" + getRouteRecordTag() + "]");
@@ -310,11 +340,15 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         // 同一リンクごとに2秒間隔でジョブ投入するためのスケジューラ
         ScheduledExecutorService enqueueScheduler = Executors.newScheduledThreadPool(1);
 
-        UAV_count = 0;
-        boolean flowAvailable = true;
+        // Phase 12: 全UAVの経路が確定するまで保留するリスト
+        List<PendingUAVJob> pendingJobs = new ArrayList<>();
 
-        // 一ホップ目リンクごとの投入順序を管理（キー: "from-to"）
-        Map<String, Integer> linkEnqueueOrder = new HashMap<>();
+        try {
+            UAV_count = 0;
+            boolean flowAvailable = true;
+
+            // 一ホップ目リンクごとの投入順序を管理（キー: "from-to"）
+            Map<String, Integer> linkEnqueueOrder = new HashMap<>();
 
         while (UAV_count < requiredUAVs && flowAvailable) {
             min_Flow = 100;
@@ -349,40 +383,13 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                     int currentOrder = linkEnqueueOrder.getOrDefault(firstLinkKey, 0);
                     linkEnqueueOrder.put(firstLinkKey, currentOrder + 1);
 
-                    final int delaySeconds = currentOrder * 2;
-                    final int[] finalPathArray = pathArray;
-                    final double[] finalLinkDistances = linkDistances;
+                    int delaySeconds = currentOrder * 2;
 
-                    // 同一リンクのUAVは2秒間隔でジョブ投入をスケジュール
-                    enqueueScheduler.schedule(() -> {
-                        // UAVJobを作成（投入時刻を開始時刻として設定）
-                        UAVJob job = new UAVJob(
-                            uavId,
-                            clientId,
-                            finalPathArray,
-                            uavSpeed,
-                            System.currentTimeMillis(),
-                            startNode,
-                            goalNode
-                        );
-                        job.setLinkDistances(finalLinkDistances);
-                        // Phase 3b-8: セッションIDを設定
-                        job.setSessionId(BoundaryController.getCurrentSessionId());
-
-                        // キューに投入
-                        jobQueue.enqueueJob(job);
-                        LogManager.getInstance().log("Phase 3b-6: UAV" + uavId + " ジョブ投入完了 (経路: " + Arrays.toString(finalPathArray) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
-
-                        // DEBUG: 117-123を含む経路の場合、専用ログに記録
-                        Link117DebugLogger.getInstance().logRouteAssign(clientId, uavId, finalPathArray, 1);
-
-                        // Phase 7-2: 経路割り当て情報を記録
-                        try {
-                            ResultOutputManager.outputRouteAssignment(job, clientId);
-                        } catch (IOException e) {
-                            LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー", e);
-                        }
-                    }, delaySeconds, TimeUnit.SECONDS);
+                    // Phase 12: スケジュールせず、保留リストに追加
+                    pendingJobs.add(new PendingUAVJob(
+                        uavId, clientId, pathArray, linkDistances,
+                        uavSpeed, delaySeconds, startNode, goalNode
+                    ));
 
                     UAV_count++;
                 }
@@ -391,19 +398,60 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             }
         }
 
-        if (!flowAvailable && UAV_count < requiredUAVs) {
-            int needUAV = requiredUAVs - UAV_count;
-            LogManager.getInstance().log("Phase 3b-6: 残り" + needUAV + "台のUAVを再割り当てします。");
-            adjustRemainingFlowRedis(needUAV, startNode, goalNode, client, jobQueue, enqueueScheduler, linkEnqueueOrder);
+            if (!flowAvailable && UAV_count < requiredUAVs) {
+                int needUAV = requiredUAVs - UAV_count;
+                LogManager.getInstance().log("Phase 3b-6: 残り" + needUAV + "台のUAVを再割り当てします。");
+                // Phase 12: pendingJobsを渡す（例外が発生する可能性あり）
+                adjustRemainingFlowRedis(needUAV, startNode, goalNode, client, pendingJobs, linkEnqueueOrder);
+            }
+
+            // Phase 12: 全UAVの経路が確定したので、まとめてスケジュール登録
+            for (PendingUAVJob pending : pendingJobs) {
+                final int[] finalPathArray = pending.path;
+                final double[] finalLinkDistances = pending.linkDistances;
+                final int finalUavId = pending.uavId;
+                final int finalClientId = pending.clientId;
+                final double finalSpeed = pending.speed;
+                final int finalStartNode = pending.startNode;
+                final int finalGoalNode = pending.goalNode;
+
+                enqueueScheduler.schedule(() -> {
+                    // UAVJobを作成（投入時刻を開始時刻として設定）
+                    UAVJob job = new UAVJob(
+                        finalUavId,
+                        finalClientId,
+                        finalPathArray,
+                        finalSpeed,
+                        System.currentTimeMillis(),
+                        finalStartNode,
+                        finalGoalNode
+                    );
+                    job.setLinkDistances(finalLinkDistances);
+                    // Phase 3b-8: セッションIDを設定
+                    job.setSessionId(BoundaryController.getCurrentSessionId());
+
+                    // キューに投入
+                    jobQueue.enqueueJob(job);
+                    LogManager.getInstance().log("Phase 3b-6: UAV" + finalUavId + " ジョブ投入完了 (経路: " + Arrays.toString(finalPathArray) + ", 速度: " + String.format("%.2f", finalSpeed) + "m/s)");
+
+                    // DEBUG: 117-123を含む経路の場合、専用ログに記録
+                    Link117DebugLogger.getInstance().logRouteAssign(finalClientId, finalUavId, finalPathArray, 1);
+
+                    // Phase 7-2: 経路割り当て情報を記録
+                    try {
+                        ResultOutputManager.outputRouteAssignment(job, finalClientId);
+                    } catch (IOException e) {
+                        LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー", e);
+                    }
+                }, pending.delaySeconds, TimeUnit.SECONDS);
+            }
+
+            LogManager.getInstance().log("Phase 3b-6: 全" + UAV_count + "件のジョブをスケジュールしました");
+
+        } finally {
+            // Phase 12: 例外が発生してもshutdown()を保証
+            enqueueScheduler.shutdown();
         }
-
-        LogManager.getInstance().log("Phase 3b-6: 全" + UAV_count + "件のジョブをスケジュールしました");
-
-        // Phase 8-Fix: ScheduledExecutorServiceをシャットダウン
-        // shutdown()を呼ぶと新しいタスクは受け付けなくなるが、
-        // スケジュール済みタスクは実行され、完了後にスレッドは自動終了する
-        // awaitTermination()で待機すると次のクライアント生成が遅延するため、待機しない
-        enqueueScheduler.shutdown();
     }
 
     /**
@@ -422,10 +470,10 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     /**
      * Phase 2: 残りのUAVをグリーディ探索で割り当てる（Redis版）
      * 各UAVごとに最大残存フローのリンクを選択して経路を決定
-     * 同一リンクのUAVは2秒間隔でジョブを投入
+     * Phase 12: 同一リンクのUAVは2秒間隔の予定で保留リストに追加（Atomic処理）
      */
     protected void adjustRemainingFlowRedis(int needUAV, int startNode, int goalNode, Client client,
-                                            UAVJobQueue jobQueue, ScheduledExecutorService enqueueScheduler,
+                                            List<PendingUAVJob> pendingJobs,
                                             Map<String, Integer> linkEnqueueOrder) {
         int clientId = client.getId();
         LogManager.getInstance().log("Phase 2: グリーディ探索で残り" + needUAV + "台を割り当て");
@@ -457,36 +505,14 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             int currentOrder = linkEnqueueOrder.getOrDefault(firstLinkKey, 0);
             linkEnqueueOrder.put(firstLinkKey, currentOrder + 1);
 
-            final int delaySeconds = currentOrder * 2;
+            int delaySeconds = currentOrder * 2;
             double[] linkDistances = calculateLinkDistances(pathArray);
-            final double[] finalLinkDistances = linkDistances;
 
-            // 同一リンクのUAVは2秒間隔でジョブ投入をスケジュール
-            enqueueScheduler.schedule(() -> {
-                UAVJob job = new UAVJob(
-                    uavId,
-                    clientId,
-                    pathArray,
-                    uavSpeed,
-                    System.currentTimeMillis(),
-                    startNode,
-                    goalNode
-                );
-                job.setLinkDistances(finalLinkDistances);
-                job.setSessionId(BoundaryController.getCurrentSessionId());
-
-                jobQueue.enqueueJob(job);
-                LogManager.getInstance().log("Phase 2: UAV" + uavId + " グリーディ経路ジョブ投入完了 (経路: " + Arrays.toString(pathArray) + ", 速度: " + String.format("%.2f", uavSpeed) + "m/s)");
-
-                // DEBUG: 117-123を含む経路の場合、専用ログに記録
-                Link117DebugLogger.getInstance().logRouteAssign(clientId, uavId, pathArray, 2);
-
-                try {
-                    ResultOutputManager.outputRouteAssignment(job, clientId);
-                } catch (IOException e) {
-                    LogManager.getInstance().error("Phase 2: 経路割り当て記録エラー", e);
-                }
-            }, delaySeconds, TimeUnit.SECONDS);
+            // Phase 12: スケジュールせず、保留リストに追加
+            pendingJobs.add(new PendingUAVJob(
+                uavId, clientId, pathArray, linkDistances,
+                uavSpeed, delaySeconds, startNode, goalNode
+            ));
 
             UAV_count++;
         }
