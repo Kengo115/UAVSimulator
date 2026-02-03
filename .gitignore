@@ -55,6 +55,9 @@ appendonly.aof
 .venv/
 output/
 
+### Process Management ###
+.sim_*.pid
+
 ### Build ###
 Makefile
 
