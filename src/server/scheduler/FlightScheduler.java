@@ -3,6 +3,8 @@ package server.scheduler;
 import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import server.redis.*;
+import server.util.Link117DebugLogger;
+import server.util.LinkStatusRecorder;
 import server.util.LogManager;
 import server.util.ResultOutputManager;
 
@@ -43,6 +45,10 @@ public class FlightScheduler {
 
     // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
     private String currentSessionId;
+
+    // Phase 12-Fix: 飛行中UAV追跡用マップ（clientId -> UAVジョブのセット）
+    // リトライ時のキャンセル用のみ使用
+    private final ConcurrentHashMap<Integer, ConcurrentHashMap<Integer, UAVJob>> activeClientUAVs = new ConcurrentHashMap<>();
 
     // Phase 3b-10: オートスケーリング設定
     private static final int MIN_POOL_SIZE = 16;
@@ -91,6 +97,10 @@ public class FlightScheduler {
                 // Phase 3b-10: オートスケーリング監視開始
                 startAutoScalingMonitor();
 
+                // スレッド数遷移ログを初期化・記録
+                LogManager.getInstance().initThreadCountLog();
+                LogManager.getInstance().logThreadCountChange(MIN_POOL_SIZE, "INIT");
+
                 LogManager.getInstance().log("Phase 3b-10: FlightScheduler initialized (poolSize=" + MIN_POOL_SIZE +
                     ", autoScaling=" + MIN_POOL_SIZE + "-" + MAX_POOL_SIZE + ")");
             } else {
@@ -131,10 +141,36 @@ public class FlightScheduler {
      * @param job UAVジョブ
      */
     public void startFlight(UAVJob job) {
+        // Phase 12-Fix: UAV追跡（キャンセル用のみ）
+        int clientId = job.getClientId();
+        int uavId = job.getUavId();
+
+        // クライアントごとのUAVマップを取得または作成
+        ConcurrentHashMap<Integer, UAVJob> clientUAVMap = activeClientUAVs.computeIfAbsent(clientId, k -> new ConcurrentHashMap<>());
+
+        // UAVを追跡（キャンセル用）- 重複チェックはせず常に登録
+        // リトライ時にcancelClientFlights()が呼ばれてクリアされるため問題なし
+        clientUAVMap.put(uavId, job);
+
         int linkIndex = job.getCurrentPathIndex();
+        int[] path = job.getPath();
+        int fromNode = path[linkIndex];
+        int toNode = path[linkIndex + 1];
+
+        // Phase 7-11: 待機解除時は待機終了を記録
+        // 注: getTotalWaitingTime()ではなくgetWaitingStartTime()で「現在待機中か」を判定
+        if (job.getWaitingStartTime() > 0) {
+            LinkStatusRecorder.getInstance().onWaitingEnd(fromNode, toNode);
+        }
 
         // Phase 3b-9: 待機中だった場合は待機時間を確定
         job.endWaiting();
+
+        // Phase 5: 1ホップ目の場合は飛行開始をマーク
+        // これ以降の待機はtotalWaitingTime（バッテリー消費あり）に記録される
+        if (linkIndex == 0 && !job.hasStartedFlight()) {
+            job.markFlightStarted();
+        }
 
         // 飛行開始時刻を記録
         job.setCurrentLinkStartTime(System.currentTimeMillis());
@@ -142,10 +178,14 @@ public class FlightScheduler {
         // 飛行中カウント増加
         activeFlights.incrementAndGet();
 
+        // Phase 7-4: リンク進入を記録
+        LinkStatusRecorder.getInstance().onLinkEnter(fromNode, toNode);
+
         LogManager.getInstance().log(
             "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 飛行開始 " +
             "(path=" + formatPath(job.getPath()) + ", linkIndex=" + linkIndex +
-            ", 累積待機=" + String.format("%.2f", job.getTotalWaitingTime()) + "s)"
+            ", 飛行前待機=" + String.format("%.2f", job.getFlightStayingTime()) + "s" +
+            ", 飛行中待機=" + String.format("%.2f", job.getTotalWaitingTime()) + "s)"
         );
 
         // 最初のリンク飛行をスケジュール
@@ -190,9 +230,23 @@ public class FlightScheduler {
      * @param linkIndex 通過したリンクのインデックス
      */
     private void onLinkPassed(UAVJob job, int linkIndex) {
+        // Phase 12-Fix: キャンセルされたUAVは処理をスキップ
+        if (job.isCancelled()) {
+            LogManager.getInstance().log(
+                "Phase 12-Fix: client" + job.getClientId() + " UAV" + job.getUavId() +
+                " はキャンセル済みのため処理をスキップします"
+            );
+            // 飛行中カウント減少（キャンセル時に処理）
+            activeFlights.decrementAndGet();
+            return;
+        }
+
         int[] path = job.getPath();
         int fromNode = path[linkIndex];
         int toNode = path[linkIndex + 1];
+
+        // Phase 7-4: リンク退出を記録
+        LinkStatusRecorder.getInstance().onLinkExit(fromNode, toNode);
 
         // 1. 経過時間を更新
         double linkDistance = job.getLinkDistance(linkIndex);
@@ -214,31 +268,33 @@ public class FlightScheduler {
             processFirstHopPathCopy(job);
         }
 
-        // 3. 容量回復（順方向・逆方向両方）
-        double newCapacity = capacityManager.recoverCapacity(fromNode, toNode);
+        // 3. 待機UAVの有無をチェック（容量回復と消費をアトミックに処理）
+        // Phase 8-Fix: Race condition防止のため、容量回復と待機UAV消費を同時に行う
+        int[] normalized = UAVEventChannels.normalizeLink(fromNode, toNode);
+        boolean hasWaitingUAV = waitingManager.hasWaitingUAV(normalized[0], normalized[1]);
 
-        // 4. 待機UAVがいれば再ジョブ化（順方向）
-        if (waitingManager.hasWaitingUAV(fromNode, toNode)) {
-            UAVJob waitingJob = waitingManager.dequeue(fromNode, toNode);
+        if (hasWaitingUAV) {
+            // 待機UAVがいる場合: 容量回復と消費が相殺 → Redis容量変化なし
+            // キュー経由せず直接飛行開始させる（Race condition防止）
+            UAVJob waitingJob = waitingManager.dequeue(normalized[0], normalized[1]);
             if (waitingJob != null) {
-                jobQueue.enqueueJob(waitingJob);
+                // DEBUG: 117-123リンクの待機キュー削除を専用ログに記録
+                int remainingCount = waitingManager.getWaitingCount(normalized[0], normalized[1]);
+                Link117DebugLogger.getInstance().logWaitingQueue(normalized[0], normalized[1], "DEQUEUE", remainingCount);
+
+                // 直接飛行開始（容量は0のまま、回復も消費もしない）
+                startFlight(waitingJob);
                 LogManager.getInstance().log(
-                    "Phase 3b-3: 待機 client" + waitingJob.getClientId() + " UAV" + waitingJob.getUavId() +
-                    " を再ジョブ化 (link " + fromNode + "→" + toNode + ")"
+                    "Phase 8-Fix: 待機 client" + waitingJob.getClientId() + " UAV" + waitingJob.getUavId() +
+                    " を直接飛行開始（容量変化なし）(link " + normalized[0] + "-" + normalized[1] + ")"
                 );
             }
-        }
-
-        // 5. 待機UAVがいれば再ジョブ化（逆方向：双方向リンク対応）
-        if (waitingManager.hasWaitingUAV(toNode, fromNode)) {
-            UAVJob waitingJob = waitingManager.dequeue(toNode, fromNode);
-            if (waitingJob != null) {
-                jobQueue.enqueueJob(waitingJob);
-                LogManager.getInstance().log(
-                    "Phase 3b-3: 待機 client" + waitingJob.getClientId() + " UAV" + waitingJob.getUavId() +
-                    " を再ジョブ化 (link " + toNode + "→" + fromNode + ", 逆方向リンク回復)"
-                );
-            }
+        } else {
+            // 待機UAVがいない場合: 容量を回復
+            double newCapacity = capacityManager.recoverCapacity(fromNode, toNode);
+            LogManager.getInstance().log(
+                "Phase 8-Fix: link[" + fromNode + "][" + toNode + "] 容量回復 → " + newCapacity
+            );
         }
 
         // 6. 最終リンクか判定
@@ -258,6 +314,9 @@ public class FlightScheduler {
         }
 
         // 8. 次のリンク飛行をスケジュール
+        // Phase 7-4: 次リンク進入を記録
+        LinkStatusRecorder.getInstance().onLinkEnter(nextFrom, nextTo);
+
         job.setCurrentLinkStartTime(System.currentTimeMillis());
         scheduleNextLink(job, linkIndex + 1);
     }
@@ -277,15 +336,40 @@ public class FlightScheduler {
         // Phase 3b-9: 待機開始時刻を記録
         job.startWaiting();
 
+        // Phase 7-4: 待機開始を記録
+        LinkStatusRecorder.getInstance().onWaitingStart(fromNode, toNode);
+
         // 待機キューに登録
         waitingManager.enqueue(fromNode, toNode, job);
+
+        // Phase 8-Debug: 待機数が異常に多い場合に警告ログ出力
+        int waitingCount = waitingManager.getWaitingCount(fromNode, toNode);
+
+        // DEBUG: 117-123リンクの待機キュー追加を専用ログに記録
+        Link117DebugLogger.getInstance().logWaitingQueue(fromNode, toNode, "ENQUEUE", waitingCount);
+        if (waitingCount > 50) {
+            LogManager.getInstance().log(
+                "WARNING: リンク " + fromNode + "→" + toNode + " で待機UAVが " + waitingCount + " 台に達しました！"
+            );
+            // StatisticalSimulationControllerにも診断ログを出力
+            try {
+                StatisticalSimulationController statController = StatisticalSimulationController.getInstance();
+                if (statController != null && statController.isRunning()) {
+                    statController.logDiagnostic("LINK_CONGESTION_WARNING",
+                        String.format("link=%d-%d,waiting_count=%d,client=%d,uav=%d",
+                            fromNode, toNode, waitingCount, job.getClientId(), job.getUavId()));
+                }
+            } catch (Exception e) {
+                // StatisticalSimulationControllerが未初期化の場合は無視
+            }
+        }
 
         // 飛行中から削除
         activeFlights.decrementAndGet();
 
         LogManager.getInstance().log(
             "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 途中待機 " +
-            "(link " + fromNode + "→" + toNode + ", linkIndex=" + waitingLinkIndex + ")"
+            "(link " + fromNode + "→" + toNode + ", linkIndex=" + waitingLinkIndex + ", 待機数=" + waitingCount + ")"
         );
     }
 
@@ -295,27 +379,39 @@ public class FlightScheduler {
      * @param job 完了したジョブ
      */
     private void onFlightCompleted(UAVJob job) {
+        // Phase 10: 二重完了防止チェック
+        if (!job.markCompleted()) {
+            LogManager.getInstance().log(
+                "Phase 10: client" + job.getClientId() + " UAV" + job.getUavId() +
+                " の二重完了を検出しスキップしました"
+            );
+            return;
+        }
+
         activeFlights.decrementAndGet();
         int completed = completedFlights.incrementAndGet();
 
-        // Phase 3b-9: 時間情報を取得
-        double realFlightTime = job.getElapsedFlightTime();   // 純粋な飛行時間
-        double waitingTime = job.getTotalWaitingTime();        // 待機時間
-        double totalTime = job.getTotalTime();                 // 合計時間
+        // Phase 5: 時間情報を取得
+        double realFlightTime = job.getElapsedFlightTime();       // 純粋な飛行時間
+        double flightStayingTime = job.getFlightStayingTime();    // 飛行前待機時間（バッテリー消費なし）
+        double waitingTime = job.getTotalWaitingTime();           // 飛行中待機時間（バッテリー消費あり）
+        double totalTime = job.getTotalTime();                    // 合計時間
 
         LogManager.getInstance().log(
             "Phase 3b-3: client" + job.getClientId() + " UAV" + job.getUavId() + " 飛行完了 " +
             "(総距離=" + String.format("%.2f", job.getTotalDistance()) + "m, " +
             "飛行時間=" + String.format("%.2f", realFlightTime) + "s, " +
-            "待機時間=" + String.format("%.2f", waitingTime) + "s, " +
+            "飛行前待機=" + String.format("%.2f", flightStayingTime) + "s, " +
+            "飛行中待機=" + String.format("%.2f", waitingTime) + "s, " +
             "合計=" + String.format("%.2f", totalTime) + "s, " +
             "総完了数=" + completed + ")"
         );
 
         // Phase 3b-7: 結果ファイルに出力
         try {
-            // clientIdをrunCounterとして使用（各事業者ごとにディレクトリ分け）
-            int runCounter = job.getClientId();
+            // clientIdをrunCounterに変換（clientIdは1始まり、runCounterは0始まり）
+            // ResultOutputManager.getDirectoryPath()で+1されるため、-1して調整
+            int runCounter = job.getClientId() - 1;
             ResultOutputManager.outputFlightTimeResult(job, runCounter);
         } catch (IOException e) {
             LogManager.getInstance().error("Phase 3b-7: 結果ファイル出力エラー", e);
@@ -326,6 +422,16 @@ public class FlightScheduler {
 
         // Phase 4: 事業者の時間計測（UAV完了通知）
         ClientTimeManager.getInstance().onUAVCompleted(job.getClientId());
+
+        // Phase 12-Fix: activeClientUAVsから削除
+        ConcurrentHashMap<Integer, UAVJob> clientUAVMap = activeClientUAVs.get(job.getClientId());
+        if (clientUAVMap != null) {
+            clientUAVMap.remove(job.getUavId());
+            // クライアントのUAVマップが空になったら削除
+            if (clientUAVMap.isEmpty()) {
+                activeClientUAVs.remove(job.getClientId());
+            }
+        }
     }
 
     /**
@@ -567,6 +673,10 @@ public class FlightScheduler {
                 int newSize = Math.min(currentPoolSize + SCALE_STEP, MAX_POOL_SIZE);
                 scheduler.setCorePoolSize(newSize);
                 lowUsageStartTime.set(0);  // 低使用率カウンタをリセット
+
+                // スレッド数遷移ログに記録
+                LogManager.getInstance().logThreadCountChange(newSize, "SCALE_UP");
+
                 LogManager.getInstance().log(
                     "Phase 3b-10: スケールアップ " + currentPoolSize + " → " + newSize +
                     " (使用率=" + String.format("%.1f", usage * 100) + "%)"
@@ -587,6 +697,10 @@ public class FlightScheduler {
                     int newSize = Math.max(currentPoolSize - SCALE_STEP, MIN_POOL_SIZE);
                     scheduler.setCorePoolSize(newSize);
                     lowUsageStartTime.set(0);  // カウンタをリセット
+
+                    // スレッド数遷移ログに記録
+                    LogManager.getInstance().logThreadCountChange(newSize, "SCALE_DOWN");
+
                     LogManager.getInstance().log(
                         "Phase 3b-10: スケールダウン " + currentPoolSize + " → " + newSize +
                         " (使用率=" + String.format("%.1f", usage * 100) + "%, " +
@@ -626,6 +740,131 @@ public class FlightScheduler {
     }
 
     /**
+     * Phase 7-11: 全UAV飛行完了判定
+     * 飛行中UAVと待機中UAVが両方0の場合にtrueを返す
+     *
+     * @return 全UAVが飛行完了している場合true
+     */
+    public boolean isAllFlightsCompleted() {
+        int flying = activeFlights.get();
+        int waiting = waitingManager.getTotalWaitingCount();
+        int pathWaiting = pathWaitingManager != null ? pathWaitingManager.getTotalWaitingCount() : 0;
+
+        boolean completed = (flying == 0 && waiting == 0 && pathWaiting == 0);
+
+        if (completed) {
+            LogManager.getInstance().log(String.format(
+                "Phase 7-11: 全UAV飛行完了確認 (飛行中=%d, 待機中=%d, 経路待ち=%d, 完了済み=%d)",
+                flying, waiting, pathWaiting, completedFlights.get()
+            ));
+        }
+
+        return completed;
+    }
+
+    /**
+     * Phase 7-11: 現在の飛行状況を取得
+     * @return [飛行中, 待機中, 経路待ち, 完了済み]
+     */
+    public int[] getFlightStatus() {
+        return new int[] {
+            activeFlights.get(),
+            waitingManager.getTotalWaitingCount(),
+            pathWaitingManager != null ? pathWaitingManager.getTotalWaitingCount() : 0,
+            completedFlights.get()
+        };
+    }
+
+    /**
+     * Phase 12-Fix: クライアントの飛行中UAVをすべてキャンセル
+     * SearcherRetryManagerからリトライ時に呼び出される
+     *
+     * このメソッドは以下を行う：
+     * 1. 指定クライアントの飛行中UAVをすべてキャンセル状態にマーク
+     * 2. activeClientUAVsマップから削除
+     * 3. 使用中のリンク容量を回復
+     *
+     * @param clientId クライアントID
+     * @return キャンセルされたUAV数
+     */
+    public int cancelClientFlights(int clientId) {
+        if (clientId <= 0) {
+            LogManager.getInstance().error("Phase 12-Fix: 無効なクライアントID=" + clientId);
+            return 0;
+        }
+
+        int cancelledCount = 0;
+
+        // クライアントの飛行中UAVマップを取得
+        ConcurrentHashMap<Integer, UAVJob> clientUAVMap = activeClientUAVs.get(clientId);
+        if (clientUAVMap == null || clientUAVMap.isEmpty()) {
+            // 飛行中UAVがない場合は何もしない
+            return 0;
+        }
+
+        // すべてのUAVをキャンセル
+        for (UAVJob job : clientUAVMap.values()) {
+            try {
+                // キャンセル状態にマーク（volatile変数のためスレッドセーフ）
+                job.setCancelled(true);
+                cancelledCount++;
+
+                // 現在使用中のリンク容量を回復
+                int[] path = job.getPath();
+                if (path != null && path.length >= 2) {
+                    int currentIndex = job.getCurrentPathIndex();
+                    if (currentIndex < path.length - 1) {
+                        int fromNode = path[currentIndex];
+                        int toNode = path[currentIndex + 1];
+
+                        // リンク容量を回復（消費している場合のみ）
+                        try {
+                            capacityManager.recoverCapacity(fromNode, toNode);
+                            LogManager.getInstance().log(
+                                "Phase 12-Fix: client" + clientId + " UAV" + job.getUavId() +
+                                " のリンク容量回復 (link " + fromNode + "-" + toNode + ")"
+                            );
+                        } catch (Exception capEx) {
+                            LogManager.getInstance().error(
+                                "Phase 12-Fix: client" + clientId + " UAV" + job.getUavId() +
+                                " リンク容量回復失敗", capEx
+                            );
+                        }
+                    }
+                }
+
+                LogManager.getInstance().log(
+                    "Phase 12-Fix: client" + clientId + " UAV" + job.getUavId() +
+                    " をキャンセルしました（経過飛行時間=" + String.format("%.2f", job.getElapsedFlightTime()) + "s）"
+                );
+
+            } catch (Exception e) {
+                LogManager.getInstance().error(
+                    "Phase 12-Fix: client" + clientId + " UAV" + job.getUavId() +
+                    " のキャンセル処理中にエラー", e
+                );
+            }
+        }
+
+        // activeClientUAVsマップから削除
+        activeClientUAVs.remove(clientId);
+
+        // activeFlightsカウントを減少（キャンセルされたUAV分）
+        // 注: onLinkPassed()でキャンセル検出時にも減少するが、ここで先に減少させる
+        for (int i = 0; i < cancelledCount; i++) {
+            activeFlights.decrementAndGet();
+        }
+
+        if (cancelledCount > 0) {
+            LogManager.getInstance().log(
+                "Phase 12-Fix: client" + clientId + " の飛行中UAVキャンセル完了 (UAV数=" + cancelledCount + ")"
+            );
+        }
+
+        return cancelledCount;
+    }
+
+    /**
      * スケジューラを停止
      */
     public void shutdown() {
@@ -636,6 +875,12 @@ public class FlightScheduler {
         }
 
         if (scheduler != null && !scheduler.isShutdown()) {
+            int finalPoolSize = scheduler.getCorePoolSize();
+
+            // スレッド数遷移ログに終了を記録
+            LogManager.getInstance().logThreadCountChange(finalPoolSize, "SHUTDOWN");
+            LogManager.getInstance().closeThreadCountLog();
+
             scheduler.shutdown();
             try {
                 if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -644,7 +889,7 @@ public class FlightScheduler {
             } catch (InterruptedException e) {
                 scheduler.shutdownNow();
             }
-            LogManager.getInstance().log("Phase 3b-10: FlightScheduler shutdown (最終poolSize=" + scheduler.getCorePoolSize() + ")");
+            LogManager.getInstance().log("Phase 3b-10: FlightScheduler shutdown (最終poolSize=" + finalPoolSize + ")");
         }
     }
 

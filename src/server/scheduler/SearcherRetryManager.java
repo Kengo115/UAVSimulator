@@ -3,11 +3,18 @@ package server.scheduler;
 import client.Client;
 import client.ClientController;
 import item.Uav;
+import server.redis.PathWaitingManager;
 import server.route.RouteSearcher;
 import server.route.SolverFailedException;
 import server.util.LogManager;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.*;
@@ -18,9 +25,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * ソルバー失敗時の指数バックオフ再試行を管理
  * - 即時待機キュー（FIFO）
- * - 指数バックオフ（2→4→8→16→32→64→128秒）
+ * - 指数バックオフ（2→4→8→16→32→64→128→256→512→1024秒）
  * - サーチャー排他制御（1クライアントのみ使用可能）
- * - 128秒後失敗でスキップ
+ * - 10回失敗でスキップ
  */
 public class SearcherRetryManager {
 
@@ -28,7 +35,8 @@ public class SearcherRetryManager {
 
     // 再試行設定
     private static final long INITIAL_DELAY_MS = 2000;   // 初回2秒
-    private static final long MAX_DELAY_MS = 128000;     // 上限128秒
+    private static final long MAX_DELAY_MS = 1024000;    // 上限1024秒
+    private static final int MAX_RETRIES = 10;           // 最大再試行回数
     private static final double BACKOFF_MULTIPLIER = 2.0;
 
     // 排他制御
@@ -117,12 +125,17 @@ public class SearcherRetryManager {
 
         // サーチャーの取得を待つ
         synchronized (searcherLock) {
+            boolean addedToQueue = false;
+
             while (searcherInUse.get()) {
-                // 待機キューに追加
-                waitingQueue.add(request);
-                LogManager.getInstance().log(
-                    "Phase 5: client" + clientId + " 待機キューに追加 (キュー長=" + waitingQueue.size() + ")"
-                );
+                // 待機キューに追加（初回のみ）
+                if (!addedToQueue) {
+                    waitingQueue.add(request);
+                    addedToQueue = true;
+                    LogManager.getInstance().log(
+                        "Phase 5: client" + clientId + " 待機キューに追加 (キュー長=" + waitingQueue.size() + ")"
+                    );
+                }
 
                 try {
                     searcherLock.wait();
@@ -136,13 +149,12 @@ public class SearcherRetryManager {
                 // 起きた時、自分の番かチェック
                 if (waitingQueue.peek() == request) {
                     waitingQueue.poll();
+                    break;
                 } else if (!waitingQueue.contains(request)) {
                     // 既にキューから取り出されている（自分の番）
-                } else {
-                    // まだ自分の番ではない、再度待機
-                    continue;
+                    break;
                 }
-                break;
+                // まだ自分の番ではない、再度wait（addはしない）
             }
             searcherInUse.set(true);
         }
@@ -197,25 +209,85 @@ public class SearcherRetryManager {
 
                 } catch (SolverFailedException e) {
                     // ソルバー失敗
-                    LogManager.getInstance().log(
-                        "Phase 5: client" + clientId + " ソルバー失敗 (現在の待機時間=" +
-                        retryInfo.currentDelayMs + "ms)"
-                    );
+                    String failureMsg = "Phase 5: client" + clientId + " ソルバー失敗 (再試行=" +
+                        retryInfo.retryCount + "/" + MAX_RETRIES + ", 待機時間=" +
+                        retryInfo.currentDelayMs + "ms, 理由=" + e.getReason() + ")";
+                    LogManager.getInstance().log(failureMsg);
+                    logToSearcherFailureFile(failureMsg);
 
-                    // 64秒後の失敗ならスキップ
-                    if (retryInfo.currentDelayMs >= MAX_DELAY_MS) {
-                        LogManager.getInstance().log(
-                            "Phase 5: client" + clientId + "の経路割り当てが行えませんでした（最大再試行回数超過）"
-                        );
+                    // Phase 12-Fix: 飛行中UAVとPathWaitingManagerのクリーンアップ（PG-EPS重複UAV防止）
+                    // リトライ時に古いエントリが残留すると、成功時に重複UAVが記録される
+                    try {
+                        FlightScheduler flightScheduler = FlightScheduler.getInstance();
+
+                        // Phase 12-Fix: Step 1 - 飛行中UAVをキャンセル（最重要）
+                        // dequeueされて飛行中のUAVも確実にキャンセルする
+                        int cancelledFlights = flightScheduler.cancelClientFlights(clientId);
+                        if (cancelledFlights > 0) {
+                            String cancelMsg = "Phase 12-Fix: client" + clientId + " 飛行中UAVをキャンセル (UAV数=" + cancelledFlights + ")";
+                            LogManager.getInstance().log(cancelMsg);
+                            logToSearcherFailureFile(cancelMsg);
+                        }
+
+                        // Phase 12: Step 2 - PathWaitingManagerキューをクリア
+                        // キューに残っているUAV（まだdequeueされていないもの）を削除
+                        PathWaitingManager pathWaitingManager = flightScheduler.getPathWaitingManager();
+                        if (pathWaitingManager != null) {
+                            int waitingCount = pathWaitingManager.getWaitingCount(clientId);
+                            if (waitingCount > 0) {
+                                pathWaitingManager.clear(clientId);
+                                String clearMsg = "Phase 12: client" + clientId + " PathWaitingManagerキューをクリア (削除UAV数=" + waitingCount + ")";
+                                LogManager.getInstance().log(clearMsg);
+                                logToSearcherFailureFile(clearMsg);
+                            }
+                        }
+                    } catch (Exception cleanupEx) {
+                        LogManager.getInstance().error("Phase 12-Fix: client" + clientId + " クリーンアップ失敗", cleanupEx);
+                        // クリーンアップ失敗は継続（リトライ処理は続行）
+                    }
+
+                    // 最大再試行回数超過ならスキップ
+                    if (retryInfo.retryCount >= MAX_RETRIES) {
+                        String maxRetryMsg = "Phase 5: client" + clientId + "の経路割り当てが行えませんでした（最大再試行回数" + MAX_RETRIES + "回超過）";
+                        LogManager.getInstance().log(maxRetryMsg);
+                        logToSearcherFailureFile(maxRetryMsg);
+
+                        // Phase 12-Fix: 最大再試行超過時も完全クリーンアップ（残留UAV削除）
+                        try {
+                            FlightScheduler flightScheduler = FlightScheduler.getInstance();
+
+                            // Phase 12-Fix: 飛行中UAVをキャンセル
+                            int cancelledFlights = flightScheduler.cancelClientFlights(clientId);
+                            if (cancelledFlights > 0) {
+                                String cancelMsg = "Phase 12-Fix: client" + clientId + " 最大再試行超過により飛行中UAVをキャンセル (UAV数=" + cancelledFlights + ")";
+                                LogManager.getInstance().log(cancelMsg);
+                                logToSearcherFailureFile(cancelMsg);
+                            }
+
+                            // Phase 12: PathWaitingManagerキューをクリア
+                            PathWaitingManager pathWaitingManager = flightScheduler.getPathWaitingManager();
+                            if (pathWaitingManager != null) {
+                                int waitingCount = pathWaitingManager.getWaitingCount(clientId);
+                                if (waitingCount > 0) {
+                                    pathWaitingManager.clear(clientId);
+                                    String clearMsg = "Phase 12: client" + clientId + " 最大再試行超過によりPathWaitingManagerキューをクリア (削除UAV数=" + waitingCount + ")";
+                                    LogManager.getInstance().log(clearMsg);
+                                    logToSearcherFailureFile(clearMsg);
+                                }
+                            }
+                        } catch (Exception cleanupEx) {
+                            LogManager.getInstance().error("Phase 12-Fix: client" + clientId + " クリーンアップ失敗（最大再試行超過時）", cleanupEx);
+                        }
+
                         success = false;
                         break;
                     }
 
                     // 待機してから再試行
                     long delayMs = retryInfo.currentDelayMs;
-                    LogManager.getInstance().log(
-                        "Phase 5: client" + clientId + " " + (delayMs / 1000) + "秒後に再試行"
-                    );
+                    String retryMsg = "Phase 5: client" + clientId + " " + (delayMs / 1000) + "秒後に再試行";
+                    LogManager.getInstance().log(retryMsg);
+                    logToSearcherFailureFile(retryMsg);
 
                     // 一旦サーチャーを解放して他のクライアントに譲る
                     releaseSearcherForRetry(request, delayMs);
@@ -382,6 +454,41 @@ public class SearcherRetryManager {
         if (instance != null) {
             instance.shutdown();
             instance = null;
+        }
+    }
+
+    /**
+     * searcher_failure.log にログを出力する
+     * Phase 10: sim_N ディレクトリ配下に出力するように修正
+     */
+    private static final DateTimeFormatter LOG_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+
+    /**
+     * Phase 10: searcher_failure.logのパスを動的に生成
+     * @return searcher_failure.logのパス（例: src/log/sim_1/searcher_failure.log）
+     */
+    private String getFailureLogPath() {
+        String logBaseDir = controller.BoundaryController.getLogBaseDir();
+        String simId = controller.BoundaryController.getSimId();
+        return logBaseDir + "/sim_" + simId + "/searcher_failure.log";
+    }
+
+    private void logToSearcherFailureFile(String message) {
+        try {
+            String failureLogPath = getFailureLogPath();
+            File logFile = new File(failureLogPath);
+            File logDir = logFile.getParentFile();
+
+            if (!logDir.exists()) {
+                logDir.mkdirs();
+            }
+
+            try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(failureLogPath, true)))) {
+                String timestamp = LocalDateTime.now().format(LOG_TIME_FORMAT);
+                writer.println(timestamp + " - " + message);
+            }
+        } catch (IOException e) {
+            // ログファイル書き込みエラーは無視
         }
     }
 }

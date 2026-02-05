@@ -32,13 +32,14 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
     private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 150; // 収束判定用の連続安定回数
+    private static final int REQUIRED_STABLE_ITERATIONS = 200; // 収束判定用の連続安定回数（100→200に変更）
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 10; // 二分探索の最大回数
+    private static final double MIN_ASSIGNMENT_RATIO = 1.0 / 4.0; // EPS最低割当比率（1/4 = 25%）
 
     // ソースノード圧力専用閾値
     private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値
-    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.30; // 20%変化率閾値（フロー減少用）
-    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 20%減少閾値（フロー増加用）
+    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.50; // 50%変化率閾値（フロー減少用）
+    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 50%減少閾値（フロー増加用）
 
     // フロー減少（UAV整数値対応）
     private static final double MINIMUM_FLOW_RATIO = 0.1; // 最小安全フロー（要求フローの10%）
@@ -135,24 +136,16 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         // EPSセーブポイントの初期化
         epsSavePoint = new EPSSavePoint(node);
         LogManager.getInstance().log("BisectionalPGEPS: EPSSavePoint initialized");
-        
+
+        // 容量0のリンクを一時的に切断（EPSが選択しないようにする）
+        disconnectZeroCapacityLinks();
+
         // 動的二分探索EPS実行
         performDynamicBinarySearchEPS(client, eps);
 
-            // 親クラスのUAV割り当て処理を実行
-            LogManager.getInstance().log("BisectionalPGEPS: Setting up flow capacity arrays");
-            for (int i = 0; i < node; i++) {
-                for (int j = 0; j < node; j++) {
-                    if (link[i][j].getL_tubeLength() != INF) {
-                        adjMatrix[i][j] = 1;
-                        if (link[i][j].getQ_tubeFlow() > 0) {
-                            Flow_Capacity[i][j] = Math.max(0.0, link[i][j].getCapacity() - link[i][j].getQ_tubeFlow());
-                            int flow = (int) Math.floor(link[i][j].getQ_tubeFlow());
-                            tubeFlow[i][j] = flow;
-                        }
-                    }
-                }
-            }
+            // フロー分解アルゴリズムによる経路割り当て準備
+            // （tubeFlow配列は不要、explorePath/explorePathGreedyがlink[i][j].getQ_tubeFlow()を直接参照）
+            LogManager.getInstance().log("BisectionalPGEPS: Flow decomposition will use link Q_tubeFlow directly");
 
             // EPSフロー値から残りUAV数を計算
             int requiredUAVs = (int) requestedFlow;
@@ -160,6 +153,14 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             int remainingUAVs = requiredUAVs - (int)epsAssignedFlow;
 
             LogManager.getInstance().log("BisectionalPGEPS: EPS assigned flow " + epsAssignedFlow + " out of " + requiredUAVs + " required UAVs");
+
+            // 1/4最低保証チェック: EPS割当が要求の1/4(25%)未満の場合はリトライ
+            int minRequired = (int) Math.ceil(requiredUAVs * MIN_ASSIGNMENT_RATIO);
+            if (epsAssignedFlow < minRequired) {
+                LogManager.getInstance().log("BisectionalPGEPS: [MinAssignment] EPS assigned " + (int)epsAssignedFlow +
+                    " UAVs, but minimum required is " + minRequired + " (1/4 of " + requiredUAVs + "). Triggering retry.");
+                throw new SolverFailedException(currentClientId, 0, "BisectionalPGEPS-MinAssignment");
+            }
 
             // Phase 4: 事業者の時間計測開始（経路割り当て開始時点）
             ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);
@@ -207,6 +208,9 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         } catch (Exception e) {
             LogManager.getInstance().error("Error in binary search EPS process: ", e);
             throw e;
+        } finally {
+            // 切断したリンクを復元（例外発生時も確実に復元）
+            restoreDisconnectedLinks();
         }
     }
 
@@ -587,11 +591,9 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             ct++;
         }
 
-        // 最終流量の整数丸め（ソースノード流出を基準に丸める）
-        LogManager.getInstance().log("BisectionalPGEPS: Performing final flow rounding after " + ct + " iterations");
-        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) finalFlow);
-
-        LogManager.getInstance().log("BisectionalPGEPS: Final EPS completed with flow " + finalFlow);
+        // フロー分解アルゴリズムでは整数丸め込みは不要
+        // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
+        LogManager.getInstance().log("BisectionalPGEPS: Final EPS completed with flow " + finalFlow + " after " + ct + " iterations");
 
         // 最終結果を出力
         ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -808,19 +810,8 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                 }
             }
 
-            // 最終イテレーションで流量を整数に丸める（ソースノード流出を基準に）
-            if (psIter == 499) {
-                roundSourceOutflowsAndPropagate(psLink, sourceNode, destNode, remainingUAVs);
-
-                // 丸め後のソース流出合計を検証
-                double finalSum = 0.0;
-                for (int j = 0; j < node; j++) {
-                    if (psLink[sourceNode][j].getL_tubeLength() != INF && psLink[sourceNode][j].getQ_tubeFlow() > 0) {
-                        finalSum += psLink[sourceNode][j].getQ_tubeFlow();
-                    }
-                }
-                LogManager.getInstance().log("BisectionalPGEPS: PS source outflow sum after rounding = " + finalSum + " (expected: " + remainingUAVs + ")");
-            }
+            // フロー分解アルゴリズムでは整数丸め込みは不要
+            // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
 
             // シグモイド関数
             for (int i = 0; i < node; i++) {
@@ -869,37 +860,18 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             }
         }
 
-        // 統合後に再度整数への丸め込みを実行（ソースノード流出を基準に）
-        LogManager.getInstance().log("BisectionalPGEPS: Applying final integer rounding after EPS+PS integration");
-        int totalRequiredFlow = (int) requestedFlow;
-        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, totalRequiredFlow);
+        // フロー分解アルゴリズムでは整数丸め込みは不要
+        // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
 
-        // 丸め後のソース流出合計を検証
+        // 統合後のソース流出合計を検証
         double integratedSourceOutflow = 0.0;
         for (int j = 0; j < node; j++) {
             if (link[sourceNode][j].getL_tubeLength() != INF && link[sourceNode][j].getQ_tubeFlow() > 0) {
                 integratedSourceOutflow += link[sourceNode][j].getQ_tubeFlow();
             }
         }
-        LogManager.getInstance().log("BisectionalPGEPS: Integrated source outflow sum after rounding = " + integratedSourceOutflow + " (expected: " + totalRequiredFlow + ")");
-
-        LogManager.getInstance().log("BisectionalPGEPS: Final integer rounding completed. All flows are now exact integers.");
-
-        // 統合完了後に、Flow_CapacityとtubeFlowを統合結果で更新
-        LogManager.getInstance().log("BisectionalPGEPS: Updating Flow_Capacity and tubeFlow arrays with integrated results");
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    if (link[i][j].getQ_tubeFlow() > 0) {
-                        Flow_Capacity[i][j] = Math.max(0.0, link[i][j].getCapacity() - link[i][j].getQ_tubeFlow());
-                        int flow = (int) Math.floor(link[i][j].getQ_tubeFlow());
-                        tubeFlow[i][j] = flow;
-                        LogManager.getInstance().log("Updated arrays: Link(" + i + "," + j + ") - Flow_Capacity=" + Flow_Capacity[i][j] + ", tubeFlow=" + tubeFlow[i][j]);
-                    }
-                }
-            }
-        }
-        LogManager.getInstance().log("BisectionalPGEPS: Flow arrays update completed");
+        LogManager.getInstance().log("BisectionalPGEPS: Integrated source outflow sum = " + integratedSourceOutflow + " (expected: " + (int) requestedFlow + ")");
+        LogManager.getInstance().log("BisectionalPGEPS: EPS+PS integration completed. Flow decomposition will handle path extraction.");
     }
 
     /**
@@ -1262,18 +1234,9 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             throw new SolverFailedException(currentClientId, ct, "BisectionalPGEPS-MaxIterations");
         }
 
-        // 最終流量の整数丸め（ソースノード流出を基準に丸める）
-        LogManager.getInstance().log("BisectionalPGEPS: Performing final flow rounding after " + ct + " iterations");
-        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
-
-        // 丸め後のソース流出合計を検証
-        double sourceOutflowSum = 0.0;
-        for (int j = 0; j < node; j++) {
-            if (link[sourceNode][j].getL_tubeLength() != INF && link[sourceNode][j].getQ_tubeFlow() > 0) {
-                sourceOutflowSum += link[sourceNode][j].getQ_tubeFlow();
-            }
-        }
-        LogManager.getInstance().log("BisectionalPGEPS: Source outflow sum after rounding = " + sourceOutflowSum + " (expected: " + (int) currentFlow + ")");
+        // フロー分解アルゴリズムでは整数丸め込みは不要
+        // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
+        LogManager.getInstance().log("BisectionalPGEPS: EPS completed after " + ct + " iterations with flow " + currentFlow);
 
         LogManager.getInstance().log("BisectionalPGEPS: Dynamic binary search EPS completed with optimal flow " + currentFlow);
 
@@ -1283,193 +1246,9 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, currentFlow);
     }
 
-    /**
-     * ネットワーク全体のフローを整数に丸める（流量保存則を維持）
-     * BFSでソースからデスティネーションまで各ノードを処理し、
-     * 各ノードで流入合計に合わせて流出を整数に丸める
-     *
-     * @param linkArray リンク配列
-     * @param srcNode ソースノード
-     * @param dstNode デスティネーションノード
-     * @param targetFlow ターゲットフロー（整数）
-     */
-    @Override
-    protected void roundSourceOutflowsAndPropagate(Link[][] linkArray, int srcNode, int dstNode, int targetFlow) {
-        // Step 1: ソースノードの流出を丸める
-        java.util.List<Integer> sourceOutLinks = new java.util.ArrayList<>();
-        java.util.List<Double> sourceOutFlows = new java.util.ArrayList<>();
-
-        for (int j = 0; j < node; j++) {
-            if (linkArray[srcNode][j].getL_tubeLength() != INF && linkArray[srcNode][j].getQ_tubeFlow() > 0) {
-                sourceOutLinks.add(j);
-                sourceOutFlows.add(linkArray[srcNode][j].getQ_tubeFlow());
-            }
-        }
-
-        if (sourceOutFlows.isEmpty()) {
-            LogManager.getInstance().log("BisectionalPGEPS: No positive source outflows found. Skipping rounding.");
-            return;
-        }
-
-        // ソース流出を丸める
-        double[] sourceFlowsArray = sourceOutFlows.stream().mapToDouble(Double::doubleValue).toArray();
-        MathUtils.roundWithTargetSum(sourceFlowsArray, targetFlow);
-
-        // ソースリンクに適用
-        for (int i = 0; i < sourceOutLinks.size(); i++) {
-            int linkDest = sourceOutLinks.get(i);
-            double newFlow = sourceFlowsArray[i];
-            linkArray[srcNode][linkDest].setQ_tubeFlow(newFlow);
-            if (linkArray[linkDest][srcNode].getL_tubeLength() != INF) {
-                linkArray[linkDest][srcNode].setQ_tubeFlow(-newFlow);
-            }
-        }
-
-        // Step 2: BFSで中間ノードを処理
-        java.util.Set<Integer> visited = new java.util.HashSet<>();
-        java.util.Queue<Integer> queue = new java.util.LinkedList<>();
-        visited.add(srcNode);
-
-        // ソースの隣接ノードをキューに追加
-        for (int i = 0; i < sourceOutLinks.size(); i++) {
-            int dest = sourceOutLinks.get(i);
-            if (sourceFlowsArray[i] > 0 && dest != dstNode) {
-                queue.add(dest);
-            }
-        }
-
-        while (!queue.isEmpty()) {
-            int currentNode = queue.poll();
-            if (visited.contains(currentNode)) {
-                continue;
-            }
-            visited.add(currentNode);
-
-            // 現在のノードへの整数流入量を計算（丸め済みの正の流入のみ）
-            int integerInflow = 0;
-            for (int i = 0; i < node; i++) {
-                if (linkArray[i][currentNode].getL_tubeLength() != INF) {
-                    double flow = linkArray[i][currentNode].getQ_tubeFlow();
-                    if (flow > 0) {
-                        integerInflow += (int) Math.round(flow);
-                    }
-                }
-            }
-
-            // 現在のノードからの流出を収集
-            java.util.List<Integer> outLinks = new java.util.ArrayList<>();
-            java.util.List<Double> outFlows = new java.util.ArrayList<>();
-            for (int j = 0; j < node; j++) {
-                if (linkArray[currentNode][j].getL_tubeLength() != INF && linkArray[currentNode][j].getQ_tubeFlow() > 0) {
-                    outLinks.add(j);
-                    outFlows.add(linkArray[currentNode][j].getQ_tubeFlow());
-                }
-            }
-
-            if (!outFlows.isEmpty() && integerInflow > 0) {
-                // 流出を流入に合わせて丸める
-                double[] outFlowsArray = outFlows.stream().mapToDouble(Double::doubleValue).toArray();
-                MathUtils.roundWithTargetSum(outFlowsArray, integerInflow);
-
-                // 適用
-                for (int i = 0; i < outLinks.size(); i++) {
-                    int linkDest = outLinks.get(i);
-                    double newFlow = outFlowsArray[i];
-                    linkArray[currentNode][linkDest].setQ_tubeFlow(newFlow);
-                    if (linkArray[linkDest][currentNode].getL_tubeLength() != INF) {
-                        linkArray[linkDest][currentNode].setQ_tubeFlow(-newFlow);
-                    }
-
-                    // 次のノードをキューに追加（デスティネーション以外）
-                    if (newFlow > 0 && linkDest != dstNode && !visited.contains(linkDest)) {
-                        queue.add(linkDest);
-                    }
-                }
-            } else if (integerInflow == 0) {
-                // 流入が0になった場合、流出も0にする
-                for (int j = 0; j < node; j++) {
-                    if (linkArray[currentNode][j].getL_tubeLength() != INF && linkArray[currentNode][j].getQ_tubeFlow() > 0) {
-                        linkArray[currentNode][j].setQ_tubeFlow(0.0);
-                        if (linkArray[j][currentNode].getL_tubeLength() != INF) {
-                            linkArray[j][currentNode].setQ_tubeFlow(0.0);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Step 3: フロー保存則の検証と修正（中間ノードのみ）
-        // BFS処理後も不整合が残っている場合に修正
-        boolean hasViolation = true;
-        int maxIterations = 10; // 無限ループ防止
-        int iteration = 0;
-
-        while (hasViolation && iteration < maxIterations) {
-            hasViolation = false;
-            iteration++;
-
-            for (int currentNode = 0; currentNode < node; currentNode++) {
-                // ソースとデスティネーションはスキップ
-                if (currentNode == srcNode || currentNode == dstNode) {
-                    continue;
-                }
-
-                // 入力フロー計算
-                double actualInflow = 0.0;
-                for (int i = 0; i < node; i++) {
-                    if (linkArray[i][currentNode].getL_tubeLength() != INF) {
-                        double flow = linkArray[i][currentNode].getQ_tubeFlow();
-                        if (flow > 0) {
-                            actualInflow += flow;
-                        }
-                    }
-                }
-
-                // 出力フロー計算
-                double actualOutflow = 0.0;
-                java.util.List<Integer> outLinks = new java.util.ArrayList<>();
-                java.util.List<Double> outFlows = new java.util.ArrayList<>();
-                for (int j = 0; j < node; j++) {
-                    if (linkArray[currentNode][j].getL_tubeLength() != INF) {
-                        double flow = linkArray[currentNode][j].getQ_tubeFlow();
-                        if (flow > 0) {
-                            actualOutflow += flow;
-                            outLinks.add(j);
-                            outFlows.add(flow);
-                        }
-                    }
-                }
-
-                // フロー保存則違反チェック
-                int intInflow = (int) Math.round(actualInflow);
-                int intOutflow = (int) Math.round(actualOutflow);
-
-                if (intInflow != intOutflow && intInflow > 0 && !outFlows.isEmpty()) {
-                    hasViolation = true;
-                    LogManager.getInstance().log("BisectionalPGEPS: Flow conservation violation at node " + currentNode +
-                                               " (inflow=" + intInflow + ", outflow=" + intOutflow + "). Correcting...");
-
-                    // 出力フローを入力フローに合わせて再丸め
-                    double[] outFlowsArray = outFlows.stream().mapToDouble(Double::doubleValue).toArray();
-                    MathUtils.roundWithTargetSum(outFlowsArray, intInflow);
-
-                    // 適用
-                    for (int i = 0; i < outLinks.size(); i++) {
-                        int linkDest = outLinks.get(i);
-                        double newFlow = outFlowsArray[i];
-                        linkArray[currentNode][linkDest].setQ_tubeFlow(newFlow);
-                        if (linkArray[linkDest][currentNode].getL_tubeLength() != INF) {
-                            linkArray[linkDest][currentNode].setQ_tubeFlow(-newFlow);
-                        }
-                    }
-                }
-            }
-        }
-
-        if (iteration > 1) {
-            LogManager.getInstance().log("BisectionalPGEPS: Flow conservation correction completed after " + iteration + " iterations");
-        }
-    }
+    // roundSourceOutflowsAndPropagate は削除
+    // フロー分解アルゴリズムでは整数丸め込みは不要
+    // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
 
     /**
      * 下流のフローを再帰的に調整する

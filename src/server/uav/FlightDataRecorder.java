@@ -40,12 +40,14 @@ public class FlightDataRecorder {
 
     /**
      * 現在の経路探索手法に基づいてディレクトリパスを取得する
+     * Phase 7-1: small_scale/large_scale分離
      * @param baseDir ベースディレクトリ
      * @return ディレクトリパス
      */
     private static String getDirectoryPath(String baseDir) {
         BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-        return "src/result/" + method.getName() + "/" + baseDir;
+        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
+        return "src/result/" + scaleDir + "/" + method.getName() + "/" + baseDir;
     }
 
     /**
@@ -134,25 +136,27 @@ public class FlightDataRecorder {
         long UAV_waitingTime = uav.getWaitingTime();
         long UAV_totalTime = UAV_flightTime + UAV_waitingTime;
 
-        // Phase 4: 時間を秒に変換
+        // Phase 5/11: 時間を秒に変換
         double realFlightTimeSeconds = UAV_flightTime / 1000.0;
         double waitingTimeSeconds = UAV_waitingTime / 1000.0;
         double totalTimeSeconds = UAV_totalTime / 1000.0;
-        double pathWaitTime = 0.0;  // メモリモードでは経路待ちは発生しない
+        double pathWaitTime = 0.0;       // メモリモードでは経路待ちは発生しない
+        double flightStayingTime = 0.0;  // メモリモードでは飛行前待機は発生しない（全てwaitingTimeに含まれる）
 
         try (FileWriter writer = new FileWriter(filePath, true)) {
             File file = new File(filePath);
             if (file.length() == 0) {
-                // Phase 4: ResultOutputManagerと同じフォーマットに統一
-                writer.write("source,dest,flightTime,realFlightTime,waitingTime,pathWaitTime,clientId,uavId,speed,distance,path\n");
+                // Phase 11: ResultOutputManagerと同じフォーマットに統一（pathWaitTimeとflightStayingTimeを分離）
+                writer.write("source,dest,flightTime,realFlightTime,waitingTime,pathWaitTime,flightStayingTime,clientId,uavId,speed,distance,path\n");
             }
             String pathString = Arrays.stream(uav.getPath()).mapToObj(String::valueOf).collect(Collectors.joining("-"));
-            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
+            writer.write(String.format("%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%.2f,%.2f,%s\n",
                     uav.getSource().getId(), uav.getDistination().getId(),
                     totalTimeSeconds,       // flightTime: 合計時間
                     realFlightTimeSeconds,  // realFlightTime: 純粋な飛行時間
-                    waitingTimeSeconds,     // waitingTime: 容量待機時間
+                    waitingTimeSeconds,     // waitingTime: 飛行中待機時間
                     pathWaitTime,           // pathWaitTime: 経路待ち時間（メモリモードでは0）
+                    flightStayingTime,      // flightStayingTime: 飛行前待機（メモリモードでは0）
                     uav.getClientId(), uav.getId(), uav.getSpeed(), totalPathDistance, pathString));
         } catch (IOException e) {
             System.err.println("ファイル書き込みエラー: " + e.getMessage());

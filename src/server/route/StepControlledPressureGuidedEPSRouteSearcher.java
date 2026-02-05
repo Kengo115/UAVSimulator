@@ -124,7 +124,10 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
 
         // 前回チューブ厚の初期化
         initializePreviousThickness();
-        
+
+        // 容量0のリンクを一時的に切断（EPSが選択しないようにする）
+        disconnectZeroCapacityLinks();
+
         try {
             // 適応的フロー制御メインループ
             while (ct < MAX_ITERATIONS && stableIterationCount < REQUIRED_STABLE_ITERATIONS) {
@@ -229,10 +232,8 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                         if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
                             LogManager.getInstance().log("StepControlledPGEPS: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
 
-                            // 最終流量の整数丸め（ソースノード流出を基準に）
-                            roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
-
-                            LogManager.getInstance().log("StepControlledPGEPS: Final flow rounding completed. EPS converged with flow " + currentFlow);
+                            // フロー分解アルゴリズムでは整数丸め込みは不要
+                            LogManager.getInstance().log("StepControlledPGEPS: EPS converged with flow " + currentFlow);
 
                             // 最終結果を出力
                             ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -272,10 +273,8 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                         if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
                             LogManager.getInstance().log("StepControlledPGEPS: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
 
-                            // 最終流量の整数丸め（ソースノード流出を基準に）
-                            roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
-
-                            LogManager.getInstance().log("StepControlledPGEPS: Final flow rounding completed. EPS converged with flow " + currentFlow);
+                            // フロー分解アルゴリズムでは整数丸め込みは不要
+                            LogManager.getInstance().log("StepControlledPGEPS: EPS converged with flow " + currentFlow);
 
                             // 最終結果を出力
                             ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -301,14 +300,12 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                     // 安定：カウンター増加
                     stableIterationCount++;
 
-                    // 500回連続安定を達成したら、整数丸め込みを実行してEPS終了
+                    // 500回連続安定を達成したらEPS終了
                     if (stableIterationCount >= REQUIRED_STABLE_ITERATIONS) {
                         LogManager.getInstance().log("StepControlledPGEPS: Achieved " + REQUIRED_STABLE_ITERATIONS + " stable iterations at iteration " + (ct + 1) + " with flow " + currentFlow);
 
-                        // 最終流量の整数丸め（ソースノード流出を基準に）
-                        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
-
-                        LogManager.getInstance().log("StepControlledPGEPS: Final flow rounding completed. EPS converged with flow " + currentFlow);
+                        // フロー分解アルゴリズムでは整数丸め込みは不要
+                        LogManager.getInstance().log("StepControlledPGEPS: EPS converged with flow " + currentFlow);
 
                         // 最終結果を出力
                         ResultOutputManager.outputToPajek(client, eps, requestedFlow, ct, link, beaconCluster, node, serverController.getRunCounter());
@@ -365,20 +362,9 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                                           " after " + ct + " iterations (stable count: " + stableIterationCount + ")");
             }
 
-            // 親クラスのUAV割り当て処理を実行
-            LogManager.getInstance().log("breakout point");
-            for (int i = 0; i < node; i++) {
-                for (int j = 0; j < node; j++) {
-                    if (link[i][j].getL_tubeLength() != INF) {
-                        adjMatrix[i][j] = 1;
-                        if (link[i][j].getQ_tubeFlow() > 0) {
-                            Flow_Capacity[i][j] = Math.max(0.0, link[i][j].getCapacity() - link[i][j].getQ_tubeFlow());
-                            int flow = (int) Math.floor(link[i][j].getQ_tubeFlow());
-                            tubeFlow[i][j] = flow;
-                        }
-                    }
-                }
-            }
+            // フロー分解アルゴリズムによる経路割り当て準備
+            // （tubeFlow配列は不要、explorePath/explorePathGreedyがlink[i][j].getQ_tubeFlow()を直接参照）
+            LogManager.getInstance().log("StepControlledPGEPS: Flow decomposition will use link Q_tubeFlow directly");
 
             // EPSフロー値から残りUAV数を計算
             int requiredUAVs = (int) requestedFlow;
@@ -429,23 +415,8 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
             int epsUAVCount = (int) epsAssignedFlow;
             LogManager.getInstance().log("StepControlledPGEPS: Starting UAV flight assignment for " + epsUAVCount + " EPS UAVs (out of " + requiredUAVs + " total)");
 
-            // 統合後の流量とtubeFlowを詳細ログ出力
-            LogManager.getInstance().log("StepControlledPGEPS: Final flow verification before runUAVFlow:");
-            double totalFlowSum = 0.0;
-            for (int i = 0; i < node; i++) {
-                for (int j = 0; j < node; j++) {
-                    if (link[i][j].getL_tubeLength() != INF && link[i][j].getQ_tubeFlow() > 0) {
-                        double flowValue = link[i][j].getQ_tubeFlow();
-                        double floorValue = Math.floor(flowValue);
-                        if (flowValue != floorValue) {
-                            LogManager.getInstance().log("WARNING: Non-integer flow detected! Link(" + i + "," + j + ") = " + flowValue + " (should be integer)");
-                        }
-                        LogManager.getInstance().log("Link(" + i + "," + j + "): Q_tubeFlow=" + flowValue + ", tubeFlow=" + tubeFlow[i][j] + ", Flow_Capacity=" + Flow_Capacity[i][j]);
-                        totalFlowSum += flowValue;
-                    }
-                }
-            }
-            LogManager.getInstance().log("StepControlledPGEPS: Total flow sum = " + totalFlowSum + " (expected: " + epsUAVCount + ")");
+            // フロー分解アルゴリズムでは非整数フローは許容される
+            // （explorePathがfloor(minFlow)で整数台を抽出、explorePathGreedyが残りを処理）
 
             runUAVFlow(sourceNode, destNode, epsUAVCount, client, flyingUavQueue, uavQueue);
             
@@ -453,6 +424,9 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
             // エラー詳細をログ出力
             LogManager.getInstance().error("Error in incremental EPS process: ", e);
             throw e; // 再スローして上位で処理
+        } finally {
+            // 切断したリンクを復元（例外発生時も確実に復元）
+            restoreDisconnectedLinks();
         }
     }
 
@@ -805,11 +779,8 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
             }
         }
         
-        // 1000回安定化完了時に流量を整数に丸める（ソースノード流出を基準に）
-        LogManager.getInstance().log("StepControlledPGEPS: Performing flow rounding after successful stabilization");
-        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, (int) currentFlow);
-
-        LogManager.getInstance().log("StepControlledPGEPS: Stabilization completed successfully after " + STABILIZATION_ITERATIONS + " iterations");
+        // フロー分解アルゴリズムでは整数丸め込みは不要
+        LogManager.getInstance().log("StepControlledPGEPS: Stabilization completed successfully after " + STABILIZATION_ITERATIONS + " iterations with flow " + currentFlow);
         return true;
     }
 
@@ -909,19 +880,8 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                 }
             }
 
-            // 最終イテレーションで流量を整数に丸める（ソースノード流出を基準に）
-            if (psIter == 499) {
-                roundSourceOutflowsAndPropagate(psLink, sourceNode, destNode, remainingUAVs);
-
-                // 丸め後のソース流出合計を検証
-                double finalSum = 0.0;
-                for (int j = 0; j < node; j++) {
-                    if (psLink[sourceNode][j].getL_tubeLength() != INF && psLink[sourceNode][j].getQ_tubeFlow() > 0) {
-                        finalSum += psLink[sourceNode][j].getQ_tubeFlow();
-                    }
-                }
-                LogManager.getInstance().log("StepControlledPGEPS: PS source outflow sum after rounding = " + finalSum + " (expected: " + remainingUAVs + ")");
-            }
+            // フロー分解アルゴリズムでは整数丸め込みは不要
+            // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
 
             // シグモイド関数
             for (int i = 0; i < node; i++) {
@@ -998,156 +958,25 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
             }
         }
 
-        // 統合後に再度整数への丸め込みを実行（ソースノード流出を基準に）
-        LogManager.getInstance().log("StepControlledPGEPS: Applying final integer rounding after EPS+PS integration");
-        int totalRequiredFlow = (int) requestedFlow;
-        roundSourceOutflowsAndPropagate(link, sourceNode, destNode, totalRequiredFlow);
+        // フロー分解アルゴリズムでは整数丸め込みは不要
+        // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
 
-        // 丸め後のソース流出合計を検証
+        // 統合後のソース流出合計を検証
         double integratedSourceOutflow = 0.0;
         for (int j = 0; j < node; j++) {
             if (link[sourceNode][j].getL_tubeLength() != INF && link[sourceNode][j].getQ_tubeFlow() > 0) {
                 integratedSourceOutflow += link[sourceNode][j].getQ_tubeFlow();
             }
         }
-        LogManager.getInstance().log("StepControlledPGEPS: Integrated source outflow sum after rounding = " + integratedSourceOutflow + " (expected: " + totalRequiredFlow + ")");
-
-        LogManager.getInstance().log("StepControlledPGEPS: Final integer rounding completed. All flows are now exact integers.");
-
-        // 統合完了後に、Flow_CapacityとtubeFlowを統合結果で更新（重要！）
-        LogManager.getInstance().log("StepControlledPGEPS: Updating Flow_Capacity and tubeFlow arrays with integrated results");
-        for (int i = 0; i < node; i++) {
-            for (int j = 0; j < node; j++) {
-                if (link[i][j].getL_tubeLength() != INF) {
-                    if (link[i][j].getQ_tubeFlow() > 0) {
-                        Flow_Capacity[i][j] = Math.max(0.0, link[i][j].getCapacity() - link[i][j].getQ_tubeFlow());
-                        int flow = (int) Math.floor(link[i][j].getQ_tubeFlow());
-                        tubeFlow[i][j] = flow;
-                        LogManager.getInstance().log("Updated arrays: Link(" + i + "," + j + ") - Flow_Capacity=" + Flow_Capacity[i][j] + ", tubeFlow=" + tubeFlow[i][j]);
-                    }
-                }
-            }
-        }
-        LogManager.getInstance().log("StepControlledPGEPS: Flow arrays update completed");
+        LogManager.getInstance().log("StepControlledPGEPS: Integrated source outflow sum = " + integratedSourceOutflow + " (expected: " + (int) requestedFlow + ")");
+        LogManager.getInstance().log("StepControlledPGEPS: EPS+PS integration completed. Flow decomposition will handle path extraction.");
 
         return startIteration + 500;
     }
 
-    /**
-     * ネットワーク全体のフローを整数に丸める（流量保存則を維持）
-     * BFSでソースからデスティネーションまで各ノードを処理し、
-     * 各ノードで流入合計に合わせて流出を整数に丸める
-     *
-     * @param linkArray リンク配列
-     * @param srcNode ソースノード
-     * @param dstNode デスティネーションノード
-     * @param targetFlow ターゲットフロー（整数）
-     */
-    @Override
-    protected void roundSourceOutflowsAndPropagate(Link[][] linkArray, int srcNode, int dstNode, int targetFlow) {
-        // Step 1: ソースノードの流出を丸める
-        java.util.List<Integer> sourceOutLinks = new java.util.ArrayList<>();
-        java.util.List<Double> sourceOutFlows = new java.util.ArrayList<>();
-
-        for (int j = 0; j < node; j++) {
-            if (linkArray[srcNode][j].getL_tubeLength() != INF && linkArray[srcNode][j].getQ_tubeFlow() > 0) {
-                sourceOutLinks.add(j);
-                sourceOutFlows.add(linkArray[srcNode][j].getQ_tubeFlow());
-            }
-        }
-
-        if (sourceOutFlows.isEmpty()) {
-            LogManager.getInstance().log("StepControlledPGEPS: No positive source outflows found. Skipping rounding.");
-            return;
-        }
-
-        // ソース流出を丸める
-        double[] sourceFlowsArray = sourceOutFlows.stream().mapToDouble(Double::doubleValue).toArray();
-        MathUtils.roundWithTargetSum(sourceFlowsArray, targetFlow);
-
-        // ソースリンクに適用
-        for (int i = 0; i < sourceOutLinks.size(); i++) {
-            int linkDest = sourceOutLinks.get(i);
-            double newFlow = sourceFlowsArray[i];
-            linkArray[srcNode][linkDest].setQ_tubeFlow(newFlow);
-            if (linkArray[linkDest][srcNode].getL_tubeLength() != INF) {
-                linkArray[linkDest][srcNode].setQ_tubeFlow(-newFlow);
-            }
-        }
-
-        // Step 2: BFSで中間ノードを処理
-        java.util.Set<Integer> visited = new java.util.HashSet<>();
-        java.util.Queue<Integer> queue = new java.util.LinkedList<>();
-        visited.add(srcNode);
-
-        // ソースの隣接ノードをキューに追加
-        for (int i = 0; i < sourceOutLinks.size(); i++) {
-            int dest = sourceOutLinks.get(i);
-            if (sourceFlowsArray[i] > 0 && dest != dstNode) {
-                queue.add(dest);
-            }
-        }
-
-        while (!queue.isEmpty()) {
-            int currentNode = queue.poll();
-            if (visited.contains(currentNode)) {
-                continue;
-            }
-            visited.add(currentNode);
-
-            // 現在のノードへの整数流入量を計算（丸め済みの正の流入のみ）
-            int integerInflow = 0;
-            for (int i = 0; i < node; i++) {
-                if (linkArray[i][currentNode].getL_tubeLength() != INF) {
-                    double flow = linkArray[i][currentNode].getQ_tubeFlow();
-                    if (flow > 0) {
-                        integerInflow += (int) Math.round(flow);
-                    }
-                }
-            }
-
-            // 現在のノードからの流出を収集
-            java.util.List<Integer> outLinks = new java.util.ArrayList<>();
-            java.util.List<Double> outFlows = new java.util.ArrayList<>();
-            for (int j = 0; j < node; j++) {
-                if (linkArray[currentNode][j].getL_tubeLength() != INF && linkArray[currentNode][j].getQ_tubeFlow() > 0) {
-                    outLinks.add(j);
-                    outFlows.add(linkArray[currentNode][j].getQ_tubeFlow());
-                }
-            }
-
-            if (!outFlows.isEmpty() && integerInflow > 0) {
-                // 流出を流入に合わせて丸める
-                double[] outFlowsArray = outFlows.stream().mapToDouble(Double::doubleValue).toArray();
-                MathUtils.roundWithTargetSum(outFlowsArray, integerInflow);
-
-                // 適用
-                for (int i = 0; i < outLinks.size(); i++) {
-                    int linkDest = outLinks.get(i);
-                    double newFlow = outFlowsArray[i];
-                    linkArray[currentNode][linkDest].setQ_tubeFlow(newFlow);
-                    if (linkArray[linkDest][currentNode].getL_tubeLength() != INF) {
-                        linkArray[linkDest][currentNode].setQ_tubeFlow(-newFlow);
-                    }
-
-                    // 次のノードをキューに追加（デスティネーション以外）
-                    if (newFlow > 0 && linkDest != dstNode && !visited.contains(linkDest)) {
-                        queue.add(linkDest);
-                    }
-                }
-            } else if (integerInflow == 0) {
-                // 流入が0になった場合、流出も0にする
-                for (int j = 0; j < node; j++) {
-                    if (linkArray[currentNode][j].getL_tubeLength() != INF && linkArray[currentNode][j].getQ_tubeFlow() > 0) {
-                        linkArray[currentNode][j].setQ_tubeFlow(0.0);
-                        if (linkArray[j][currentNode].getL_tubeLength() != INF) {
-                            linkArray[j][currentNode].setQ_tubeFlow(0.0);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // roundSourceOutflowsAndPropagate は削除
+    // フロー分解アルゴリズムでは整数丸め込みは不要
+    // （explorePath/explorePathGreedyがリアルタイムでフローを減算する）
 
     /**
      * 下流のリンクの流量を調整する（ネットワーク全体のバランス保持）

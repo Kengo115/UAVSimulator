@@ -54,4 +54,10 @@ dump.rdb
 appendonly.aof
 .venv/
 output/
-config/
+
+### Process Management ###
+.sim_*.pid
+
+### Build ###
+Makefile
+
