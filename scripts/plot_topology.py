@@ -22,10 +22,54 @@ import sys
 import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.font_manager as fm
 import networkx as nx
 
 # 大規模トポロジの閾値（これ以上のノード数はシンプルモードをデフォルト）
 LARGE_NETWORK_THRESHOLD = 50
+
+
+def setup_japanese_font():
+    """日本語フォント設定"""
+    # 利用可能なフォントを探して設定する
+    target_fonts = [
+        'IPAexGothic', 'IPAGothic', 'Noto Sans CJK JP', 'Noto Sans JP',
+        'Hiragino Maru Gothic Pro', 'Hiragino Kaku Gothic ProN',
+        'Yu Gothic', 'MS Gothic', 'Meiryo', 'TakaoGothic', 'VL PGothic',
+        'DejaVu Sans'  # フォールバック用
+    ]
+
+    available_fonts = set(f.name for f in fm.fontManager.ttflist)
+    detected_font = None
+
+    for font_name in target_fonts:
+        if font_name in available_fonts:
+            detected_font = font_name
+            break
+
+    if detected_font:
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['font.sans-serif'] = [detected_font] + plt.rcParams['font.sans-serif']
+    else:
+        # システムフォントパスから探す試み（Linux/Docker環境用）
+        try:
+            import subprocess
+            cmd = "fc-list :lang=ja family"
+            output = subprocess.check_output(cmd, shell=True).decode('utf-8')
+            if output:
+                font_list = output.strip().split('\n')
+                if font_list:
+                    detected_font = font_list[0].split(',')[0]
+                    plt.rcParams['font.family'] = 'sans-serif'
+                    plt.rcParams['font.sans-serif'] = [detected_font]
+        except:
+            pass
+
+    plt.rcParams['axes.unicode_minus'] = False
+
+
+# 日本語フォント設定を実行
+setup_japanese_font()
 
 
 def parse_topology_file(filepath):
@@ -176,8 +220,8 @@ def plot_topology_simple(nodes, links, output_path, title=None, show_labels=Fals
     scattered_nodes = [n for n, d in G.nodes(data=True) if d.get('district_type', 0) == 0]
     concentrated_nodes = [n for n, d in G.nodes(data=True) if d.get('district_type', 0) == 1]
 
-    # ノードサイズ（ラベル表示時は大きめ）
-    node_size = 80 if show_labels else 30
+    # ノードサイズ（少し大きめに設定）
+    node_size = 120 if show_labels else 50
 
     # 点在地区（青）
     if scattered_nodes:
@@ -205,25 +249,25 @@ def plot_topology_simple(nodes, links, output_path, title=None, show_labels=Fals
                                 font_size=6,
                                 font_color='#333333')
 
-    if title:
-        ax.set_title(title, fontsize=14, fontweight='bold')
-    else:
-        ax.set_title(f'Network Topology ({len(nodes)} nodes, {len(links)} links)',
-                     fontsize=14, fontweight='bold')
+    # タイトルなし（削除）
 
+    # 上部に少し余白を設けて凡例がノードと重ならないようにする
     ax.set_xlim(-0.02, 1.02)
-    ax.set_ylim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.08)  # 上部に少し余白を追加
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.3)
-    ax.set_xlabel('X coordinate')
-    ax.set_ylabel('Y coordinate')
+    # 軸ラベルなし（削除）
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.tick_params(left=False, bottom=False)
 
-    # 凡例
+    # 凡例（日本語、文字サイズ16、位置を少し下に）
     legend_elements = [
-        mpatches.Patch(color='#2196F3', label=f'Scattered district (type=0): {len(scattered_nodes)} nodes'),
-        mpatches.Patch(color='#F44336', label=f'Concentrated district (type=1): {len(concentrated_nodes)} nodes'),
+        mpatches.Patch(color='#2196F3', label='点在地区ノード'),
+        mpatches.Patch(color='#F44336', label='集中地区ノード'),
     ]
-    ax.legend(handles=legend_elements, loc='upper right')
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=16,
+              framealpha=1.0, edgecolor='black', bbox_to_anchor=(1.0, 0.98))
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
