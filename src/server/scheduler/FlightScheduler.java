@@ -46,6 +46,10 @@ public class FlightScheduler {
     // Phase 3b-8: セッションID（古いプロセスからのジョブを無視するため）
     private String currentSessionId;
 
+    // Phase 12-Fix: 飛行中UAV追跡用マップ（clientId -> UAVジョブのセット）
+    // リトライ時のキャンセル用のみ使用
+    private final ConcurrentHashMap<Integer, ConcurrentHashMap<Integer, UAVJob>> activeClientUAVs = new ConcurrentHashMap<>();
+
     // Phase 3b-10: オートスケーリング設定
     private static final int MIN_POOL_SIZE = 16;
     private static final int MAX_POOL_SIZE = 32;
@@ -137,6 +141,17 @@ public class FlightScheduler {
      * @param job UAVジョブ
      */
     public void startFlight(UAVJob job) {
+        // Phase 12-Fix: UAV追跡（キャンセル用のみ）
+        int clientId = job.getClientId();
+        int uavId = job.getUavId();
+
+        // クライアントごとのUAVマップを取得または作成
+        ConcurrentHashMap<Integer, UAVJob> clientUAVMap = activeClientUAVs.computeIfAbsent(clientId, k -> new ConcurrentHashMap<>());
+
+        // UAVを追跡（キャンセル用）- 重複チェックはせず常に登録
+        // リトライ時にcancelClientFlights()が呼ばれてクリアされるため問題なし
+        clientUAVMap.put(uavId, job);
+
         int linkIndex = job.getCurrentPathIndex();
         int[] path = job.getPath();
         int fromNode = path[linkIndex];
@@ -215,6 +230,17 @@ public class FlightScheduler {
      * @param linkIndex 通過したリンクのインデックス
      */
     private void onLinkPassed(UAVJob job, int linkIndex) {
+        // Phase 12-Fix: キャンセルされたUAVは処理をスキップ
+        if (job.isCancelled()) {
+            LogManager.getInstance().log(
+                "Phase 12-Fix: client" + job.getClientId() + " UAV" + job.getUavId() +
+                " はキャンセル済みのため処理をスキップします"
+            );
+            // 飛行中カウント減少（キャンセル時に処理）
+            activeFlights.decrementAndGet();
+            return;
+        }
+
         int[] path = job.getPath();
         int fromNode = path[linkIndex];
         int toNode = path[linkIndex + 1];
@@ -396,6 +422,16 @@ public class FlightScheduler {
 
         // Phase 4: 事業者の時間計測（UAV完了通知）
         ClientTimeManager.getInstance().onUAVCompleted(job.getClientId());
+
+        // Phase 12-Fix: activeClientUAVsから削除
+        ConcurrentHashMap<Integer, UAVJob> clientUAVMap = activeClientUAVs.get(job.getClientId());
+        if (clientUAVMap != null) {
+            clientUAVMap.remove(job.getUavId());
+            // クライアントのUAVマップが空になったら削除
+            if (clientUAVMap.isEmpty()) {
+                activeClientUAVs.remove(job.getClientId());
+            }
+        }
     }
 
     /**
@@ -737,6 +773,95 @@ public class FlightScheduler {
             pathWaitingManager != null ? pathWaitingManager.getTotalWaitingCount() : 0,
             completedFlights.get()
         };
+    }
+
+    /**
+     * Phase 12-Fix: クライアントの飛行中UAVをすべてキャンセル
+     * SearcherRetryManagerからリトライ時に呼び出される
+     *
+     * このメソッドは以下を行う：
+     * 1. 指定クライアントの飛行中UAVをすべてキャンセル状態にマーク
+     * 2. activeClientUAVsマップから削除
+     * 3. 使用中のリンク容量を回復
+     *
+     * @param clientId クライアントID
+     * @return キャンセルされたUAV数
+     */
+    public int cancelClientFlights(int clientId) {
+        if (clientId <= 0) {
+            LogManager.getInstance().error("Phase 12-Fix: 無効なクライアントID=" + clientId);
+            return 0;
+        }
+
+        int cancelledCount = 0;
+
+        // クライアントの飛行中UAVマップを取得
+        ConcurrentHashMap<Integer, UAVJob> clientUAVMap = activeClientUAVs.get(clientId);
+        if (clientUAVMap == null || clientUAVMap.isEmpty()) {
+            // 飛行中UAVがない場合は何もしない
+            return 0;
+        }
+
+        // すべてのUAVをキャンセル
+        for (UAVJob job : clientUAVMap.values()) {
+            try {
+                // キャンセル状態にマーク（volatile変数のためスレッドセーフ）
+                job.setCancelled(true);
+                cancelledCount++;
+
+                // 現在使用中のリンク容量を回復
+                int[] path = job.getPath();
+                if (path != null && path.length >= 2) {
+                    int currentIndex = job.getCurrentPathIndex();
+                    if (currentIndex < path.length - 1) {
+                        int fromNode = path[currentIndex];
+                        int toNode = path[currentIndex + 1];
+
+                        // リンク容量を回復（消費している場合のみ）
+                        try {
+                            capacityManager.recoverCapacity(fromNode, toNode);
+                            LogManager.getInstance().log(
+                                "Phase 12-Fix: client" + clientId + " UAV" + job.getUavId() +
+                                " のリンク容量回復 (link " + fromNode + "-" + toNode + ")"
+                            );
+                        } catch (Exception capEx) {
+                            LogManager.getInstance().error(
+                                "Phase 12-Fix: client" + clientId + " UAV" + job.getUavId() +
+                                " リンク容量回復失敗", capEx
+                            );
+                        }
+                    }
+                }
+
+                LogManager.getInstance().log(
+                    "Phase 12-Fix: client" + clientId + " UAV" + job.getUavId() +
+                    " をキャンセルしました（経過飛行時間=" + String.format("%.2f", job.getElapsedFlightTime()) + "s）"
+                );
+
+            } catch (Exception e) {
+                LogManager.getInstance().error(
+                    "Phase 12-Fix: client" + clientId + " UAV" + job.getUavId() +
+                    " のキャンセル処理中にエラー", e
+                );
+            }
+        }
+
+        // activeClientUAVsマップから削除
+        activeClientUAVs.remove(clientId);
+
+        // activeFlightsカウントを減少（キャンセルされたUAV分）
+        // 注: onLinkPassed()でキャンセル検出時にも減少するが、ここで先に減少させる
+        for (int i = 0; i < cancelledCount; i++) {
+            activeFlights.decrementAndGet();
+        }
+
+        if (cancelledCount > 0) {
+            LogManager.getInstance().log(
+                "Phase 12-Fix: client" + clientId + " の飛行中UAVキャンセル完了 (UAV数=" + cancelledCount + ")"
+            );
+        }
+
+        return cancelledCount;
     }
 
     /**

@@ -1,6 +1,6 @@
 .PHONY: up down restart run compile clean status logs kill-sim \
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
-       plot-topology plot-topology-labels ensure-redis
+       plot-topology plot-topology-labels ensure-redis plot-method-comparison
 
 # =============================================================================
 # 並列シミュレーション設定
@@ -474,7 +474,7 @@ plot-top-load: venv-setup
 	@echo "✓ グラフを生成しました: $(OUTPUT_DIR)/graphs/top$(TOP_N)_max_load_links.png"
 
 # 全リンクの最大負荷率ランキンググラフ生成
-# Usage: make plot-load-ranking SIM_ID=N [METHOD=X]
+# Usage: make plot-load-ranking SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N]
 plot-load-ranking: venv-setup
 	@echo "全リンクの最大負荷率ランキンググラフを生成します..."
 	@echo "  入力: $(RESULT_DIR)/link_status/links/_summary.csv"
@@ -489,8 +489,24 @@ plot-load-ranking: venv-setup
 		exit 1; \
 	fi
 	@mkdir -p $(OUTPUT_DIR)/graphs
-	$(PYTHON) scripts/plot_load_ranking.py $(RESULT_DIR)/link_status/links/_summary.csv $(OUTPUT_DIR)/graphs
+	$(PYTHON) scripts/plot_load_ranking.py $(RESULT_DIR)/link_status/links/_summary.csv $(OUTPUT_DIR)/graphs $(Y_MAX) $(Y_INTERVAL)
 	@echo "✓ グラフを生成しました: $(OUTPUT_DIR)/graphs/load_ranking.png"
+
+# 全UAVのflightTime累積分布グラフ生成
+# Usage: make plot-flight-cdf SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N]
+plot-flight-cdf: venv-setup
+	@echo "飛行時間累積分布グラフを生成します..."
+	@echo "  入力: $(RESULT_DIR)/time/"
+	@if [ ! -d "$(RESULT_DIR)/time" ]; then \
+		echo ""; \
+		echo "Error: timeディレクトリが見つかりません"; \
+		echo "       $(RESULT_DIR)/time/"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@mkdir -p $(OUTPUT_DIR)/graphs
+	$(PYTHON) scripts/plot_flight_time_cdf.py $(RESULT_DIR)/time $(OUTPUT_DIR)/graphs $(Y_MAX) $(Y_INTERVAL)
+	@echo "✓ グラフを生成しました: $(OUTPUT_DIR)/graphs/flight_time_cdf.png"
 
 # トポロジ描画（ノード番号なし）
 # Usage: make plot-topology [TOPOLOGY=path/to/topology.txt]
@@ -509,3 +525,31 @@ plot-topology-labels: venv-setup
 	@mkdir -p $(OUTPUT_DIR)
 	$(PYTHON) scripts/plot_topology.py $(TOPOLOGY) $(OUTPUT_DIR)/topology_$(notdir $(basename $(TOPOLOGY)))_labels.png --simple --show-labels
 	@echo "✓ トポロジを描画しました: $(OUTPUT_DIR)/topology_$(notdir $(basename $(TOPOLOGY)))_labels.png"
+
+# 経路探索手法比較グラフ生成（積み上げ棒グラフ）
+# Usage: make plot-method-comparison
+#
+# 対話的に以下を入力:
+#   - グループ数 (例: 2)
+#   - 各グループの経路探索手法名 (例: Bisectional, PS)
+#   - 各グループ内の要素数 (例: 3 → λ=1.0, 1.5, 2.0)
+#   - 各要素のλ値とsim番号
+#   - 出力ファイル名 (デフォルト: output/method_comparison.png)
+#
+# 例:
+#   グループ1: Bisectional
+#     - λ=1.0 (sim_1)
+#     - λ=1.5 (sim_2)
+#     - λ=2.0 (sim_3)
+#   グループ2: PS
+#     - λ=1.0 (sim_4)
+#     - λ=1.5 (sim_5)
+#     - λ=2.0 (sim_6)
+#
+# データソース: src/result/sim_X/large_scale/{手法名}/time/ave_flightStatus.csv
+# 出力先: output/ (デフォルト)
+plot-method-comparison: venv-setup
+	@echo "経路探索手法比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_method_comparison.py
+	@echo "✓ グラフ生成完了"

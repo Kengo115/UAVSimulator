@@ -4,7 +4,7 @@
   "snapshot_interval_sec": 10,
 
   "arrival": {
-    "mean_interval_sec": 10.0,
+    "mean_interval_sec": 6.67,
     "uav_count_per_batch": 10,
     "distribution": "exponential"
   },

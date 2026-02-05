@@ -4,6 +4,7 @@ import controller.BoundaryController;
 import controller.ClientScheduleLoader;
 import item.BeaconCluster;
 import server.config.StatisticalSimulationConfig;
+import server.redis.PathWaitingManager;
 import server.util.LinkStatusRecorder;
 import server.util.LogManager;
 
@@ -126,6 +127,30 @@ public class StatisticalSimulationController {
 
         // LogManagerにシミュレーション開始時刻を設定（1時間ごとのログローテーション用）
         LogManager.getInstance().setSimulationStartTime(simulationStartTime);
+
+        // Phase 12-Fix: PathWaitingManagerを完全クリア（前回実行の残留UAV削除）
+        // これにより、client3やclient5358のような「リトライなしでの重複」を防ぐ
+        try {
+            FlightScheduler flightScheduler = FlightScheduler.getInstance();
+            PathWaitingManager pathWaitingManager = flightScheduler.getPathWaitingManager();
+            if (pathWaitingManager != null && pathWaitingManager.isConnected()) {
+                int totalWaiting = pathWaitingManager.getTotalWaitingCount();
+                if (totalWaiting > 0) {
+                    LogManager.getInstance().log(
+                        "Phase 12-Fix: シミュレーション開始前に残留UAVを検出 (数=" + totalWaiting + ")"
+                    );
+                    pathWaitingManager.clearAll();
+                    LogManager.getInstance().log("Phase 12-Fix: 残留UAVをクリアしました");
+                } else {
+                    LogManager.getInstance().log(
+                        "Phase 12-Fix: PathWaitingManager初期状態確認 (残留UAV=0, クリーンな状態)"
+                    );
+                }
+            }
+        } catch (Exception e) {
+            LogManager.getInstance().error("Phase 12-Fix: PathWaitingManagerクリア失敗", e);
+            // エラーでもシミュレーション続行（致命的ではない）
+        }
 
         // Phase 8: ログファイルを初期化
         initializeLogFiles();

@@ -3,6 +3,7 @@ package server.scheduler;
 import client.Client;
 import client.ClientController;
 import item.Uav;
+import server.redis.PathWaitingManager;
 import server.route.RouteSearcher;
 import server.route.SolverFailedException;
 import server.util.LogManager;
@@ -214,11 +215,70 @@ public class SearcherRetryManager {
                     LogManager.getInstance().log(failureMsg);
                     logToSearcherFailureFile(failureMsg);
 
+                    // Phase 12-Fix: 飛行中UAVとPathWaitingManagerのクリーンアップ（PG-EPS重複UAV防止）
+                    // リトライ時に古いエントリが残留すると、成功時に重複UAVが記録される
+                    try {
+                        FlightScheduler flightScheduler = FlightScheduler.getInstance();
+
+                        // Phase 12-Fix: Step 1 - 飛行中UAVをキャンセル（最重要）
+                        // dequeueされて飛行中のUAVも確実にキャンセルする
+                        int cancelledFlights = flightScheduler.cancelClientFlights(clientId);
+                        if (cancelledFlights > 0) {
+                            String cancelMsg = "Phase 12-Fix: client" + clientId + " 飛行中UAVをキャンセル (UAV数=" + cancelledFlights + ")";
+                            LogManager.getInstance().log(cancelMsg);
+                            logToSearcherFailureFile(cancelMsg);
+                        }
+
+                        // Phase 12: Step 2 - PathWaitingManagerキューをクリア
+                        // キューに残っているUAV（まだdequeueされていないもの）を削除
+                        PathWaitingManager pathWaitingManager = flightScheduler.getPathWaitingManager();
+                        if (pathWaitingManager != null) {
+                            int waitingCount = pathWaitingManager.getWaitingCount(clientId);
+                            if (waitingCount > 0) {
+                                pathWaitingManager.clear(clientId);
+                                String clearMsg = "Phase 12: client" + clientId + " PathWaitingManagerキューをクリア (削除UAV数=" + waitingCount + ")";
+                                LogManager.getInstance().log(clearMsg);
+                                logToSearcherFailureFile(clearMsg);
+                            }
+                        }
+                    } catch (Exception cleanupEx) {
+                        LogManager.getInstance().error("Phase 12-Fix: client" + clientId + " クリーンアップ失敗", cleanupEx);
+                        // クリーンアップ失敗は継続（リトライ処理は続行）
+                    }
+
                     // 最大再試行回数超過ならスキップ
                     if (retryInfo.retryCount >= MAX_RETRIES) {
                         String maxRetryMsg = "Phase 5: client" + clientId + "の経路割り当てが行えませんでした（最大再試行回数" + MAX_RETRIES + "回超過）";
                         LogManager.getInstance().log(maxRetryMsg);
                         logToSearcherFailureFile(maxRetryMsg);
+
+                        // Phase 12-Fix: 最大再試行超過時も完全クリーンアップ（残留UAV削除）
+                        try {
+                            FlightScheduler flightScheduler = FlightScheduler.getInstance();
+
+                            // Phase 12-Fix: 飛行中UAVをキャンセル
+                            int cancelledFlights = flightScheduler.cancelClientFlights(clientId);
+                            if (cancelledFlights > 0) {
+                                String cancelMsg = "Phase 12-Fix: client" + clientId + " 最大再試行超過により飛行中UAVをキャンセル (UAV数=" + cancelledFlights + ")";
+                                LogManager.getInstance().log(cancelMsg);
+                                logToSearcherFailureFile(cancelMsg);
+                            }
+
+                            // Phase 12: PathWaitingManagerキューをクリア
+                            PathWaitingManager pathWaitingManager = flightScheduler.getPathWaitingManager();
+                            if (pathWaitingManager != null) {
+                                int waitingCount = pathWaitingManager.getWaitingCount(clientId);
+                                if (waitingCount > 0) {
+                                    pathWaitingManager.clear(clientId);
+                                    String clearMsg = "Phase 12: client" + clientId + " 最大再試行超過によりPathWaitingManagerキューをクリア (削除UAV数=" + waitingCount + ")";
+                                    LogManager.getInstance().log(clearMsg);
+                                    logToSearcherFailureFile(clearMsg);
+                                }
+                            }
+                        } catch (Exception cleanupEx) {
+                            LogManager.getInstance().error("Phase 12-Fix: client" + clientId + " クリーンアップ失敗（最大再試行超過時）", cleanupEx);
+                        }
+
                         success = false;
                         break;
                     }

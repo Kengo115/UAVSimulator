@@ -3,10 +3,12 @@
 全リンクの最大混雑率ランキンググラフを生成
 
 Usage:
-    python scripts/plot_load_ranking.py <summary_csv> <output_dir>
+    python scripts/plot_load_ranking.py <summary_csv> <output_dir> [y_max] [y_interval]
 
 Example:
     python scripts/plot_load_ranking.py src/result/sim_1/large_scale/PS/link_status/links/_summary.csv output/sim_1/graphs
+    python scripts/plot_load_ranking.py src/result/sim_1/large_scale/PS/link_status/links/_summary.csv output/sim_1/graphs 700
+    python scripts/plot_load_ranking.py src/result/sim_1/large_scale/PS/link_status/links/_summary.csv output/sim_1/graphs 700 100
 """
 
 import sys
@@ -45,7 +47,7 @@ def load_summary(csv_path: str) -> list:
 
     return list(normalized_data.values())
 
-def plot_load_ranking(data: list, output_path: str):
+def plot_load_ranking(data: list, output_path: str, y_max=None, y_interval=None):
     """全リンクの最大混雑率ランキンググラフを生成"""
 
     # max_load_rate で降順ソート
@@ -81,8 +83,18 @@ def plot_load_ranking(data: list, output_path: str):
     ax.set_xlim(0, total_links + 1)
     ax.set_xticks(np.arange(0, total_links + 1, x_interval))
 
-    # Y軸: 0からスタート
-    ax.set_ylim(bottom=0)
+    # Y軸
+    if y_max is not None:
+        ax.set_ylim(0, y_max)
+        if y_interval is not None:
+            ax.set_yticks(np.arange(0, y_max + 1, y_interval))
+    else:
+        ax.set_ylim(bottom=0)
+        if y_interval is not None:
+            data_max = max_loads[0]
+            y_max_auto = np.ceil(data_max / y_interval) * y_interval
+            ax.set_ylim(0, y_max_auto)
+            ax.set_yticks(np.arange(0, y_max_auto + 1, y_interval))
 
     # グリッド
     ax.grid(True, alpha=0.3, axis='y')
@@ -106,6 +118,8 @@ def main():
 
     summary_csv = sys.argv[1]
     output_dir = sys.argv[2]
+    y_max = float(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
+    y_interval = float(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
 
     # 入力ファイル確認
     if not os.path.exists(summary_csv):
@@ -124,7 +138,7 @@ def main():
     output_path = os.path.join(output_dir, 'load_ranking.png')
 
     # グラフ生成
-    plot_load_ranking(data, output_path)
+    plot_load_ranking(data, output_path, y_max, y_interval)
 
 if __name__ == "__main__":
     main()

@@ -55,6 +55,9 @@ public class UAVJob implements Serializable {
     // Phase 10: 二重完了防止フラグ
     private boolean isCompleted;         // 飛行が完了したかどうか（onFlightCompleted呼び出し時にtrue）
 
+    // Phase 12-Fix: UAVキャンセルフラグ（リトライ時の重複飛行防止）
+    private volatile boolean isCancelled;  // UAVがキャンセルされたかどうか
+
     /**
      * デフォルトコンストラクタ（シリアライゼーション用）
      */
@@ -385,6 +388,24 @@ public class UAVJob implements Serializable {
         }
         isCompleted = true;
         return true;  // 初めて完了マーク
+    }
+
+    // Phase 12-Fix: UAVキャンセル関連メソッド
+
+    /**
+     * UAVがキャンセルされたかどうか
+     * @return キャンセル済みならtrue
+     */
+    public boolean isCancelled() {
+        return isCancelled;
+    }
+
+    /**
+     * UAVをキャンセル状態にする（リトライ時の重複飛行防止）
+     * volatile変数のため、スレッドセーフに状態変更される
+     */
+    public void setCancelled(boolean cancelled) {
+        this.isCancelled = cancelled;
     }
 
     @Override
