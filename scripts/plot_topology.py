@@ -266,7 +266,7 @@ def plot_topology_simple(nodes, links, output_path, title=None, show_labels=Fals
         mpatches.Patch(color='#2196F3', label='点在地区ノード'),
         mpatches.Patch(color='#F44336', label='集中地区ノード'),
     ]
-    ax.legend(handles=legend_elements, loc='upper right', fontsize=16,
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=20,
               framealpha=1.0, edgecolor='black', bbox_to_anchor=(1.0, 0.98))
 
     plt.tight_layout()

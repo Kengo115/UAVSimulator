@@ -382,13 +382,37 @@ extract-links:
 	@echo "✓ リンク別ファイルを抽出しました"
 	@echo "  出力: $(RESULT_DIR)/link_status/links/"
 
-# 平均飛行ステータス集計
-# Usage: make aggregate-flight SIM_ID=N [METHOD=X]
-aggregate-flight:
+# 平均飛行ステータス集計（出力先指定版）
+# Usage: make aggregate-flight-to SIM_ID=N [METHOD=X] OUTPUT_SIM=M
+#
+# 例: make aggregate-flight-to SIM_ID=1 METHOD=PS OUTPUT_SIM=1
+#     → 入力: src/result/sim_1/large_scale/PS/time/
+#     → 出力: src/result/sim_1/time/ave_flightStatus.csv
+#
+# 例: make aggregate-flight-to SIM_ID=2 METHOD=Bisectional OUTPUT_SIM=2
+#     → 入力: src/result/sim_2/large_scale/Bisectional/time/
+#     → 出力: src/result/sim_2/time/ave_flightStatus.csv
+OUTPUT_SIM := $(SIM_ID)
+OUTPUT_SIM_DIR := src/result/sim_$(OUTPUT_SIM)
+aggregate-flight-to:
 	@echo "平均飛行ステータスを集計します..."
 	@echo "  入力: $(RESULT_DIR)/time/"
-	python3 scripts/aggregate_flight_status.py $(RESULT_DIR)
-	@echo "✓ 平均飛行ステータスを出力しました"
+	@echo "  出力: $(OUTPUT_SIM_DIR)/time/ave_flightStatus.csv"
+	@if [ ! -d "$(RESULT_DIR)/time" ]; then \
+		echo ""; \
+		echo "Error: timeディレクトリが見つかりません"; \
+		echo "       $(RESULT_DIR)/time/"; \
+		echo ""; \
+		echo "確認事項:"; \
+		echo "  1. SIM_ID=$(SIM_ID) でシミュレーションを実行しましたか？"; \
+		echo "  2. シミュレーション時に選択した手法は $(METHOD) ですか？"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@mkdir -p $(OUTPUT_SIM_DIR)/time
+	python3 scripts/aggregate_flight_status.py $(RESULT_DIR) --output $(OUTPUT_SIM_DIR)
+	@echo "✓ 平均飛行ステータスを出力しました: $(OUTPUT_SIM_DIR)/time/ave_flightStatus.csv"
+
 
 # 混雑率グラフ生成
 # Usage: make plot-congestion SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N]
@@ -552,4 +576,17 @@ plot-method-comparison: venv-setup
 	@echo "経路探索手法比較グラフを生成します..."
 	@mkdir -p output
 	$(PYTHON) scripts/plot_method_comparison.py
+	@echo "✓ グラフ生成完了"
+
+
+# 経路探索手法比較グラフ生成（積み上げ棒グラフ）
+# Usage: make plot-method-comparison-jp
+
+# データソース: src/result/sim_X/large_scale/{手法名}/time/ave_flightStatus.csv
+# 出力先: output/ (デフォルト)
+
+plot-method-comparison-jp: venv-setup
+	@echo "経路探索手法比較グラフ(日本語版)を生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_method_comparison_jp.py
 	@echo "✓ グラフ生成完了"
