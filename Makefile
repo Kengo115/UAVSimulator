@@ -231,6 +231,7 @@ help:
 	@echo "    make heatmap-video SIM_ID=N [METHOD=X]    ヒートマップ動画生成"
 	@echo "    make plot-link SIM_ID=N FROM=X TO=Y       リンク別load_rateグラフ生成"
 	@echo "    make plot-topology                        トポロジ描画"
+	@echo "    make analyze-exceeded SIM_ID=N [METHOD=X] 容量超過率分析"
 	@echo ""
 	@echo "  ■ 使用例"
 	@echo ""
@@ -413,6 +414,31 @@ aggregate-flight-to:
 	python3 scripts/aggregate_flight_status.py $(RESULT_DIR) --output $(OUTPUT_SIM_DIR)
 	@echo "✓ 平均飛行ステータスを出力しました: $(OUTPUT_SIM_DIR)/time/ave_flightStatus.csv"
 
+# 容量超過率分析
+# Usage: make analyze-exceeded SIM_ID=N [METHOD=X]
+#
+# 経路探索結果が容量を超過した割合を分析する
+# 判定基準: flightStayingTime > 0 のUAVが1台でも存在するクライアント
+#
+# 例: make analyze-exceeded SIM_ID=1 METHOD=PS
+#     → 入力: src/result/sim_1/large_scale/PS/time/
+#     → 出力: src/result/sim_1/large_scale/PS/capacity_exceeded.csv
+analyze-exceeded:
+	@echo "容量超過率を分析します..."
+	@echo "  入力: $(RESULT_DIR)/time/"
+	@if [ ! -d "$(RESULT_DIR)/time" ]; then \
+		echo ""; \
+		echo "Error: timeディレクトリが見つかりません"; \
+		echo "       $(RESULT_DIR)/time/"; \
+		echo ""; \
+		echo "確認事項:"; \
+		echo "  1. SIM_ID=$(SIM_ID) でシミュレーションを実行しましたか？"; \
+		echo "  2. シミュレーション時に選択した手法は $(METHOD) ですか？"; \
+		echo ""; \
+		exit 1; \
+	fi
+	python3 scripts/analyze_capacity_exceeded.py $(RESULT_DIR)
+	@echo "✓ 容量超過率を出力しました: $(RESULT_DIR)/capacity_exceeded.csv"
 
 # 混雑率グラフ生成
 # Usage: make plot-congestion SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N]
