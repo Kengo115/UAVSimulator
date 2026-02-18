@@ -1,4 +1,4 @@
-.PHONY: up down restart run compile clean status logs kill-sim \
+.PHONY: up down down-all restart run compile clean status logs kill-sim \
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
        plot-topology plot-topology-labels ensure-redis plot-method-comparison
 
@@ -30,11 +30,21 @@ up:
 	@echo "  Redis: http://localhost:6379"
 	@echo "  Redis Commander: http://localhost:8081"
 
-# Dockerコンテナを停止
+# Dockerコンテナを停止（SIM_ID=1のみ）
 down:
 	@echo "Redisコンテナを停止します..."
 	docker compose down
 	@echo "✓ Redisコンテナが停止しました"
+
+# 全SIM_ID用Redisコンテナを停止
+down-all:
+	@echo "全Redisコンテナを停止します..."
+	@docker compose down 2>/dev/null || true
+	@for container in $$(docker ps --format '{{.Names}}' | grep '^uav-redis-sim'); do \
+		echo "  $$container を停止..."; \
+		docker stop $$container && docker rm $$container; \
+	done
+	@echo "✓ 全Redisコンテナが停止しました"
 
 # Dockerコンテナを再起動
 restart:
@@ -271,6 +281,7 @@ help:
 	@echo "  make redis-clear  SIM_ID=1用Redisデータをクリア"
 	@echo "  make up           SIM_ID=1用Redisを手動起動"
 	@echo "  make down         SIM_ID=1用Redisを停止"
+	@echo "  make down-all     全SIM_ID用Redisを停止"
 	@echo ""
 	@echo "-------------------------------------------------------------------------------"
 	@echo "【ディレクトリ構造】"
