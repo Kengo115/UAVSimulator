@@ -61,7 +61,11 @@ COLORS = ['#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#f39c12', '#1abc9c', '#e9
 MARKERS = ['o', 's', '^', 'D', 'v', 'p', 'h', '*']
 
 # マーカーサイズ
-MARKER_SIZE = 200
+MARKER_SIZE = 350
+
+# 線のスタイル
+LINE_STYLE = '--'  # 破線
+LINE_WIDTH = 2.0
 
 
 def read_exceeded_rate(file_path):
@@ -225,19 +229,29 @@ def plot_scatter(all_data, lambda_values, y_max, y_interval, output_file):
         if not method_data['points']:
             continue
 
-        x_vals = [p[0] for p in method_data['points']]
-        y_vals = [p[1] for p in method_data['points']]
+        # λ値でソートして線を正しく繋ぐ
+        sorted_points = sorted(method_data['points'], key=lambda p: p[0])
+        x_vals = [p[0] for p in sorted_points]
+        y_vals = [p[1] for p in sorted_points]
 
         color = COLORS[idx % len(COLORS)]
         marker = MARKERS[idx % len(MARKERS)]
 
+        # 破線で点を繋ぐ
+        ax.plot(x_vals, y_vals,
+                linestyle=LINE_STYLE,
+                linewidth=LINE_WIDTH,
+                color=color,
+                zorder=2)
+
+        # 点をプロット
         ax.scatter(x_vals, y_vals,
                    label=method_data['display_name'],
                    s=MARKER_SIZE,
                    c=color,
                    marker=marker,
                    edgecolors='black',
-                   linewidths=1.0,
+                   linewidths=1.5,
                    zorder=3)
 
         if y_vals:
