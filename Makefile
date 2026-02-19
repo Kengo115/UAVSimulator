@@ -2,7 +2,8 @@
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
        plot-topology plot-topology-labels ensure-redis plot-method-comparison \
        plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
-       plot-preflight-wait-cdf-comparison plot-distance-cdf-comparison
+       plot-preflight-wait-cdf-comparison plot-distance-cdf-comparison \
+       plot-exceeded-rate-comparison
 
 # =============================================================================
 # 並列シミュレーション設定
@@ -684,4 +685,23 @@ plot-distance-cdf-comparison: venv-setup
 	@echo "distance CDF比較グラフを生成します..."
 	@mkdir -p output
 	$(PYTHON) scripts/plot_distance_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# 容量超過経路割り当て率 比較グラフ生成
+# Usage: make plot-exceeded-rate-comparison
+#
+# 対話的に以下を入力:
+#   - λの種類数 (例: 3)
+#   - 各λの値 (例: 1.0, 1.5, 2.0)
+#   - 経路探索手法の数 (例: 4)
+#   - 各手法の表示名・ディレクトリ名
+#   - 各λ×手法のsim番号
+#   - Y軸の最大値・間隔 (空欄で自動)
+#   - 出力ファイル名 (デフォルト: output/exceeded_rate_comparison.png)
+#
+# データソース: src/result/sim_X/large_scale/{手法名}/capacity_exceeded.csv
+plot-exceeded-rate-comparison: venv-setup
+	@echo "容量超過経路割り当て率 比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_exceeded_rate_comparison.py
 	@echo "✓ グラフ生成完了"
