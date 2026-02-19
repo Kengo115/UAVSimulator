@@ -2,8 +2,8 @@
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
        plot-topology plot-topology-labels ensure-redis plot-method-comparison \
        plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
-       plot-preflight-wait-cdf-comparison plot-distance-cdf-comparison \
-       plot-exceeded-rate-comparison
+       plot-preflight-wait-cdf-comparison plot-inflight-wait-cdf-comparison \
+       plot-distance-cdf-comparison plot-exceeded-rate-comparison
 
 # =============================================================================
 # 並列シミュレーション設定
@@ -674,6 +674,18 @@ plot-preflight-wait-cdf-comparison: venv-setup
 	@echo "飛行前待機時間 CDF比較グラフを生成します..."
 	@mkdir -p output
 	$(PYTHON) scripts/plot_preflight_wait_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# 飛行中待機時間 CDF比較グラフ生成
+# Usage: make plot-inflight-wait-cdf-comparison
+#
+# 飛行中待機時間 = waitingTime（飛行中にリンク混雑等で待機した時間）
+# 対話的入力形式はplot-flight-cdf-comparisonと同様
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-inflight-wait-cdf-comparison: venv-setup
+	@echo "飛行中待機時間 CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_inflight_wait_cdf_comparison.py
 	@echo "✓ グラフ生成完了"
 
 # distance CDF比較グラフ生成
