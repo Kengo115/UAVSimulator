@@ -1,6 +1,8 @@
 .PHONY: up down down-all restart run compile clean status logs kill-sim \
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
-       plot-topology plot-topology-labels ensure-redis plot-method-comparison
+       plot-topology plot-topology-labels ensure-redis plot-method-comparison \
+       plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
+       plot-preflight-wait-cdf-comparison plot-distance-cdf-comparison
 
 # =============================================================================
 # 並列シミュレーション設定
@@ -36,8 +38,8 @@ down:
 	docker compose down
 	@echo "✓ Redisコンテナが停止しました"
 
-# 全SIM_ID用Redisコンテナを停止
-down-all:
+# 全SIM_ID用Redisコンテナとシミュレータを停止
+down-all: stop-all
 	@echo "全Redisコンテナを停止します..."
 	@docker compose down 2>/dev/null || true
 	@for container in $$(docker ps --format '{{.Names}}' | grep '^uav-redis-sim'); do \
@@ -281,7 +283,7 @@ help:
 	@echo "  make redis-clear  SIM_ID=1用Redisデータをクリア"
 	@echo "  make up           SIM_ID=1用Redisを手動起動"
 	@echo "  make down         SIM_ID=1用Redisを停止"
-	@echo "  make down-all     全SIM_ID用Redisを停止"
+	@echo "  make down-all     全シミュレータ＋全Redisを停止"
 	@echo ""
 	@echo "-------------------------------------------------------------------------------"
 	@echo "【ディレクトリ構造】"
@@ -626,4 +628,60 @@ plot-method-comparison-jp: venv-setup
 	@echo "経路探索手法比較グラフ(日本語版)を生成します..."
 	@mkdir -p output
 	$(PYTHON) scripts/plot_method_comparison_jp.py
+	@echo "✓ グラフ生成完了"
+
+# =============================================================================
+# CDF比較グラフ生成（複数手法比較）
+# =============================================================================
+
+# flightTime CDF比較グラフ生成
+# Usage: make plot-flight-cdf-comparison
+#
+# 対話的に以下を入力:
+#   - グループ数 (例: 3)
+#   - 各グループの表示名 (例: PG-EPS)
+#   - 各グループのディレクトリ名 (例: Bisectional)
+#   - 各グループのsim番号 (例: 1)
+#   - X軸の最大値・間隔 (空欄で自動)
+#   - 出力ファイル名 (デフォルト: output/flight_time_cdf_comparison.png)
+#
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-flight-cdf-comparison: venv-setup
+	@echo "flightTime CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_flight_time_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# realFlightTime CDF比較グラフ生成
+# Usage: make plot-real-flight-cdf-comparison
+#
+# 対話的入力形式はplot-flight-cdf-comparisonと同様
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-real-flight-cdf-comparison: venv-setup
+	@echo "realFlightTime CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_real_flight_time_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# 飛行前待機時間 CDF比較グラフ生成
+# Usage: make plot-preflight-wait-cdf-comparison
+#
+# 飛行前待機時間 = pathWaitTime + flightStayingTime
+# 対話的入力形式はplot-flight-cdf-comparisonと同様
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-preflight-wait-cdf-comparison: venv-setup
+	@echo "飛行前待機時間 CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_preflight_wait_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# distance CDF比較グラフ生成
+# Usage: make plot-distance-cdf-comparison
+#
+# 対話的入力形式はplot-flight-cdf-comparisonと同様
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-distance-cdf-comparison: venv-setup
+	@echo "distance CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_distance_cdf_comparison.py
 	@echo "✓ グラフ生成完了"
