@@ -50,10 +50,13 @@ def setup_style():
 
 setup_style()
 
-# フォントサイズ設定 (plot_method_comparison_jp.pyと同等)
-FONT_SIZE_TITLE = 31
-FONT_SIZE_TICK = 26
-FONT_SIZE_LEGEND = 26
+# フォントサイズ設定 (3pt大きく)
+FONT_SIZE_TITLE = 34
+FONT_SIZE_TICK = 29
+FONT_SIZE_LEGEND = 29
+
+# 線の太さ
+LINE_WIDTH = 3.0
 
 # 線の色リスト
 COLORS = ['#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#f39c12', '#1abc9c', '#e91e63', '#795548']
@@ -199,13 +202,13 @@ def plot_cdf(all_data, x_max, x_interval, output_file):
         percentiles = np.linspace(0, 100, n)
 
         color = COLORS[idx % len(COLORS)]
-        ax.plot(values, percentiles, label=data['display_name'], linewidth=2.5, color=color)
+        ax.plot(values, percentiles, label=data['display_name'], linewidth=LINE_WIDTH, color=color)
 
         if values[-1] > data_max:
             data_max = values[-1]
 
     # X軸設定
-    ax.set_xlabel('flightTime [s]', fontsize=FONT_SIZE_TITLE, fontweight='bold', color='black')
+    ax.set_xlabel('Total travel time [s]', fontsize=FONT_SIZE_TITLE, fontweight='bold', color='black')
     ax.tick_params(axis='x', direction='in', labelsize=FONT_SIZE_TICK, colors='black', which='both')
 
     if x_max is not None:

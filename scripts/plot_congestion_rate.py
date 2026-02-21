@@ -46,6 +46,12 @@ def main():
     # グラフ作成
     fig, ax = plt.subplots(figsize=(14, 8))
 
+    # クローズドグラフ設定（枠線を太く）
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_color('black')
+        spine.set_linewidth(1.0)
+
     # 時間を分単位に変換（データが秒単位の場合は60で割る）
     time_raw = df['time']
     # 最大値が1000を超える場合は秒単位とみなして分に変換
@@ -57,20 +63,20 @@ def main():
     ax.plot(time_min, df['AverageLoadRate'], label='Average Load Rate', linewidth=2.5, color='blue')
     ax.plot(time_min, df['CongestedLinkRate'], label='Congested Link Rate', linewidth=2.5, color='red')
 
-    # 軸ラベル（フォントサイズ2倍）
-    ax.set_xlabel('Time (minutes)', fontsize=24)
-    ax.set_ylabel('Rate (%)', fontsize=24)
+    # 軸ラベル（CDF比較スクリプトと同等のサイズ、太字）
+    ax.set_xlabel('Time (minutes)', fontsize=34, fontweight='bold', color='black')
+    ax.set_ylabel('Rate (%)', fontsize=34, fontweight='bold', color='black')
 
     # タイトルなし
 
-    # 凡例（フォントサイズ大）
-    ax.legend(loc='best', fontsize=18)
+    # 凡例（CDF比較スクリプトと同等のサイズ）
+    ax.legend(loc='best', fontsize=29)
 
     # グリッド
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, alpha=0.3, linestyle='--', color='black')
 
-    # 軸の目盛りフォントサイズ
-    ax.tick_params(axis='both', labelsize=20)
+    # 軸の目盛りフォントサイズ（CDF比較スクリプトと同等）
+    ax.tick_params(axis='both', labelsize=29, direction='in', colors='black')
 
     # X軸: 0からスタート、100分間隔
     x_max = time_min.max()
