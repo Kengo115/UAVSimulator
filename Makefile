@@ -3,7 +3,8 @@
        plot-topology plot-topology-labels ensure-redis plot-method-comparison \
        plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
        plot-preflight-wait-cdf-comparison plot-inflight-wait-cdf-comparison \
-       plot-distance-cdf-comparison plot-exceeded-rate-comparison
+       plot-distance-cdf-comparison plot-exceeded-rate-comparison \
+       plot-exceeded-rate-comparison-jp
 
 # =============================================================================
 # 並列シミュレーション設定
@@ -716,4 +717,16 @@ plot-exceeded-rate-comparison: venv-setup
 	@echo "容量超過経路割り当て率 比較グラフを生成します..."
 	@mkdir -p output
 	$(PYTHON) scripts/plot_exceeded_rate_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# 容量超過経路割り当て率 比較グラフ生成（日本語版）
+# Usage: make plot-exceeded-rate-comparison-jp
+#
+# 対話的入力形式はplot-exceeded-rate-comparisonと同様
+# 縦軸ラベルが日本語表記になります
+# データソース: src/result/sim_X/large_scale/{手法名}/capacity_exceeded.csv
+plot-exceeded-rate-comparison-jp: venv-setup
+	@echo "容量超過経路割り当て率 比較グラフ（日本語版）を生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_exceeded_rate_comparison_jp.py
 	@echo "✓ グラフ生成完了"

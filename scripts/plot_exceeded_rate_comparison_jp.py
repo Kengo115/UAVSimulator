@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-容量超過経路割り当て率 比較グラフ生成スクリプト
+容量超過経路割り当て率 比較グラフ生成スクリプト（日本語版）
 
 複数の経路探索手法を同一グラフ上で比較する散布図を生成します。
-横軸: λ値、縦軸: Over-capacity Assignment Rate [%]
+横軸: λ値、縦軸: 容量超過経路割り当て率 [%]
 
 各手法は異なる色と形のマーカーで表示されます。
 """
@@ -84,7 +84,7 @@ def read_exceeded_rate(file_path):
 def interactive_input():
     """対話的に入力を受け取る"""
     print("=" * 80)
-    print("容量超過経路割り当て率 比較グラフ生成")
+    print("容量超過経路割り当て率 比較グラフ生成（日本語版）")
     print("=" * 80)
     print()
 
@@ -166,7 +166,7 @@ def interactive_input():
     y_interval = float(y_interval_input) if y_interval_input else None
 
     # 出力ファイル名
-    default_output = "output/exceeded_rate_comparison.png"
+    default_output = "output/exceeded_rate_comparison_jp.png"
     output_file = input(f"出力ファイル名を入力してください (デフォルト: {default_output}): ").strip()
     if not output_file:
         output_file = default_output
@@ -268,8 +268,8 @@ def plot_scatter(all_data, lambda_values, y_max, y_interval, output_file):
     ax.set_xlim(lambda_min - x_margin, lambda_max + x_margin)
     ax.set_xticks(lambda_values)
 
-    # Y軸設定
-    ax.set_ylabel('Capacity Overflow Rate [%]', fontsize=FONT_SIZE_TITLE, fontweight='bold', color='black')
+    # Y軸設定（日本語）
+    ax.set_ylabel('容量超過経路割り当て率 [%]', fontsize=FONT_SIZE_TITLE, fontweight='bold', color='black')
     ax.tick_params(axis='y', direction='in', labelsize=FONT_SIZE_TICK, colors='black', which='both')
 
     if y_max is not None:
@@ -288,7 +288,7 @@ def plot_scatter(all_data, lambda_values, y_max, y_interval, output_file):
     ax.set_axisbelow(True)
 
     # 凡例
-    legend = ax.legend(loc='lower right', framealpha=1.0, fontsize=26, edgecolor='black', bbox_to_anchor=(0.95, 0.08), labelspacing=0.8)
+    legend = ax.legend(loc='best', framealpha=1.0, fontsize=FONT_SIZE_LEGEND, edgecolor='black')
     for text in legend.get_texts():
         text.set_color("black")
 
