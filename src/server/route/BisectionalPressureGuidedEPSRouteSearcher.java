@@ -14,6 +14,7 @@ import server.redis.ClientTimeManager;
 import server.redis.PathWaitingManager;
 import server.redis.UAVJob;
 import server.scheduler.FlightScheduler;
+import server.uav.MemoryPathWaitingManager;
 import controller.BoundaryController;
 
 import java.io.IOException;
@@ -170,29 +171,40 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                 LogManager.getInstance().log("BisectionalPGEPS Phase 4: EPS割当=" + (int)epsAssignedFlow +
                     ", 経路待ち登録=" + remainingUAVs + " (要求UAV数=" + requiredUAVs + ")");
 
-                // FlightSchedulerからPathWaitingManagerを取得
-                PathWaitingManager pathWaitingManager = FlightScheduler.getInstance().getPathWaitingManager();
-
-                // 経路待ちUAVをキューに登録（EPS割り当て分の次のIDから開始）
                 int epsAssigned = (int) epsAssignedFlow;
-                for (int i = 0; i < remainingUAVs; i++) {
-                    int uavIndex = epsAssigned + i;
-                    // UAVオブジェクトから速度を取得（各UAVは8~16m/sのランダム速度を持つ）
-                    double uavSpeed = client.getFlow().getUav(uavIndex).getSpeed();
-                    int uavId = client.getFlow().getUav(uavIndex).getId();
-                    UAVJob waitingJob = new UAVJob(
-                        uavId,
-                        client.getId(),
-                        null,  // path = null（経路待ち状態）
-                        uavSpeed,
-                        System.currentTimeMillis(),
-                        sourceNode,
-                        destNode
-                    );
-                    waitingJob.setSessionId(FlightScheduler.getInstance().getSessionId());
-                    // Phase 4: 経路待ち開始時刻を記録
-                    waitingJob.startPathWaiting();
-                    pathWaitingManager.enqueue(client.getId(), waitingJob);
+
+                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.MEMORY) {
+                    // MEMORYモード: MemoryPathWaitingManager に Uav オブジェクトを登録
+                    for (int i = 0; i < remainingUAVs; i++) {
+                        int uavIndex = epsAssigned + i;
+                        Uav waitingUav = client.getFlow().getUav(uavIndex);
+                        waitingUav.startPathWaiting();
+                        MemoryPathWaitingManager.getInstance().enqueue(client.getId(), waitingUav);
+                    }
+                } else {
+                    // REDISモード: FlightSchedulerからPathWaitingManagerを取得
+                    PathWaitingManager pathWaitingManager = FlightScheduler.getInstance().getPathWaitingManager();
+
+                    // 経路待ちUAVをキューに登録（EPS割り当て分の次のIDから開始）
+                    for (int i = 0; i < remainingUAVs; i++) {
+                        int uavIndex = epsAssigned + i;
+                        // UAVオブジェクトから速度を取得（各UAVは8~16m/sのランダム速度を持つ）
+                        double uavSpeed = client.getFlow().getUav(uavIndex).getSpeed();
+                        int uavId = client.getFlow().getUav(uavIndex).getId();
+                        UAVJob waitingJob = new UAVJob(
+                            uavId,
+                            client.getId(),
+                            null,  // path = null（経路待ち状態）
+                            uavSpeed,
+                            System.currentTimeMillis(),
+                            sourceNode,
+                            destNode
+                        );
+                        waitingJob.setSessionId(FlightScheduler.getInstance().getSessionId());
+                        // Phase 4: 経路待ち開始時刻を記録
+                        waitingJob.startPathWaiting();
+                        pathWaitingManager.enqueue(client.getId(), waitingJob);
+                    }
                 }
 
                 LogManager.getInstance().log("BisectionalPGEPS Phase 4: " + remainingUAVs + "機の経路待ち登録完了");

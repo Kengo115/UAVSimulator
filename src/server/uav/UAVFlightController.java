@@ -9,6 +9,7 @@ import server.redis.UAVStateManager;
 import server.util.LogManager;
 
 import java.util.Queue;
+import java.util.Arrays;
 
 /**
  * UAVの飛行制御を行うクラス
@@ -76,6 +77,13 @@ public class UAVFlightController {
                 }
                 clientController.getClient(uav.getClientId() - 1).incrementFinishFlyingCounter();
 
+                // MEMORYモード: 単一リンク経路（到着時が第一ホップ完了）の PathWaiting 経路コピー
+                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.MEMORY
+                        && !uav.isFirstHopCompleted()) {
+                    uav.setFirstHopCompleted(true);
+                    processMemoryFirstHopPathCopy(uav, flyingUavQueue, uavQueue, link, beaconCluster);
+                }
+
                 // ログの保存
                 FlightDataRecorder.saveFlightData(clientController, uav, totalPathDistance);
 
@@ -126,6 +134,13 @@ public class UAVFlightController {
             if (traveledDistance + linkLength >= flightDistance) {
                 if (link[startNode][endNode] != uav.getFlyingLink()) {
                     if (link[startNode][endNode].getCapacity() > 0) {
+                        // MEMORYモード: 第一ホップ完了検出（第一リンク進入済み、かつ初の新リンク遷移）
+                        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.MEMORY
+                                && uav.isFirstLinkEntered() && !uav.isFirstHopCompleted()) {
+                            uav.setFirstHopCompleted(true);
+                            processMemoryFirstHopPathCopy(uav, flyingUavQueue, uavQueue, link, beaconCluster);
+                        }
+
                         uav.setFlyingLink(link[startNode][endNode]);
                         flyingUAV[startNode][endNode]++;
 
@@ -223,6 +238,12 @@ public class UAVFlightController {
                     } else {
                         LogManager.getInstance().error("要修正3: client" + uav.getClientId() + " UAV" + uav.getId() + " は待機していないのに stopWaitingTimer() が呼ばれました");
                     }
+                    // MEMORYモード: 第一リンク進入時の flightStayingTime 計測終了
+                    if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.MEMORY
+                            && !uav.isFirstLinkEntered()) {
+                        uav.stopFlightStaying();
+                        uav.setFirstLinkEntered(true);
+                    }
                     beaconCluster.getBeacon(startNode).removeUav(uav);
                     beaconCluster.getBeacon(startNode).decrementWaitingUavCount();
                     uav.startTimer();
@@ -270,5 +291,55 @@ public class UAVFlightController {
 
         // 容量の更新
         CapacityManager.updateCapacity(flyingUAV, link, node);
+    }
+
+    /**
+     * MEMORYモード用: 第一ホップ完了時に経路待ち(PathWaiting)UAVへ経路をコピーする。
+     * REDISモードの FlightScheduler.processFirstHopPathCopy() に相当する処理。
+     * 同一クライアントの経路待ちUAVを1台取り出し、飛行中UAVの経路をコピーして
+     * uavQueue (ソースノード待機) に追加する。
+     *
+     * @param flyingUav 第一ホップを完了した飛行中UAV
+     * @param flyingUavQueue 飛行中のUAVキュー
+     * @param uavQueue 待機中のUAVキュー
+     * @param link リンク情報
+     * @param beaconCluster ビーコンクラスター
+     */
+    private static void processMemoryFirstHopPathCopy(Uav flyingUav, Queue<Uav> flyingUavQueue,
+                                                       Queue<Uav> uavQueue, Link[][] link,
+                                                       BeaconCluster beaconCluster) {
+        int clientId = flyingUav.getClientId();
+        MemoryPathWaitingManager pwm = MemoryPathWaitingManager.getInstance();
+
+        if (!pwm.hasWaiting(clientId)) {
+            return;
+        }
+
+        Uav waitingUav = pwm.dequeue(clientId);
+        if (waitingUav == null) {
+            return;
+        }
+
+        // 経路待ち時間の計測終了
+        waitingUav.stopPathWaiting();
+
+        // 飛行中UAVの経路をコピー
+        int[] copiedPath = Arrays.copyOf(flyingUav.getPath(), flyingUav.getPath().length);
+        waitingUav.setPath(copiedPath);
+
+        // 飛行前待機（flightStayingTime）の計測開始: ソースノードで第一リンク容量待ちになるため
+        waitingUav.startFlightStaying();
+
+        // ソースノード（path[0]）で待機開始
+        int sourceNode = copiedPath[0];
+        waitingUav.startWaitingTimer();
+        waitingUav.setStayedBeaconId(sourceNode);
+        beaconCluster.getBeacon(sourceNode).addUav(waitingUav);
+        beaconCluster.getBeacon(sourceNode).incrementWaitingUavCount();
+        uavQueue.add(waitingUav);
+
+        LogManager.getInstance().log("MemoryPathWaiting: client" + clientId
+                + " UAV" + waitingUav.getId() + " が UAV" + flyingUav.getId()
+                + " の経路コピーを受け取り、" + sourceNode + " で待機開始");
     }
 }

@@ -619,12 +619,14 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                             currentUAV.startTimer();
                             currentUAV.setFlyingLink(link[u][v]);
                             currentUAV.setPassedLink(link[u][v]);
+                            currentUAV.setFirstLinkEntered(true);  // 第一リンクに即座に進入
                             flyingUavQueue.add(currentUAV);
                             link[u][v].decrementCapacity();
                             flowCounter[0]++;
                             LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v);
                         } else {
                             currentUAV.startWaitingTimer();
+                            currentUAV.startFlightStaying();  // 第一リンク待機開始（flightStayingTime 計測）
                             currentUAV.setStayedBeaconId(u);
                             beaconCluster.getBeacon(u).addUav(currentUAV);
                             beaconCluster.getBeacon(u).incrementWaitingUavCount();

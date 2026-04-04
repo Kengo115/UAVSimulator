@@ -133,15 +133,19 @@ public class FlightDataRecorder {
         }
 
         long UAV_flightTime = uav.getFlightTime();
-        long UAV_waitingTime = uav.getWaitingTime();
-        long UAV_totalTime = UAV_flightTime + UAV_waitingTime;
+        long UAV_flightStayingMs = uav.getTotalFlightStayingTimeMs();
+        long UAV_pathWaitMs = uav.getTotalPathWaitTimeMs();
+        // waitingTime = 飛行中待機のみ（flightStaying分を除く）
+        long UAV_waitingTime = uav.getWaitingTime() - UAV_flightStayingMs;
+        if (UAV_waitingTime < 0) UAV_waitingTime = 0;
 
         // Phase 5/11: 時間を秒に変換
         double realFlightTimeSeconds = UAV_flightTime / 1000.0;
         double waitingTimeSeconds = UAV_waitingTime / 1000.0;
-        double totalTimeSeconds = UAV_totalTime / 1000.0;
-        double pathWaitTime = 0.0;       // メモリモードでは経路待ちは発生しない
-        double flightStayingTime = 0.0;  // メモリモードでは飛行前待機は発生しない（全てwaitingTimeに含まれる）
+        double flightStayingTime = UAV_flightStayingMs / 1000.0;
+        double pathWaitTime = UAV_pathWaitMs / 1000.0;
+        // flightTime = realFlight + midFlightWaiting + flightStaying (REDISモードと同定義)
+        double totalTimeSeconds = realFlightTimeSeconds + waitingTimeSeconds + flightStayingTime;
 
         try (FileWriter writer = new FileWriter(filePath, true)) {
             File file = new File(filePath);
