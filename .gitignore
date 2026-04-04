@@ -33,7 +33,8 @@ result/
 # Compiled Java class files
 *.class
 src/log/
-topology/
+**/topology/*
+!config/topology/koriyama_topology.txt
 
 ### Maven ###
 target/

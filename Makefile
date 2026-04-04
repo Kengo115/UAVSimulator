@@ -1,6 +1,10 @@
-.PHONY: up down restart run compile clean status logs kill-sim \
+.PHONY: up down down-all restart run compile clean status logs kill-sim \
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
-       plot-topology plot-topology-labels ensure-redis plot-method-comparison
+       plot-topology plot-topology-labels ensure-redis plot-method-comparison \
+       plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
+       plot-preflight-wait-cdf-comparison plot-inflight-wait-cdf-comparison \
+       plot-distance-cdf-comparison plot-exceeded-rate-comparison \
+       plot-exceeded-rate-comparison-jp
 
 # =============================================================================
 # 並列シミュレーション設定
@@ -30,11 +34,21 @@ up:
 	@echo "  Redis: http://localhost:6379"
 	@echo "  Redis Commander: http://localhost:8081"
 
-# Dockerコンテナを停止
+# Dockerコンテナを停止（SIM_ID=1のみ）
 down:
 	@echo "Redisコンテナを停止します..."
 	docker compose down
 	@echo "✓ Redisコンテナが停止しました"
+
+# 全SIM_ID用Redisコンテナとシミュレータを停止
+down-all: stop-all
+	@echo "全Redisコンテナを停止します..."
+	@docker compose down 2>/dev/null || true
+	@for container in $$(docker ps --format '{{.Names}}' | grep '^uav-redis-sim'); do \
+		echo "  $$container を停止..."; \
+		docker stop $$container && docker rm $$container; \
+	done
+	@echo "✓ 全Redisコンテナが停止しました"
 
 # Dockerコンテナを再起動
 restart:
@@ -231,6 +245,7 @@ help:
 	@echo "    make heatmap-video SIM_ID=N [METHOD=X]    ヒートマップ動画生成"
 	@echo "    make plot-link SIM_ID=N FROM=X TO=Y       リンク別load_rateグラフ生成"
 	@echo "    make plot-topology                        トポロジ描画"
+	@echo "    make analyze-exceeded SIM_ID=N [METHOD=X] 容量超過率分析"
 	@echo ""
 	@echo "  ■ 使用例"
 	@echo ""
@@ -270,6 +285,7 @@ help:
 	@echo "  make redis-clear  SIM_ID=1用Redisデータをクリア"
 	@echo "  make up           SIM_ID=1用Redisを手動起動"
 	@echo "  make down         SIM_ID=1用Redisを停止"
+	@echo "  make down-all     全シミュレータ＋全Redisを停止"
 	@echo ""
 	@echo "-------------------------------------------------------------------------------"
 	@echo "【ディレクトリ構造】"
@@ -382,13 +398,62 @@ extract-links:
 	@echo "✓ リンク別ファイルを抽出しました"
 	@echo "  出力: $(RESULT_DIR)/link_status/links/"
 
-# 平均飛行ステータス集計
-# Usage: make aggregate-flight SIM_ID=N [METHOD=X]
-aggregate-flight:
+# 平均飛行ステータス集計（出力先指定版）
+# Usage: make aggregate-flight-to SIM_ID=N [METHOD=X] OUTPUT_SIM=M
+#
+# 例: make aggregate-flight-to SIM_ID=1 METHOD=PS OUTPUT_SIM=1
+#     → 入力: src/result/sim_1/large_scale/PS/time/
+#     → 出力: src/result/sim_1/time/ave_flightStatus.csv
+#
+# 例: make aggregate-flight-to SIM_ID=2 METHOD=Bisectional OUTPUT_SIM=2
+#     → 入力: src/result/sim_2/large_scale/Bisectional/time/
+#     → 出力: src/result/sim_2/time/ave_flightStatus.csv
+OUTPUT_SIM := $(SIM_ID)
+OUTPUT_SIM_DIR := src/result/sim_$(OUTPUT_SIM)
+aggregate-flight-to:
 	@echo "平均飛行ステータスを集計します..."
 	@echo "  入力: $(RESULT_DIR)/time/"
-	python3 scripts/aggregate_flight_status.py $(RESULT_DIR)
-	@echo "✓ 平均飛行ステータスを出力しました"
+	@echo "  出力: $(OUTPUT_SIM_DIR)/time/ave_flightStatus.csv"
+	@if [ ! -d "$(RESULT_DIR)/time" ]; then \
+		echo ""; \
+		echo "Error: timeディレクトリが見つかりません"; \
+		echo "       $(RESULT_DIR)/time/"; \
+		echo ""; \
+		echo "確認事項:"; \
+		echo "  1. SIM_ID=$(SIM_ID) でシミュレーションを実行しましたか？"; \
+		echo "  2. シミュレーション時に選択した手法は $(METHOD) ですか？"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@mkdir -p $(OUTPUT_SIM_DIR)/time
+	python3 scripts/aggregate_flight_status.py $(RESULT_DIR) --output $(OUTPUT_SIM_DIR)
+	@echo "✓ 平均飛行ステータスを出力しました: $(OUTPUT_SIM_DIR)/time/ave_flightStatus.csv"
+
+# 容量超過率分析
+# Usage: make analyze-exceeded SIM_ID=N [METHOD=X]
+#
+# 経路探索結果が容量を超過した割合を分析する
+# 判定基準: flightStayingTime > 0 のUAVが1台でも存在するクライアント
+#
+# 例: make analyze-exceeded SIM_ID=1 METHOD=PS
+#     → 入力: src/result/sim_1/large_scale/PS/time/
+#     → 出力: src/result/sim_1/large_scale/PS/capacity_exceeded.csv
+analyze-exceeded:
+	@echo "容量超過率を分析します..."
+	@echo "  入力: $(RESULT_DIR)/time/"
+	@if [ ! -d "$(RESULT_DIR)/time" ]; then \
+		echo ""; \
+		echo "Error: timeディレクトリが見つかりません"; \
+		echo "       $(RESULT_DIR)/time/"; \
+		echo ""; \
+		echo "確認事項:"; \
+		echo "  1. SIM_ID=$(SIM_ID) でシミュレーションを実行しましたか？"; \
+		echo "  2. シミュレーション時に選択した手法は $(METHOD) ですか？"; \
+		echo ""; \
+		exit 1; \
+	fi
+	python3 scripts/analyze_capacity_exceeded.py $(RESULT_DIR)
+	@echo "✓ 容量超過率を出力しました: $(RESULT_DIR)/capacity_exceeded.csv"
 
 # 混雑率グラフ生成
 # Usage: make plot-congestion SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N]
@@ -552,4 +617,116 @@ plot-method-comparison: venv-setup
 	@echo "経路探索手法比較グラフを生成します..."
 	@mkdir -p output
 	$(PYTHON) scripts/plot_method_comparison.py
+	@echo "✓ グラフ生成完了"
+
+
+# 経路探索手法比較グラフ生成（積み上げ棒グラフ）
+# Usage: make plot-method-comparison-jp
+
+# データソース: src/result/sim_X/large_scale/{手法名}/time/ave_flightStatus.csv
+# 出力先: output/ (デフォルト)
+
+plot-method-comparison-jp: venv-setup
+	@echo "経路探索手法比較グラフ(日本語版)を生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_method_comparison_jp.py
+	@echo "✓ グラフ生成完了"
+
+# =============================================================================
+# CDF比較グラフ生成（複数手法比較）
+# =============================================================================
+
+# flightTime CDF比較グラフ生成
+# Usage: make plot-flight-cdf-comparison
+#
+# 対話的に以下を入力:
+#   - グループ数 (例: 3)
+#   - 各グループの表示名 (例: PG-EPS)
+#   - 各グループのディレクトリ名 (例: Bisectional)
+#   - 各グループのsim番号 (例: 1)
+#   - X軸の最大値・間隔 (空欄で自動)
+#   - 出力ファイル名 (デフォルト: output/flight_time_cdf_comparison.png)
+#
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-flight-cdf-comparison: venv-setup
+	@echo "flightTime CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_flight_time_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# realFlightTime CDF比較グラフ生成
+# Usage: make plot-real-flight-cdf-comparison
+#
+# 対話的入力形式はplot-flight-cdf-comparisonと同様
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-real-flight-cdf-comparison: venv-setup
+	@echo "realFlightTime CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_real_flight_time_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# 飛行前待機時間 CDF比較グラフ生成
+# Usage: make plot-preflight-wait-cdf-comparison
+#
+# 飛行前待機時間 = pathWaitTime + flightStayingTime
+# 対話的入力形式はplot-flight-cdf-comparisonと同様
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-preflight-wait-cdf-comparison: venv-setup
+	@echo "飛行前待機時間 CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_preflight_wait_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# 飛行中待機時間 CDF比較グラフ生成
+# Usage: make plot-inflight-wait-cdf-comparison
+#
+# 飛行中待機時間 = waitingTime（飛行中にリンク混雑等で待機した時間）
+# 対話的入力形式はplot-flight-cdf-comparisonと同様
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-inflight-wait-cdf-comparison: venv-setup
+	@echo "飛行中待機時間 CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_inflight_wait_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# distance CDF比較グラフ生成
+# Usage: make plot-distance-cdf-comparison
+#
+# 対話的入力形式はplot-flight-cdf-comparisonと同様
+# データソース: src/result/sim_X/large_scale/{手法名}/time/client*/flight_times.csv
+plot-distance-cdf-comparison: venv-setup
+	@echo "distance CDF比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_distance_cdf_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# 容量超過経路割り当て率 比較グラフ生成
+# Usage: make plot-exceeded-rate-comparison
+#
+# 対話的に以下を入力:
+#   - λの種類数 (例: 3)
+#   - 各λの値 (例: 1.0, 1.5, 2.0)
+#   - 経路探索手法の数 (例: 4)
+#   - 各手法の表示名・ディレクトリ名
+#   - 各λ×手法のsim番号
+#   - Y軸の最大値・間隔 (空欄で自動)
+#   - 出力ファイル名 (デフォルト: output/exceeded_rate_comparison.png)
+#
+# データソース: src/result/sim_X/large_scale/{手法名}/capacity_exceeded.csv
+plot-exceeded-rate-comparison: venv-setup
+	@echo "容量超過経路割り当て率 比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_exceeded_rate_comparison.py
+	@echo "✓ グラフ生成完了"
+
+# 容量超過経路割り当て率 比較グラフ生成（日本語版）
+# Usage: make plot-exceeded-rate-comparison-jp
+#
+# 対話的入力形式はplot-exceeded-rate-comparisonと同様
+# 縦軸ラベルが日本語表記になります
+# データソース: src/result/sim_X/large_scale/{手法名}/capacity_exceeded.csv
+plot-exceeded-rate-comparison-jp: venv-setup
+	@echo "容量超過経路割り当て率 比較グラフ（日本語版）を生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_exceeded_rate_comparison_jp.py
 	@echo "✓ グラフ生成完了"
