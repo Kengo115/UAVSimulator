@@ -3,17 +3,14 @@ package server.route;
 import client.Client;
 import item.BeaconCluster;
 import item.Link;
-import item.Uav;
 import server.controller.ServerController;
 import server.util.EPSSavePoint;
 import server.util.ICCGSolver;
 import server.util.LogManager;
 import server.util.MathUtils;
 import server.util.ResultOutputManager;
-import controller.BoundaryController;
 
 import java.io.IOException;
-import java.util.Queue;
 
 /**
  * バイナリサーチPhysarumSolverルートサーチャー
@@ -98,10 +95,10 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
     }
 
     @Override
-    public void search(Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+    public void search(Client client, int numLoop) throws IOException {
         // 通常のUAV割り当てのみを行う場合は親クラスのメソッドを呼び出す
         if (numLoop == 0) {
-            super.search(client, flyingUavQueue, uavQueue, numLoop);
+            super.search(client, numLoop);
             return;
         }
 
@@ -168,7 +165,7 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
 
             // 全UAV割り当て実行
             LogManager.getInstance().log("BinaryExtendedPhysarumSolver: Starting UAV flight assignment for all " + requiredUAVs + " UAVs");
-            runUAVFlow(sourceNode, destNode, requiredUAVs, client, flyingUavQueue, uavQueue);
+            runUAVFlow(sourceNode, destNode, requiredUAVs, client);
             
         } catch (Exception e) {
             LogManager.getInstance().error("Error in binary search EPS process: ", e);
@@ -630,10 +627,8 @@ public class BinaryExtendedPhysarumSolverRouteSearcher extends ExtendedPhysarumS
      */
     private void logEPSInputData(Client client) {
         LogManager log = LogManager.getInstance();
-        String workerMode = BoundaryController.getCurrentWorkerMode().toString();
 
         log.log("=== DEBUG: EPS Input Data for Client " + client.getId() + " ===");
-        log.log("WorkerMode: " + workerMode);
         log.log("sourceNode: " + sourceNode + ", destNode: " + destNode);
         log.log("node count: " + node);
 

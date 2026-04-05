@@ -2,7 +2,6 @@ package server.scheduler;
 
 import client.Client;
 import client.ClientController;
-import item.Uav;
 import server.redis.PathWaitingManager;
 import server.route.RouteSearcher;
 import server.route.SolverFailedException;
@@ -16,7 +15,6 @@ import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedList;
-import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -58,21 +56,16 @@ public class SearcherRetryManager {
     public static class SearchRequest {
         public final Client client;
         public final ClientController clientController;
-        public final Queue<Uav> flyingUavQueue;
-        public final Queue<Uav> uavQueue;
         public final int numLoop;
         public final RouteSearcher searcher;
         public final Runnable preSearchAction;  // 検索前の処理（容量同期など）
-        public final Runnable postSearchAction; // 検索後の処理（UAVFlyScheduler開始など）
+        public final Runnable postSearchAction; // 検索後の処理
 
         public SearchRequest(Client client, ClientController clientController,
-                           Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue,
                            int numLoop, RouteSearcher searcher,
                            Runnable preSearchAction, Runnable postSearchAction) {
             this.client = client;
             this.clientController = clientController;
-            this.flyingUavQueue = flyingUavQueue;
-            this.uavQueue = uavQueue;
             this.numLoop = numLoop;
             this.searcher = searcher;
             this.preSearchAction = preSearchAction;
@@ -189,8 +182,6 @@ public class SearcherRetryManager {
                     // 検索実行
                     request.searcher.search(
                         request.client,
-                        request.flyingUavQueue,
-                        request.uavQueue,
                         request.numLoop
                     );
 

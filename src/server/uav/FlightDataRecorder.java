@@ -87,13 +87,11 @@ public class FlightDataRecorder {
 
     /**
      * Phase 2: UAVの飛行経路をRedisに保存する
-     * Phase 3b-12: メモリモード時はスキップ
      * @param uav UAV
      * @param method メソッド名
      */
     private static void saveRouteToRedis(Uav uav, String method) {
-        // Phase 3b-12: メモリモード時はRedis書き込みをスキップ
-        if (!redisEnabled || BoundaryController.getCurrentWorkerMode() != BoundaryController.WorkerMode.REDIS) {
+        if (!redisEnabled) {
             return;
         }
 
@@ -140,8 +138,8 @@ public class FlightDataRecorder {
         double realFlightTimeSeconds = UAV_flightTime / 1000.0;
         double waitingTimeSeconds = UAV_waitingTime / 1000.0;
         double totalTimeSeconds = UAV_totalTime / 1000.0;
-        double pathWaitTime = 0.0;       // メモリモードでは経路待ちは発生しない
-        double flightStayingTime = 0.0;  // メモリモードでは飛行前待機は発生しない（全てwaitingTimeに含まれる）
+        double pathWaitTime = 0.0;
+        double flightStayingTime = 0.0;
 
         try (FileWriter writer = new FileWriter(filePath, true)) {
             File file = new File(filePath);
@@ -164,21 +162,16 @@ public class FlightDataRecorder {
 
         // Phase 2: Redisに保存
         saveFlightDataToRedis(clientController, uav, totalPathDistance);
-
-        // Phase 4: 事業者の時間計測（UAV完了通知）- メモリモード用
-        ClientTimeManager.getInstance().onUAVCompleted(uav.getClientId());
     }
 
     /**
      * Phase 2: フライトデータをRedisに保存する
-     * Phase 3b-12: メモリモード時はスキップ
      * @param clientController クライアントコントローラー
      * @param uav UAV
      * @param totalPathDistance 総経路距離
      */
     private static void saveFlightDataToRedis(ClientController clientController, Uav uav, double totalPathDistance) {
-        // Phase 3b-12: メモリモード時はRedis書き込みをスキップ
-        if (!redisEnabled || BoundaryController.getCurrentWorkerMode() != BoundaryController.WorkerMode.REDIS) {
+        if (!redisEnabled) {
             return;
         }
 

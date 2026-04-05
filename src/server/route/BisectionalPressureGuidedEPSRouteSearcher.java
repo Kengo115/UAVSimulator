@@ -3,7 +3,6 @@ package server.route;
 import client.Client;
 import item.BeaconCluster;
 import item.Link;
-import item.Uav;
 import server.controller.ServerController;
 import server.util.EPSSavePoint;
 import server.util.ICCGSolver;
@@ -14,10 +13,8 @@ import server.redis.ClientTimeManager;
 import server.redis.PathWaitingManager;
 import server.redis.UAVJob;
 import server.scheduler.FlightScheduler;
-import controller.BoundaryController;
 
 import java.io.IOException;
-import java.util.Queue;
 
 /**
  * 二分法型圧力誘導EPS (Bisectional Pressure-Guided EPS)
@@ -106,10 +103,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     }
 
     @Override
-    public void search(Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+    public void search(Client client, int numLoop) throws IOException {
         // 通常のUAV割り当てのみを行う場合は親クラスのメソッドを呼び出す
         if (numLoop == 0) {
-            super.search(client, flyingUavQueue, uavQueue, numLoop);
+            super.search(client, numLoop);
             return;
         }
 
@@ -203,7 +200,7 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             // EPS割り当て分のUAVのみ飛行開始
             int epsUAVCount = (int) epsAssignedFlow;
             LogManager.getInstance().log("BisectionalPGEPS: Starting UAV flight assignment for " + epsUAVCount + " EPS UAVs (out of " + requiredUAVs + " total)");
-            runUAVFlow(sourceNode, destNode, epsUAVCount, client, flyingUavQueue, uavQueue);
+            runUAVFlow(sourceNode, destNode, epsUAVCount, client);
             
         } catch (Exception e) {
             LogManager.getInstance().error("Error in binary search EPS process: ", e);
@@ -666,10 +663,8 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
      */
     private void logEPSInputData(Client client) {
         LogManager log = LogManager.getInstance();
-        String workerMode = BoundaryController.getCurrentWorkerMode().toString();
 
         log.log("=== DEBUG: EPS Input Data for Client " + client.getId() + " ===");
-        log.log("WorkerMode: " + workerMode);
         log.log("sourceNode: " + sourceNode + ", destNode: " + destNode);
         log.log("node count: " + node);
 

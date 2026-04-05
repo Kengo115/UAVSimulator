@@ -2,11 +2,9 @@ package server.controller;
 
 import client.Client;
 import client.ClientController;
-import controller.BoundaryController;
 import item.Beacon;
 import item.BeaconCluster;
 import item.Link;
-import item.Uav;
 import server.network.NetworkTopologyManager;
 import server.network.TopologyFileReader;
 import server.route.BinaryExtendedPhysarumSolverRouteSearcher;
@@ -19,17 +17,12 @@ import server.route.RouteSearcher;
 import server.route.StepControlledPressureGuidedEPSRouteSearcher;
 import server.redis.LinkCapacityManager;
 import server.scheduler.SearcherRetryManager;
-import server.uav.CapacityManager;
-import server.uav.FlightDataRecorder;
-import server.uav.UAVFlightController;
-import server.uav.UAVFlyScheduler;
 import server.util.LogManager;
 import server.util.ResultOutputManager;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.util.Queue;
 
 /**
  * サーバー側の処理を制御するコントローラークラス
@@ -234,23 +227,13 @@ public class ServerController {
      * Phase 5: SearcherRetryManagerによる排他制御・再試行管理
      * @param client クライアント
      * @param clientController クライアントコントローラー
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      * @throws IOException 入出力例外
      */
-    public void run_Dijkstra(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) throws IOException {
-        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
-        if (!flyingUavQueue.isEmpty()) {
-            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
-        }
-
-        // Phase 5: SearcherRetryManagerを使用
+    public void run_Dijkstra(Client client, ClientController clientController) throws IOException {
         final int currentRunCounter = runCounter;
         SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
             client,
             clientController,
-            flyingUavQueue,
-            uavQueue,
             1,
             dijkstraRouteSearcher,
             // preSearchAction: 検索前処理（容量同期など）
@@ -258,14 +241,11 @@ public class ServerController {
                 if (currentRunCounter != 0) {
                     reset();
                 }
-                // Phase 3b-11: Redisモードの場合のみ、容量を同期
-                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-                    LinkCapacityManager capacityManager = new LinkCapacityManager();
-                    if (currentRunCounter == 0) {
-                        capacityManager.initializeCapacitiesToRedis(link, node);
-                    } else {
-                        capacityManager.syncCapacitiesToMemory(link, node);
-                    }
+                LinkCapacityManager capacityManager = new LinkCapacityManager();
+                if (currentRunCounter == 0) {
+                    capacityManager.initializeCapacitiesToRedis(link, node);
+                } else {
+                    capacityManager.syncCapacitiesToMemory(link, node);
                 }
                 // 隣接行列の更新
                 for (int i = 0; i < node; i++) {
@@ -277,11 +257,7 @@ public class ServerController {
                 }
             },
             // postSearchAction: 検索後処理
-            () -> {
-                if (currentRunCounter != 0) {
-                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
-                }
-            }
+            () -> {}
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -297,47 +273,28 @@ public class ServerController {
      * Phase 5: SearcherRetryManagerによる排他制御・再試行管理
      * @param client クライアント
      * @param clientController クライアントコントローラー
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      * @param numLoop 反復回数
      * @throws IOException 入出力例外
      */
-    public void run_PS(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
-        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
-        if (!flyingUavQueue.isEmpty()) {
-            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
-        }
-
-        // Phase 5: SearcherRetryManagerを使用
+    public void run_PS(Client client, ClientController clientController, int numLoop) throws IOException {
         final int currentRunCounter = runCounter;
         SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
             client,
             clientController,
-            flyingUavQueue,
-            uavQueue,
             numLoop,
             physarumSolverRouteSearcher,
-            // preSearchAction: 検索前処理（容量同期など）
             () -> {
                 if (currentRunCounter != 0) {
                     reset();
                 }
-                // Phase 3b-11: Redisモードの場合のみ、容量を同期
-                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-                    LinkCapacityManager capacityManager = new LinkCapacityManager();
-                    if (currentRunCounter == 0) {
-                        capacityManager.initializeCapacitiesToRedis(link, node);
-                    } else {
-                        capacityManager.syncCapacitiesToMemory(link, node);
-                    }
+                LinkCapacityManager capacityManager = new LinkCapacityManager();
+                if (currentRunCounter == 0) {
+                    capacityManager.initializeCapacitiesToRedis(link, node);
+                } else {
+                    capacityManager.syncCapacitiesToMemory(link, node);
                 }
             },
-            // postSearchAction: 検索後処理
-            () -> {
-                if (currentRunCounter != 0) {
-                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
-                }
-            }
+            () -> {}
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -353,47 +310,28 @@ public class ServerController {
      * Phase 5: SearcherRetryManagerによる排他制御・再試行管理
      * @param client クライアント
      * @param clientController クライアントコントローラー
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      * @param numLoop 反復回数
      * @throws IOException 入出力例外
      */
-    public void run_EPS(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
-        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
-        if (!flyingUavQueue.isEmpty()) {
-            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
-        }
-
-        // Phase 5: SearcherRetryManagerを使用
+    public void run_EPS(Client client, ClientController clientController, int numLoop) throws IOException {
         final int currentRunCounter = runCounter;
         SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
             client,
             clientController,
-            flyingUavQueue,
-            uavQueue,
             numLoop,
             extendedPhysarumSolverRouteSearcher,
-            // preSearchAction: 検索前処理（容量同期など）
             () -> {
                 if (currentRunCounter != 0) {
                     reset();
                 }
-                // Phase 3b-11: Redisモードの場合のみ、容量を同期
-                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-                    LinkCapacityManager capacityManager = new LinkCapacityManager();
-                    if (currentRunCounter == 0) {
-                        capacityManager.initializeCapacitiesToRedis(link, node);
-                    } else {
-                        capacityManager.syncCapacitiesToMemory(link, node);
-                    }
+                LinkCapacityManager capacityManager = new LinkCapacityManager();
+                if (currentRunCounter == 0) {
+                    capacityManager.initializeCapacitiesToRedis(link, node);
+                } else {
+                    capacityManager.syncCapacitiesToMemory(link, node);
                 }
             },
-            // postSearchAction: 検索後処理
-            () -> {
-                if (currentRunCounter != 0) {
-                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
-                }
-            }
+            () -> {}
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -409,47 +347,28 @@ public class ServerController {
      * Phase 5: SearcherRetryManagerによる排他制御・再試行管理
      * @param client クライアント
      * @param clientController クライアントコントローラー
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      * @param numLoop 反復回数
      * @throws IOException 入出力例外
      */
-    public void run_Hybrid(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
-        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
-        if (!flyingUavQueue.isEmpty()) {
-            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
-        }
-
-        // Phase 5: SearcherRetryManagerを使用
+    public void run_Hybrid(Client client, ClientController clientController, int numLoop) throws IOException {
         final int currentRunCounter = runCounter;
         SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
             client,
             clientController,
-            flyingUavQueue,
-            uavQueue,
             numLoop,
             hybridPhysarumSolverRouteSearcher,
-            // preSearchAction: 検索前処理（容量同期など）
             () -> {
                 if (currentRunCounter != 0) {
                     reset();
                 }
-                // Phase 3b-11: Redisモードの場合のみ、容量を同期
-                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-                    LinkCapacityManager capacityManager = new LinkCapacityManager();
-                    if (currentRunCounter == 0) {
-                        capacityManager.initializeCapacitiesToRedis(link, node);
-                    } else {
-                        capacityManager.syncCapacitiesToMemory(link, node);
-                    }
+                LinkCapacityManager capacityManager = new LinkCapacityManager();
+                if (currentRunCounter == 0) {
+                    capacityManager.initializeCapacitiesToRedis(link, node);
+                } else {
+                    capacityManager.syncCapacitiesToMemory(link, node);
                 }
             },
-            // postSearchAction: 検索後処理
-            () -> {
-                if (currentRunCounter != 0) {
-                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
-                }
-            }
+            () -> {}
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -465,47 +384,28 @@ public class ServerController {
      * Phase 5: SearcherRetryManagerによる再試行管理
      * @param client クライアント
      * @param clientController クライアントコントローラー
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      * @param numLoop 反復回数
      * @throws IOException 入出力例外
      */
-    public void run_Binary(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
-        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
-        if (!flyingUavQueue.isEmpty()) {
-            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
-        }
-
-        // Phase 5: SearcherRetryManagerを使用
+    public void run_Binary(Client client, ClientController clientController, int numLoop) throws IOException {
         final int currentRunCounter = runCounter;
         SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
             client,
             clientController,
-            flyingUavQueue,
-            uavQueue,
             numLoop,
             binaryExtendedPhysarumSolverRouteSearcher,
-            // preSearchAction: 検索前処理（容量同期など）
             () -> {
                 if (currentRunCounter != 0) {
                     reset();
                 }
-                // Phase 3b-11: Redisモードの場合のみ、容量を同期
-                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-                    LinkCapacityManager capacityManager = new LinkCapacityManager();
-                    if (currentRunCounter == 0) {
-                        capacityManager.initializeCapacitiesToRedis(link, node);
-                    } else {
-                        capacityManager.syncCapacitiesToMemory(link, node);
-                    }
+                LinkCapacityManager capacityManager = new LinkCapacityManager();
+                if (currentRunCounter == 0) {
+                    capacityManager.initializeCapacitiesToRedis(link, node);
+                } else {
+                    capacityManager.syncCapacitiesToMemory(link, node);
                 }
             },
-            // postSearchAction: 検索後処理
-            () -> {
-                if (currentRunCounter != 0) {
-                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
-                }
-            }
+            () -> {}
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -522,47 +422,28 @@ public class ServerController {
      * 最大フロー超過分は経路待ちキューで管理し、第一ホップ通過時に経路コピーで飛行開始
      * @param client クライアント
      * @param clientController クライアントコントローラー
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      * @param numLoop 反復回数
      * @throws IOException 入出力例外
      */
-    public void run_BisectionalPGEPS(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
-        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
-        if (!flyingUavQueue.isEmpty()) {
-            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
-        }
-
-        // Phase 5: SearcherRetryManagerを使用
+    public void run_BisectionalPGEPS(Client client, ClientController clientController, int numLoop) throws IOException {
         final int currentRunCounter = runCounter;
         SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
             client,
             clientController,
-            flyingUavQueue,
-            uavQueue,
             numLoop,
             bisectionalPGEPSRouteSearcher,
-            // preSearchAction: 検索前処理（容量同期など）
             () -> {
                 if (currentRunCounter != 0) {
                     reset();
                 }
-                // Phase 3b-11: Redisモードの場合のみ、容量を同期
-                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-                    LinkCapacityManager capacityManager = new LinkCapacityManager();
-                    if (currentRunCounter == 0) {
-                        capacityManager.initializeCapacitiesToRedis(link, node);
-                    } else {
-                        capacityManager.syncCapacitiesToMemory(link, node);
-                    }
+                LinkCapacityManager capacityManager = new LinkCapacityManager();
+                if (currentRunCounter == 0) {
+                    capacityManager.initializeCapacitiesToRedis(link, node);
+                } else {
+                    capacityManager.syncCapacitiesToMemory(link, node);
                 }
             },
-            // postSearchAction: 検索後処理
-            () -> {
-                if (currentRunCounter != 0) {
-                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
-                }
-            }
+            () -> {}
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -579,47 +460,28 @@ public class ServerController {
      * 最大フロー超過分は経路待ちキューで管理し、第一ホップ通過時に経路コピーで飛行開始
      * @param client クライアント
      * @param clientController クライアントコントローラー
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      * @param numLoop 反復回数
      * @throws IOException 入出力例外
      */
-    public void run_StepControlledPGEPS(Client client, ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
-        // 飛行中のUAVがある場合、UAVFlySchedulerを停止
-        if (!flyingUavQueue.isEmpty()) {
-            UAVFlyScheduler.stopFlyUAVUpdates(clientController);
-        }
-
-        // Phase 5: SearcherRetryManagerを使用
+    public void run_StepControlledPGEPS(Client client, ClientController clientController, int numLoop) throws IOException {
         final int currentRunCounter = runCounter;
         SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
             client,
             clientController,
-            flyingUavQueue,
-            uavQueue,
             numLoop,
             stepControlledPGEPSRouteSearcher,
-            // preSearchAction: 検索前処理（容量同期など）
             () -> {
                 if (currentRunCounter != 0) {
                     reset();
                 }
-                // Phase 3b-11: Redisモードの場合のみ、容量を同期
-                if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-                    LinkCapacityManager capacityManager = new LinkCapacityManager();
-                    if (currentRunCounter == 0) {
-                        capacityManager.initializeCapacitiesToRedis(link, node);
-                    } else {
-                        capacityManager.syncCapacitiesToMemory(link, node);
-                    }
+                LinkCapacityManager capacityManager = new LinkCapacityManager();
+                if (currentRunCounter == 0) {
+                    capacityManager.initializeCapacitiesToRedis(link, node);
+                } else {
+                    capacityManager.syncCapacitiesToMemory(link, node);
                 }
             },
-            // postSearchAction: 検索後処理
-            () -> {
-                if (currentRunCounter != 0) {
-                    UAVFlyScheduler.startFlyUAVUpdates(flyingUavQueue, uavQueue, clientController, beaconCluster, node);
-                }
-            }
+            () -> {}
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -628,16 +490,6 @@ public class ServerController {
         }
 
         runCounter++;
-    }
-
-    /**
-     * UAVを移動させる
-     * @param clientController クライアントコントローラー
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
-     */
-    public static void flyUAV(ClientController clientController, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
-        UAVFlightController.flyUAV(clientController, flyingUavQueue, uavQueue, link, beaconCluster, node);
     }
 
     /**

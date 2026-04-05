@@ -1,7 +1,6 @@
 package server.route;
 
 import client.Client;
-import client.ClientController;
 import controller.BoundaryController;
 import item.BeaconCluster;
 import item.Link;
@@ -14,7 +13,6 @@ import server.util.LogManager;
 import server.util.ResultOutputManager;
 
 import java.io.IOException;
-import java.util.Queue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -46,7 +44,7 @@ public class DijkstraRouteSearcher implements RouteSearcher {
     }
 
     @Override
-    public void search(Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+    public void search(Client client, int numLoop) throws IOException {
         // Dijkstraメソッドを呼び出して、結果の配列を受け取る
         int[] path = dijkstra(client);
 
@@ -54,7 +52,7 @@ public class DijkstraRouteSearcher implements RouteSearcher {
         int requiredUAVs = (int) client.getFlow().getTheNumberOfUAV();
 
         // 実際のUAVに経路を割り当てるためのメイン処理
-        runUAVFlow(client, path, flyingUavQueue, uavQueue, requiredUAVs);
+        runUAVFlow(client, path, requiredUAVs);
     }
 
     /**
@@ -147,20 +145,12 @@ public class DijkstraRouteSearcher implements RouteSearcher {
      * UAVに経路を割り当てる
      * @param client クライアント
      * @param path 経路
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      * @param requiredUAVs 必要なUAV数
      */
-    private void runUAVFlow(Client client, int[] path, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int requiredUAVs) {
+    private void runUAVFlow(Client client, int[] path, int requiredUAVs) {
         // Phase 4: 時間計測開始（全経路探索手法共通）
         ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);
-
-        // Phase 3b-6: WorkerModeに応じて処理を分岐
-        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-            runUAVFlowRedis(client, path, requiredUAVs);
-        } else {
-            runUAVFlowMemory(client, path, flyingUavQueue, uavQueue, requiredUAVs);
-        }
+        runUAVFlowRedis(client, path, requiredUAVs);
     }
 
     /**
@@ -264,53 +254,5 @@ public class DijkstraRouteSearcher implements RouteSearcher {
         return distances;
     }
 
-    /**
-     * 従来のメモリベースUAV処理
-     * @param client クライアント
-     * @param path 経路
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
-     * @param requiredUAVs 必要なUAV数
-     */
-    private void runUAVFlowMemory(Client client, int[] path, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int requiredUAVs) {
-        // 最初のリンクを取得
-        int u = path[0];
-        int v = path[1];
-
-        // UAVの飛行をスケジュールするためのスレッドプールを作成
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-
-        double minCapacity = link[u][v].getCapacity();
-        final int[] flowCounter = {0}; // PS法と同様にカウンターを配列で管理
-
-        // UAVがrequiredUAVsより少ない場合はすべてのUAVに経路を割り当て
-        for (int f = 0; f < requiredUAVs; f++) {
-            int currentUAVIndex = f;
-            Uav currentUAV = client.getFlow().getUav(currentUAVIndex);
-
-            final int finalF = f;
-            scheduler.schedule(() -> {
-                currentUAV.setPath(path);
-
-                // PS法と同様に、スケジュール実行時に容量を確認
-                if (flowCounter[0] < minCapacity) {
-                    currentUAV.startTimer();
-                    currentUAV.setFlyingLink(link[u][v]);
-                    currentUAV.setPassedLink(link[u][v]);
-                    flyingUavQueue.add(currentUAV);
-                    link[u][v].decrementCapacity();
-                    flowCounter[0]++;
-                    LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v);
-                } else {
-                    // 容量が足りない場合は待機
-                    currentUAV.startWaitingTimer();
-                    currentUAV.setStayedBeaconId(u);
-                    beaconCluster.getBeacon(u).addUav(currentUAV);
-                    beaconCluster.getBeacon(u).incrementWaitingUavCount();
-                    uavQueue.add(currentUAV);
-                    LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ")");
-                }
-            }, finalF * 2, TimeUnit.SECONDS);
-        }
-    }
 }
+

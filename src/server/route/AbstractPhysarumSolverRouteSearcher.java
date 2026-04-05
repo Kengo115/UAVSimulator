@@ -1,11 +1,10 @@
 package server.route;
 
 import client.Client;
-import client.ClientController;
 import controller.BoundaryController;
+import item.Uav;
 import item.BeaconCluster;
 import item.Link;
-import item.Uav;
 import server.controller.ServerController;
 import server.redis.ClientTimeManager;
 import server.redis.LinkCapacityManager;
@@ -22,8 +21,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -107,7 +104,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     }
 
     @Override
-    public void search(Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+    public void search(Client client, int numLoop) throws IOException {
         int ct = 0;
         double eps = 1e-10;
         int testIter = 10;
@@ -220,7 +217,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 // 実際のUAVに経路を割り当てるためのメイン処理
                 // Phase 1: BFSでフロー≥1.0の経路を探索
                 // Phase 2: グリーディ探索で残りのUAVに経路を割り当て
-                runUAVFlow(startNode, goalNode, requiredUAVs, client, flyingUavQueue, uavQueue);
+                runUAVFlow(startNode, goalNode, requiredUAVs, client);
             }
         }
     }
@@ -280,19 +277,11 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
      * @param goalNode 目標ノード
      * @param requiredUAVs 必要なUAV数
      * @param client クライアント
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
      */
-    protected void runUAVFlow(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
+    protected void runUAVFlow(int startNode, int goalNode, int requiredUAVs, Client client) {
         // Phase 4: 時間計測開始（全経路探索手法共通）
         ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);
-
-        // Phase 3b-6: WorkerModeに応じて処理を分岐
-        if (BoundaryController.getCurrentWorkerMode() == BoundaryController.WorkerMode.REDIS) {
-            runUAVFlowRedis(startNode, goalNode, requiredUAVs, client);
-        } else {
-            runUAVFlowMemory(startNode, goalNode, requiredUAVs, client, flyingUavQueue, uavQueue);
-        }
+        runUAVFlowRedis(startNode, goalNode, requiredUAVs, client);
     }
 
     /**
@@ -556,108 +545,6 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         return null;
     }
 
-    /**
-     * 従来のメモリベースUAV処理
-     */
-    protected void runUAVFlowMemory(int startNode, int goalNode, int requiredUAVs, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
-        UAV_count = 0;
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-        CountDownLatch latch = new CountDownLatch(requiredUAVs);
-        boolean flowAvailable = true;
-
-        while (UAV_count < requiredUAVs && flowAvailable) {
-            int previousUAVCount = UAV_count;
-            min_Flow = 100;
-
-            int[] path = new int[40];
-            int pathIndex = 0;
-            path[pathIndex++] = startNode;
-
-            maxPathIndex = pathIndex;
-
-            int flow = explorePath(startNode, startNode, goalNode, path, pathIndex, 0);
-
-            if (flow > 0) {
-                int pathLength = maxPathIndex;
-                int[] pathArray = Arrays.copyOf(path, pathLength);
-
-                int u = pathArray[0];
-                int v = pathArray[1];
-
-                double minCapacity = link[u][v].getCapacity();
-                final int[] flowCounter = {0};
-
-                for (int f = 0; f < flow; f++) {
-                    int currentUAVIndex;
-
-                    synchronized (this) {
-                        UAV_count++;
-                        currentUAVIndex = UAV_count - 1;
-                    }
-
-                    Uav currentUAV = client.getFlow().getUav(currentUAVIndex);
-
-                    final int finalF = f;
-                    scheduler.schedule(() -> {
-                        currentUAV.setPath(pathArray);
-                        server.uav.FlightDataRecorder.recordRoute(currentUAV, getRouteRecordTag());
-
-                        // Phase 7-2: 経路割り当て情報を記録（メモリモード）
-                        try {
-                            ResultOutputManager.outputRouteAssignment(
-                                currentUAV.getId(),
-                                currentUAV.getSource().getId(),
-                                currentUAV.getDistination().getId(),
-                                currentUAV.getPath(),
-                                currentUAV.getClientId()
-                            );
-                        } catch (IOException e) {
-                            LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー（メモリモード）", e);
-                        }
-
-                        if (flowCounter[0] < minCapacity) {
-                            currentUAV.startTimer();
-                            currentUAV.setFlyingLink(link[u][v]);
-                            currentUAV.setPassedLink(link[u][v]);
-                            flyingUavQueue.add(currentUAV);
-                            link[u][v].decrementCapacity();
-                            flowCounter[0]++;
-                            LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is flying from " + u + " to " + v);
-                        } else {
-                            currentUAV.startWaitingTimer();
-                            currentUAV.setStayedBeaconId(u);
-                            beaconCluster.getBeacon(u).addUav(currentUAV);
-                            beaconCluster.getBeacon(u).incrementWaitingUavCount();
-                            uavQueue.add(currentUAV);
-                            LogManager.getInstance().log("client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " is waiting at " + u + "(" + u + " -> " + v + ")");
-                        }
-
-                        latch.countDown();
-                    }, finalF * 2, TimeUnit.SECONDS);
-                }
-            } else {
-                flowAvailable = false;
-            }
-
-            if (UAV_count == requiredUAVs) break;
-        }
-
-        scheduler.shutdown();
-        try {
-            scheduler.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LogManager.getInstance().error("スレッドが割り込まれました: " + e.getMessage());
-        }
-
-        if (!flowAvailable) {
-            int needUAV = requiredUAVs - UAV_count;
-            if (needUAV > 0) {
-                LogManager.getInstance().log("全てのUAVに経路が割り当てられませんでした。残り" + needUAV + "台のUAVを再割り当てします。");
-                adjustRemainingFlow(needUAV, startNode, goalNode, client, flyingUavQueue, uavQueue);
-            }
-        }
-    }
 
     /**
      * Phase 1: 幅優先探索でフロー≥1.0の経路を探索し、floor(minFlow)台のUAVを割り当てる
@@ -865,79 +752,6 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         return true;
     }
 
-    /**
-     * Phase 2: 残りのUAVにグリーディ探索で経路を割り当てる（メモリ版）
-     * 各UAVごとに最大残存フローのリンクを選択して経路を決定
-     *
-     * @param needUAV 必要なUAV数
-     * @param startNode 開始ノード
-     * @param goalNode 目標ノード
-     * @param client クライアント
-     * @param flyingUavQueue 飛行中のUAVキュー
-     * @param uavQueue 待機中のUAVキュー
-     */
-    protected void adjustRemainingFlow(int needUAV, int startNode, int goalNode, Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue) {
-        LogManager.getInstance().log("Phase 2: グリーディ探索で残り" + needUAV + "台を割り当て（メモリモード）");
-        int countOfUAV = 0;
-
-        while (countOfUAV < needUAV) {
-            // 各UAVごとにグリーディ経路を探索
-            int[] path = new int[40];
-            boolean found = explorePathGreedy(startNode, goalNode, path);
-
-            if (!found) {
-                // 経路が見つからない場合はEPSリトライをトリガー
-                LogManager.getInstance().log("Phase 2: UAV " + (UAV_count + countOfUAV + 1) +
-                    " の経路が見つかりませんでした（メモリモード）。EPSリトライをトリガーします。");
-                throw new SolverFailedException(client.getId(), 0, "Phase2-PathNotFound-Memory");
-            } else {
-                // explorePathGreedyはmaxPathIndexを設定するので、それを使用
-                path = Arrays.copyOf(path, maxPathIndex);
-            }
-
-            int[] assignedPath = path;
-            int u = assignedPath[0];
-            int v = assignedPath[1];
-            double minCapacity = link[u][v].getCapacity();
-
-            int currentUAVIndex = UAV_count + countOfUAV;
-            Uav currentUAV = client.getFlow().getUav(currentUAVIndex);
-            currentUAV.setPath(assignedPath);
-            server.uav.FlightDataRecorder.recordRoute(currentUAV, getRemainingRouteRecordTag());
-
-            // Phase 7-2: 経路割り当て情報を記録（メモリモード・Phase 2）
-            try {
-                ResultOutputManager.outputRouteAssignment(
-                    currentUAV.getId(),
-                    currentUAV.getSource().getId(),
-                    currentUAV.getDistination().getId(),
-                    currentUAV.getPath(),
-                    currentUAV.getClientId()
-                );
-            } catch (IOException e) {
-                LogManager.getInstance().error("Phase 2: 経路割り当て記録エラー（メモリモード）", e);
-            }
-
-            if (countOfUAV < minCapacity) {
-                currentUAV.startTimer();
-                currentUAV.setFlyingLink(link[u][v]);
-                currentUAV.setPassedLink(link[u][v]);
-                flyingUavQueue.add(currentUAV);
-                link[u][v].decrementCapacity();
-                LogManager.getInstance().log("Phase 2: client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " flying " + u + "->" + v + " (経路: " + Arrays.toString(assignedPath) + ")");
-            } else {
-                currentUAV.startWaitingTimer();
-                currentUAV.setStayedBeaconId(u);
-                beaconCluster.getBeacon(u).addUav(currentUAV);
-                beaconCluster.getBeacon(u).incrementWaitingUavCount();
-                uavQueue.add(currentUAV);
-                LogManager.getInstance().log("Phase 2: client" + currentUAV.getClientId() + " UAV" + currentUAV.getId() + " waiting at " + u + " (経路: " + Arrays.toString(assignedPath) + ")");
-            }
-            countOfUAV++;
-        }
-
-        UAV_count += countOfUAV;
-    }
 
     /**
      * ネットワーク全体のフローを整数に丸める（流量保存則を維持）

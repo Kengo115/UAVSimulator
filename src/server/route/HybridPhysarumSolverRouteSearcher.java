@@ -3,7 +3,6 @@ package server.route;
 import client.Client;
 import item.BeaconCluster;
 import item.Link;
-import item.Uav;
 import server.controller.ServerController;
 import server.util.ICCGSolver;
 import server.util.LogManager;
@@ -12,7 +11,6 @@ import server.util.ResultOutputManager;
 import server.route.SolverFailedException;
 
 import java.io.IOException;
-import java.util.Queue;
 
 /**
  * ハイブリッドPhysarumSolverルートサーチャー
@@ -91,10 +89,10 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
     }
 
     @Override
-    public void search(Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+    public void search(Client client, int numLoop) throws IOException {
         // 通常のUAV割り当てのみを行う場合は親クラスのメソッドを呼び出す
         if (numLoop == 0) {
-            super.search(client, flyingUavQueue, uavQueue, numLoop);
+            super.search(client, numLoop);
             return;
         }
 
@@ -418,7 +416,7 @@ public class HybridPhysarumSolverRouteSearcher extends ExtendedPhysarumSolverRou
             }
             LogManager.getInstance().log("HybridPhysarumSolver: Total flow sum = " + totalFlowSum + " (expected: " + requiredUAVs + ")");
             
-            runUAVFlow(sourceNode, destNode, requiredUAVs, client, flyingUavQueue, uavQueue);
+            runUAVFlow(sourceNode, destNode, requiredUAVs, client);
             
         } catch (Exception e) {
             // エラー詳細をログ出力

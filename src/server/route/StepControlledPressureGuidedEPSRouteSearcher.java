@@ -3,7 +3,6 @@ package server.route;
 import client.Client;
 import item.BeaconCluster;
 import item.Link;
-import item.Uav;
 import server.controller.ServerController;
 import server.util.ICCGSolver;
 import server.util.LogManager;
@@ -16,7 +15,6 @@ import server.scheduler.FlightScheduler;
 import server.route.SolverFailedException;
 
 import java.io.IOException;
-import java.util.Queue;
 
 /**
  * 段階制御型圧力誘導EPS (Step-Controlled Pressure-Guided EPS)
@@ -98,10 +96,10 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
     }
 
     @Override
-    public void search(Client client, Queue<Uav> flyingUavQueue, Queue<Uav> uavQueue, int numLoop) throws IOException {
+    public void search(Client client, int numLoop) throws IOException {
         // 通常のUAV割り当てのみを行う場合は親クラスのメソッドを呼び出す
         if (numLoop == 0) {
-            super.search(client, flyingUavQueue, uavQueue, numLoop);
+            super.search(client, numLoop);
             return;
         }
 
@@ -418,7 +416,7 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
             // フロー分解アルゴリズムでは非整数フローは許容される
             // （explorePathがfloor(minFlow)で整数台を抽出、explorePathGreedyが残りを処理）
 
-            runUAVFlow(sourceNode, destNode, epsUAVCount, client, flyingUavQueue, uavQueue);
+            runUAVFlow(sourceNode, destNode, epsUAVCount, client);
             
         } catch (Exception e) {
             // エラー詳細をログ出力
