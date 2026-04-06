@@ -85,7 +85,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>controller.BoundaryController</mainClass>
+                            <mainClass>operator.BoundaryController</mainClass>
                         </manifest>
                     </archive>
                 </configuration>

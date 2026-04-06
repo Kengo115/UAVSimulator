@@ -1,7 +1,7 @@
 package test;
 
-import server.redis.LinkCapacityManager;
-import server.redis.RedisConnectionManager;
+import network_manager.redis.LinkCapacityManager;
+import shared.redis.RedisConnectionManager;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
