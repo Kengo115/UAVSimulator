@@ -662,9 +662,7 @@ public class PhaseController {
     private void writePhaseTransitionToCSV(long timestamp, int phase, double congestionRate, double congestedLinkRate) {
         try {
             if (phaseTransitionFilePath == null) {
-                BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-                String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
-                String dirPath = "src/result/" + scaleDir + "/" + method.getName();
+                String dirPath = BoundaryController.getResultDir();
 
                 File dir = new File(dirPath);
                 if (!dir.exists()) {
@@ -703,9 +701,7 @@ public class PhaseController {
      */
     private void writePhaseStatsToCSV() {
         try {
-            BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-            String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
-            String dirPath = "src/result/" + scaleDir + "/" + method.getName();
+            String dirPath = BoundaryController.getResultDir();
 
             File dir = new File(dirPath);
             if (!dir.exists()) {

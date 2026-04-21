@@ -428,8 +428,9 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                     Link117DebugLogger.getInstance().logRouteAssign(finalClientId, finalUavId, finalPathArray, 1);
 
                     // Phase 7-2: 経路割り当て情報を記録
+                    // finalClientIdは1始まり、runCounterは0始まりなので-1して調整
                     try {
-                        ResultOutputManager.outputRouteAssignment(job, finalClientId);
+                        ResultOutputManager.outputRouteAssignment(job, finalClientId - 1);
                     } catch (IOException e) {
                         LogManager.getInstance().error("Phase 7-2: 経路割り当て記録エラー", e);
                     }

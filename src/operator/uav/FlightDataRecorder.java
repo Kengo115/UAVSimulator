@@ -45,9 +45,7 @@ public class FlightDataRecorder {
      * @return ディレクトリパス
      */
     private static String getDirectoryPath(String baseDir) {
-        BoundaryController.RouteSearchMethod method = BoundaryController.getCurrentMethod();
-        String scaleDir = BoundaryController.isLargeScaleMode() ? "large_scale" : "small_scale";
-        return "src/result/" + scaleDir + "/" + method.getName() + "/" + baseDir;
+        return BoundaryController.getResultDir() + "/" + baseDir;
     }
 
     /**
