@@ -1,12 +1,11 @@
 package operator.scheduler;
 import shared.redis.ClientTimeManager;
-import network_manager.scheduler.FlightScheduler;
+import shared.redis.PathWaitingManager;
 
 import operator.BoundaryController;
 import operator.ClientScheduleLoader;
 import shared.item.BeaconCluster;
 import operator.config.StatisticalSimulationConfig;
-import network_manager.redis.PathWaitingManager;
 import shared.util.LinkStatusRecorder;
 import shared.util.LogManager;
 
@@ -133,9 +132,8 @@ public class StatisticalSimulationController {
         // Phase 12-Fix: PathWaitingManagerを完全クリア（前回実行の残留UAV削除）
         // これにより、client3やclient5358のような「リトライなしでの重複」を防ぐ
         try {
-            FlightScheduler flightScheduler = FlightScheduler.getInstance();
-            PathWaitingManager pathWaitingManager = flightScheduler.getPathWaitingManager();
-            if (pathWaitingManager != null && pathWaitingManager.isConnected()) {
+            PathWaitingManager pathWaitingManager = new PathWaitingManager();
+            if (pathWaitingManager.isConnected()) {
                 int totalWaiting = pathWaitingManager.getTotalWaitingCount();
                 if (totalWaiting > 0) {
                     LogManager.getInstance().log(

@@ -1,4 +1,4 @@
-package network_manager.redis;
+package shared.item;
 
 import java.io.Serializable;
 import java.util.Arrays;

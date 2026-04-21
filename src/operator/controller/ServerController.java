@@ -15,7 +15,7 @@ import operator.route.HybridPhysarumSolverRouteSearcher;
 import operator.route.PhysarumSolverRouteSearcher;
 import operator.route.RouteSearcher;
 import operator.route.StepControlledPressureGuidedEPSRouteSearcher;
-import network_manager.redis.LinkCapacityManager;
+import shared.redis.LinkCapacityManager;
 import operator.scheduler.SearcherRetryManager;
 import shared.util.LogManager;
 import shared.util.ResultOutputManager;

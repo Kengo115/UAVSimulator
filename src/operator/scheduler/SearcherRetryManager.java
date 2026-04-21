@@ -1,12 +1,14 @@
 package operator.scheduler;
-import network_manager.scheduler.FlightScheduler;
 
 import shared.client.Client;
 import shared.client.ClientController;
-import network_manager.redis.PathWaitingManager;
+import shared.redis.PathWaitingManager;
+import shared.redis.RedisConnectionManager;
 import operator.BoundaryController;
 import operator.route.RouteSearcher;
 import operator.route.SolverFailedException;
+import org.redisson.api.RTopic;
+import org.redisson.api.RedissonClient;
 import shared.util.LogManager;
 
 import java.io.BufferedWriter;
@@ -211,28 +213,23 @@ public class SearcherRetryManager {
                     // Phase 12-Fix: 飛行中UAVとPathWaitingManagerのクリーンアップ（PG-EPS重複UAV防止）
                     // リトライ時に古いエントリが残留すると、成功時に重複UAVが記録される
                     try {
-                        FlightScheduler flightScheduler = FlightScheduler.getInstance();
-
-                        // Phase 12-Fix: Step 1 - 飛行中UAVをキャンセル（最重要）
-                        // dequeueされて飛行中のUAVも確実にキャンセルする
-                        int cancelledFlights = flightScheduler.cancelClientFlights(clientId);
-                        if (cancelledFlights > 0) {
-                            String cancelMsg = "Phase 12-Fix: client" + clientId + " 飛行中UAVをキャンセル (UAV数=" + cancelledFlights + ")";
-                            LogManager.getInstance().log(cancelMsg);
-                            logToSearcherFailureFile(cancelMsg);
-                        }
+                        // Phase 12-Fix: Step 1 - 飛行中UAVをキャンセル（RTopic経由でFlightSchedulerに通知）
+                        RedissonClient redisClient = RedisConnectionManager.getInstance().getClient();
+                        RTopic cancelTopic = redisClient.getTopic("operator:cancel_flight");
+                        cancelTopic.publish(clientId);
+                        String cancelMsg = "Phase 12-Fix: client" + clientId + " 飛行中UAVキャンセル要求を送信";
+                        LogManager.getInstance().log(cancelMsg);
+                        logToSearcherFailureFile(cancelMsg);
 
                         // Phase 12: Step 2 - PathWaitingManagerキューをクリア
                         // キューに残っているUAV（まだdequeueされていないもの）を削除
-                        PathWaitingManager pathWaitingManager = flightScheduler.getPathWaitingManager();
-                        if (pathWaitingManager != null) {
-                            int waitingCount = pathWaitingManager.getWaitingCount(clientId);
-                            if (waitingCount > 0) {
-                                pathWaitingManager.clear(clientId);
-                                String clearMsg = "Phase 12: client" + clientId + " PathWaitingManagerキューをクリア (削除UAV数=" + waitingCount + ")";
-                                LogManager.getInstance().log(clearMsg);
-                                logToSearcherFailureFile(clearMsg);
-                            }
+                        PathWaitingManager pathWaitingManager = new PathWaitingManager();
+                        int waitingCount = pathWaitingManager.getWaitingCount(clientId);
+                        if (waitingCount > 0) {
+                            pathWaitingManager.clear(clientId);
+                            String clearMsg = "Phase 12: client" + clientId + " PathWaitingManagerキューをクリア (削除UAV数=" + waitingCount + ")";
+                            LogManager.getInstance().log(clearMsg);
+                            logToSearcherFailureFile(clearMsg);
                         }
                     } catch (Exception cleanupEx) {
                         LogManager.getInstance().error("Phase 12-Fix: client" + clientId + " クリーンアップ失敗", cleanupEx);
@@ -247,26 +244,22 @@ public class SearcherRetryManager {
 
                         // Phase 12-Fix: 最大再試行超過時も完全クリーンアップ（残留UAV削除）
                         try {
-                            FlightScheduler flightScheduler = FlightScheduler.getInstance();
-
-                            // Phase 12-Fix: 飛行中UAVをキャンセル
-                            int cancelledFlights = flightScheduler.cancelClientFlights(clientId);
-                            if (cancelledFlights > 0) {
-                                String cancelMsg = "Phase 12-Fix: client" + clientId + " 最大再試行超過により飛行中UAVをキャンセル (UAV数=" + cancelledFlights + ")";
-                                LogManager.getInstance().log(cancelMsg);
-                                logToSearcherFailureFile(cancelMsg);
-                            }
+                            // Phase 12-Fix: 飛行中UAVをキャンセル（RTopic経由でFlightSchedulerに通知）
+                            RedissonClient redisClient = RedisConnectionManager.getInstance().getClient();
+                            RTopic cancelTopic = redisClient.getTopic("operator:cancel_flight");
+                            cancelTopic.publish(clientId);
+                            String cancelMsg = "Phase 12-Fix: client" + clientId + " 最大再試行超過により飛行中UAVキャンセル要求を送信";
+                            LogManager.getInstance().log(cancelMsg);
+                            logToSearcherFailureFile(cancelMsg);
 
                             // Phase 12: PathWaitingManagerキューをクリア
-                            PathWaitingManager pathWaitingManager = flightScheduler.getPathWaitingManager();
-                            if (pathWaitingManager != null) {
-                                int waitingCount = pathWaitingManager.getWaitingCount(clientId);
-                                if (waitingCount > 0) {
-                                    pathWaitingManager.clear(clientId);
-                                    String clearMsg = "Phase 12: client" + clientId + " 最大再試行超過によりPathWaitingManagerキューをクリア (削除UAV数=" + waitingCount + ")";
-                                    LogManager.getInstance().log(clearMsg);
-                                    logToSearcherFailureFile(clearMsg);
-                                }
+                            PathWaitingManager pathWaitingManager = new PathWaitingManager();
+                            int waitingCount = pathWaitingManager.getWaitingCount(clientId);
+                            if (waitingCount > 0) {
+                                pathWaitingManager.clear(clientId);
+                                String clearMsg = "Phase 12: client" + clientId + " 最大再試行超過によりPathWaitingManagerキューをクリア (削除UAV数=" + waitingCount + ")";
+                                LogManager.getInstance().log(clearMsg);
+                                logToSearcherFailureFile(clearMsg);
                             }
                         } catch (Exception cleanupEx) {
                             LogManager.getInstance().error("Phase 12-Fix: client" + clientId + " クリーンアップ失敗（最大再試行超過時）", cleanupEx);

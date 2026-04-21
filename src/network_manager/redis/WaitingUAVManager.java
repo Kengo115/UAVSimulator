@@ -3,6 +3,7 @@ import shared.redis.RedisConnectionManager;
 
 import org.redisson.api.RDeque;
 import org.redisson.api.RedissonClient;
+import shared.item.UAVJob;
 import shared.util.LogManager;
 
 /**

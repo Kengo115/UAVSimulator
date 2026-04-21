@@ -1,16 +1,14 @@
 package operator.route;
-import network_manager.scheduler.FlightScheduler;
-
 import shared.client.Client;
 import operator.BoundaryController;
 import shared.item.Uav;
 import shared.item.BeaconCluster;
 import shared.item.Link;
+import shared.item.UAVJob;
 import operator.controller.ServerController;
 import shared.redis.ClientTimeManager;
-import network_manager.redis.LinkCapacityManager;
-import network_manager.redis.UAVJob;
-import network_manager.redis.UAVJobQueue;
+import shared.redis.LinkCapacityManager;
+import shared.redis.UAVJobQueue;
 import shared.util.Link117DebugLogger;
 import shared.util.LogManager;
 import shared.util.MathUtils;

@@ -9,9 +9,9 @@ import shared.util.LogManager;
 import shared.util.MathUtils;
 import shared.util.ResultOutputManager;
 import shared.redis.ClientTimeManager;
-import network_manager.redis.PathWaitingManager;
-import network_manager.redis.UAVJob;
-import network_manager.scheduler.FlightScheduler;
+import shared.redis.PathWaitingManager;
+import shared.item.UAVJob;
+import operator.BoundaryController;
 import operator.route.SolverFailedException;
 
 import java.io.IOException;
@@ -379,8 +379,8 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                 LogManager.getInstance().log("StepControlledPGEPS Phase 4: EPS割当=" + (int)epsAssignedFlow +
                     ", 経路待ち登録=" + remainingUAVs + " (要求UAV数=" + requiredUAVs + ")");
 
-                // FlightSchedulerからPathWaitingManagerを取得
-                PathWaitingManager pathWaitingManager = FlightScheduler.getInstance().getPathWaitingManager();
+                // PathWaitingManagerを直接インスタンス化
+                PathWaitingManager pathWaitingManager = new PathWaitingManager();
 
                 // 経路待ちUAVをキューに登録（EPS割り当て分の次のIDから開始）
                 int epsAssigned = (int) epsAssignedFlow;
@@ -398,7 +398,7 @@ public class StepControlledPressureGuidedEPSRouteSearcher extends ExtendedPhysar
                         sourceNode,
                         destNode
                     );
-                    waitingJob.setSessionId(FlightScheduler.getInstance().getSessionId());
+                    waitingJob.setSessionId(BoundaryController.getCurrentSessionId());
                     // Phase 4: 経路待ち開始時刻を記録
                     waitingJob.startPathWaiting();
                     pathWaitingManager.enqueue(client.getId(), waitingJob);

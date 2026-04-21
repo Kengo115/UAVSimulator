@@ -5,7 +5,7 @@ import operator.BoundaryController;
 import shared.item.Beacon;
 import shared.item.BeaconCluster;
 import shared.item.Link;
-import network_manager.redis.UAVJob;
+import shared.item.UAVJob;
 
 import java.io.File;
 import java.io.FileWriter;

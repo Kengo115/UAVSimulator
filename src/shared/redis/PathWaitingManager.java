@@ -1,5 +1,7 @@
-package network_manager.redis;
-import shared.redis.RedisConnectionManager;
+package shared.redis;
+
+import shared.item.UAVJob;
+import network_manager.redis.UAVEventChannels;
 
 import org.redisson.api.RDeque;
 import org.redisson.api.RedissonClient;

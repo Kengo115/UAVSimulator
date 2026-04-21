@@ -1,12 +1,15 @@
 package operator.scheduler;
-import network_manager.scheduler.FlightScheduler;
 
 import operator.BoundaryController;
 import operator.ClientScheduleLoader;
 import shared.item.Link;
 import operator.config.SimulationConfig;
+import shared.redis.RedisConnectionManager;
 import shared.util.LinkStatusRecorder;
 import shared.util.LogManager;
+import org.redisson.api.RMap;
+import org.redisson.api.RTopic;
+import org.redisson.api.RedissonClient;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -77,6 +80,9 @@ public class PhaseController {
 
     // 実行中フラグ
     private AtomicBoolean running = new AtomicBoolean(false);
+
+    // Phase C1: flight:all_completed RTopic 受信フラグ
+    private volatile boolean allFlightsCompleted = false;
 
     // 動的間隔調整用の現在の間隔（秒）
     private double currentIntervalSec = 2.0;
@@ -258,6 +264,25 @@ public class PhaseController {
     }
 
     /**
+     * Phase C1: flight:all_completed トピックを購読して全UAV完了通知を受け取る
+     */
+    private void subscribeFlightCompletion() {
+        try {
+            RedissonClient client = RedisConnectionManager.getInstance().getClient();
+            RTopic topic = client.getTopic("flight:all_completed");
+            topic.addListener(String.class, (channel, sessionId) -> {
+                allFlightsCompleted = true;
+                LogManager.getInstance().log(
+                    "Phase C1: flight:all_completed 受信 (sessionId=" + sessionId + ")"
+                );
+            });
+            LogManager.getInstance().log("Phase C1: flight:all_completed トピックを購読しました");
+        } catch (Exception e) {
+            LogManager.getInstance().error("Phase C1: flight:all_completed 購読失敗", e);
+        }
+    }
+
+    /**
      * フェーズ制御を開始
      */
     public void start() {
@@ -269,6 +294,10 @@ public class PhaseController {
         simulationStartTime = System.currentTimeMillis();
         simulationEndTime = simulationStartTime + config.getDurationMillis();
         phaseStartTime = simulationStartTime;
+
+        // Phase C1: 全UAV完了通知を購読
+        allFlightsCompleted = false;
+        subscribeFlightCompletion();
 
         running.set(true);
 
@@ -411,28 +440,31 @@ public class PhaseController {
                 break;
 
             case PHASE4_RECOVERY:
-                // Phase 7-11: 遷移条件を「全UAV飛行完了」に変更
-                // 飛行中・待機中・経路待ちのUAVがすべて0になったら終了
-                try {
-                    FlightScheduler scheduler = FlightScheduler.getInstance();
-                    if (scheduler.isAllFlightsCompleted()) {
-                        LogManager.getInstance().log("Phase 7-11: 全UAV飛行完了 - シミュレーション終了");
-                        stop();
-                        return;
-                    }
+                // Phase C1: RTopic 経由で全UAV完了通知を受け取ったら終了
+                if (allFlightsCompleted) {
+                    LogManager.getInstance().log("Phase 7-11: 全UAV飛行完了 - シミュレーション終了");
+                    stop();
+                    return;
+                }
 
-                    // 10秒ごとに残りUAV数をログ出力
-                    if (phaseElapsedMs % 10000 < 100) {
-                        int[] status = scheduler.getFlightStatus();
-                        int remaining = status[0] + status[1] + status[2];
+                // 10秒ごとに残りUAV数をログ出力（Redis Hash 参照）
+                if (phaseElapsedMs % 10000 < 100) {
+                    try {
+                        RedissonClient redisClient = RedisConnectionManager.getInstance().getClient();
+                        RMap<String, Integer> statusMap = redisClient.getMap(
+                            "flight:status:" + BoundaryController.getCurrentSessionId());
+                        int flying      = statusMap.getOrDefault("flying",      0);
+                        int waiting     = statusMap.getOrDefault("waiting",     0);
+                        int pathWaiting = statusMap.getOrDefault("pathWaiting", 0);
+                        int completed   = statusMap.getOrDefault("completed",   0);
+                        int remaining   = flying + waiting + pathWaiting;
                         LogManager.getInstance().log(String.format(
                             "Phase 7-11 [Phase4進捗]: 残りUAV=%d (飛行中=%d, 待機中=%d, 経路待ち=%d), 完了=%d",
-                            remaining, status[0], status[1], status[2], status[3]
+                            remaining, flying, waiting, pathWaiting, completed
                         ));
+                    } catch (Exception e) {
+                        LogManager.getInstance().log("Phase 7-11: 飛行状況取得失敗: " + e.getMessage());
                     }
-                } catch (Exception e) {
-                    // FlightScheduler未初期化の場合は時間ベースで終了
-                    LogManager.getInstance().log("Phase 7-11: FlightScheduler未初期化、時間ベースで継続");
                 }
                 break;
         }
@@ -810,6 +842,7 @@ public class PhaseController {
         phaseTransitionFilePath = null;
         phaseTransitionHeaderWritten = false;
         phaseStatsFilePath = null;
+        allFlightsCompleted = false;
         // フェーズ統計をリセット
         for (int i = 0; i < phaseStats.length; i++) {
             phaseStats[i] = null;

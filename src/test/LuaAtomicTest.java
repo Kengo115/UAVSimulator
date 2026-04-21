@@ -1,6 +1,6 @@
 package test;
 
-import network_manager.redis.LinkCapacityManager;
+import shared.redis.LinkCapacityManager;
 import shared.redis.RedisConnectionManager;
 
 import java.util.concurrent.*;

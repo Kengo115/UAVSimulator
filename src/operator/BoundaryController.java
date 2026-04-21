@@ -11,6 +11,9 @@ import shared.network.TopologyFileReader;
 import operator.config.SimulationConfig;
 import operator.config.StatisticalSimulationConfig;
 import network_manager.redis.*;
+import shared.item.UAVJob;
+import shared.redis.LinkCapacityManager;
+import shared.redis.UAVJobQueue;
 import network_manager.scheduler.FlightScheduler;
 import operator.scheduler.PhaseController;
 import operator.scheduler.RandomClientGenerator;
@@ -1075,6 +1078,17 @@ public class BoundaryController {
                 System.out.println("  総UAV数: " + statController.getTotalUavCount());
                 System.out.println("  最終平均リンク負荷率: " + String.format("%.2f%%",
                         LinkStatusRecorder.getInstance().getAverageLoadRate()));
+
+                // ワーカー・スケジューラを停止してJVMが正常終了できるようにする
+                // （非デーモンスレッドを明示的に停止しないとJVMが終了しない）
+                shutdownRedisWorker();
+                try {
+                    RedisConnectionManager.getInstance().disconnect();
+                } catch (Exception e) {
+                    System.err.println("Redis切断中にエラーが発生しました: " + e.getMessage());
+                }
+                LogManager.getInstance().log("ログを閉じます。");
+                LogManager.getInstance().close();
 
                 // 統計的シミュレーションモードでは以降のスケジュール処理をスキップ
                 schedule = new ArrayList<>();

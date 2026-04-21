@@ -6,7 +6,7 @@ import org.redisson.api.RedissonClient;
 import shared.redis.RedisConnectionManager;
 import network_manager.redis.UAVCompletionEvent;
 import network_manager.redis.UAVEventChannels;
-import network_manager.redis.UAVJob;
+import shared.item.UAVJob;
 import network_manager.redis.UAVLinkPassedEvent;
 
 import java.io.IOException;

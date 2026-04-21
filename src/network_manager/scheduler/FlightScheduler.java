@@ -1,8 +1,12 @@
 package network_manager.scheduler;
-import operator.scheduler.StatisticalSimulationController;
 import shared.redis.ClientTimeManager;
+import shared.redis.LinkCapacityManager;
+import shared.redis.PathWaitingManager;
 import shared.redis.RedisConnectionManager;
+import shared.redis.UAVJobQueue;
+import shared.item.UAVJob;
 
+import org.redisson.api.RMap;
 import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import network_manager.redis.*;
@@ -99,6 +103,9 @@ public class FlightScheduler {
 
                 // Phase 3b-10: オートスケーリング監視開始
                 startAutoScalingMonitor();
+
+                // Phase C2: キャンセルリクエストのサブスクライブ
+                subscribeCancelRequests(this.client);
 
                 // スレッド数遷移ログを初期化・記録
                 LogManager.getInstance().initThreadCountLog();
@@ -354,17 +361,10 @@ public class FlightScheduler {
             LogManager.getInstance().log(
                 "WARNING: リンク " + fromNode + "→" + toNode + " で待機UAVが " + waitingCount + " 台に達しました！"
             );
-            // StatisticalSimulationControllerにも診断ログを出力
-            try {
-                StatisticalSimulationController statController = StatisticalSimulationController.getInstance();
-                if (statController != null && statController.isRunning()) {
-                    statController.logDiagnostic("LINK_CONGESTION_WARNING",
-                        String.format("link=%d-%d,waiting_count=%d,client=%d,uav=%d",
-                            fromNode, toNode, waitingCount, job.getClientId(), job.getUavId()));
-                }
-            } catch (Exception e) {
-                // StatisticalSimulationControllerが未初期化の場合は無視
-            }
+            LogManager.getInstance().log(
+                "LINK_CONGESTION_WARNING: 待機UAV過多 (link=" + fromNode + "-" + toNode +
+                ",waiting_count=" + waitingCount + ",client=" + job.getClientId() + ",uav=" + job.getUavId() + ")"
+            );
         }
 
         // 飛行中から削除
@@ -425,6 +425,10 @@ public class FlightScheduler {
 
         // Phase 4: 事業者の時間計測（UAV完了通知）
         ClientTimeManager.getInstance().onUAVCompleted(job.getClientId());
+
+        // Phase 7-11: 飛行状況を Redis Hash に更新し、全完了チェック
+        updateFlightStatusToRedis();
+        isAllFlightsCompleted();
 
         // Phase 12-Fix: activeClientUAVsから削除
         ConcurrentHashMap<Integer, UAVJob> clientUAVMap = activeClientUAVs.get(job.getClientId());
@@ -542,6 +546,13 @@ public class FlightScheduler {
 
         // セッションIDをコピー（同一セッションであることを保証）
         waitingJob.setSessionId(job.getSessionId());
+
+        // Phase 4 Fix: 経路割り当てをroute.csvに記録（PathWaiting経由のUAVも記録する）
+        try {
+            ResultOutputManager.outputRouteAssignment(waitingJob, waitingJob.getClientId() - 1);
+        } catch (IOException e) {
+            LogManager.getInstance().error("Phase 4 Fix: route.csv 書き込みエラー (client" + clientId + " UAV" + waitingJob.getUavId() + ")", e);
+        }
 
         // ジョブキューに投入して飛行開始
         jobQueue.enqueueJob(waitingJob);
@@ -744,7 +755,7 @@ public class FlightScheduler {
 
     /**
      * Phase 7-11: 全UAV飛行完了判定
-     * 飛行中UAVと待機中UAVが両方0の場合にtrueを返す
+     * 飛行中UAVと待機中UAVが両方0の場合にtrueを返し、RTopic で通知する
      *
      * @return 全UAVが飛行完了している場合true
      */
@@ -760,9 +771,35 @@ public class FlightScheduler {
                 "Phase 7-11: 全UAV飛行完了確認 (飛行中=%d, 待機中=%d, 経路待ち=%d, 完了済み=%d)",
                 flying, waiting, pathWaiting, completedFlights.get()
             ));
+            // PhaseController に RTopic 経由で通知
+            if (client != null && currentSessionId != null) {
+                try {
+                    RTopic topic = client.getTopic("flight:all_completed");
+                    topic.publish(currentSessionId);
+                } catch (Exception e) {
+                    LogManager.getInstance().error("Phase 7-11: flight:all_completed 送信エラー", e);
+                }
+            }
         }
 
         return completed;
+    }
+
+    /**
+     * Phase 7-11: 飛行状況を Redis Hash に書き込む
+     * PhaseController が参照するステータス情報
+     */
+    private void updateFlightStatusToRedis() {
+        if (client == null || currentSessionId == null) return;
+        try {
+            RMap<String, Integer> statusMap = client.getMap("flight:status:" + currentSessionId);
+            statusMap.put("flying",      activeFlights.get());
+            statusMap.put("waiting",     waitingManager.getTotalWaitingCount());
+            statusMap.put("pathWaiting", pathWaitingManager != null ? pathWaitingManager.getTotalWaitingCount() : 0);
+            statusMap.put("completed",   completedFlights.get());
+        } catch (Exception e) {
+            LogManager.getInstance().error("Phase 7-11: flight:status 更新エラー", e);
+        }
     }
 
     /**
@@ -865,6 +902,21 @@ public class FlightScheduler {
         }
 
         return cancelledCount;
+    }
+
+    /**
+     * Phase C2: operator:cancel_flight トピックを購読してキャンセルリクエストを処理
+     * SearcherRetryManager からの publish を受け取り cancelClientFlights() を呼ぶ
+     */
+    private void subscribeCancelRequests(RedissonClient redisClient) {
+        RTopic cancelTopic = redisClient.getTopic("operator:cancel_flight");
+        cancelTopic.addListener(Integer.class, (channel, clientId) -> {
+            LogManager.getInstance().log(
+                "Phase C2: operator:cancel_flight 受信 - client" + clientId + " のUAVをキャンセル"
+            );
+            cancelClientFlights(clientId);
+        });
+        LogManager.getInstance().log("Phase C2: operator:cancel_flight トピックを購読しました");
     }
 
     /**

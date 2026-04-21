@@ -1,5 +1,6 @@
-package network_manager.redis;
-import shared.redis.RedisConnectionManager;
+package shared.redis;
+
+import shared.item.UAVJob;
 
 import org.redisson.api.RBlockingQueue;
 import org.redisson.api.RedissonClient;

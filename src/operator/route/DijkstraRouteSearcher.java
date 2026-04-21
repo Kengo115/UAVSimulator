@@ -7,8 +7,8 @@ import shared.item.Link;
 import shared.item.Uav;
 import operator.controller.ServerController;
 import shared.redis.ClientTimeManager;
-import network_manager.redis.UAVJob;
-import network_manager.redis.UAVJobQueue;
+import shared.item.UAVJob;
+import shared.redis.UAVJobQueue;
 import shared.util.LogManager;
 import shared.util.ResultOutputManager;
 

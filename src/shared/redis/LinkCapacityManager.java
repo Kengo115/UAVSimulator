@@ -1,4 +1,5 @@
-package network_manager.redis;
+package shared.redis;
+
 import shared.redis.RedisConnectionManager;
 
 import shared.item.Link;
