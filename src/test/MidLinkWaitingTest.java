@@ -1,9 +1,13 @@
 package test;
+import shared.redis.RedisConnectionManager;
 
-import server.redis.*;
-import server.scheduler.FlightScheduler;
-import server.worker.AsyncUAVWorker;
-import server.util.LogManager;
+import network_manager.redis.*;
+import network_manager.scheduler.FlightScheduler;
+import network_manager.worker.AsyncUAVWorker;
+import shared.item.UAVJob;
+import shared.redis.LinkCapacityManager;
+import shared.redis.UAVJobQueue;
+import shared.util.LogManager;
 
 import java.io.IOException;
 import java.util.concurrent.*;

@@ -1,0 +1,942 @@
+@startuml UAVSimulator_ClassDiagram
+  skinparam classAttributeIconSize 0
+  skinparam packageStyle rectangle
+  skinparam linetype ortho
+  skinparam dpi 96
+  skinparam nodesep 30
+  skinparam ranksep 40
+
+  ' =========================================================
+  '  shared.item
+  ' =========================================================
+  package "shared.item" #D6EAF8 {
+
+    class Beacon {
+      -x : double
+      -y : double
+      -id : int
+      -waitingUavList : Uav[]
+      -waitingUavCount : int
+      +getId() : int
+      +addUav(Uav) : void
+      +removeUav(Uav) : void
+      +getWaitingUavCount() : int
+    }
+
+    class BeaconCluster {
+      -beaconList : Beacon[]
+      -beaconNum : int
+      +BeaconCluster(TopologyData)
+      +getBeacon(int) : Beacon
+      +getBeaconList() : Beacon[]
+      +getBeaconNum() : int
+    }
+
+    class Link {
+      -beacon1 : Beacon
+      -beacon2 : Beacon
+      -distance : double
+      -capacity : double
+      -initCapacity : double
+      -flyingUAV : int
+      -waitingUAV : int
+      -D_tubeThickness : double
+      -initD_tubeThickness : double
+      -L_tubeLength : double
+      -initL_tubeLength : double
+      -Q_tubeFlow : double
+      -congestionRate : double
+      -loadRate : double
+      +setLink(Beacon,Beacon,double) : void
+      +decrementCapacity() : void
+      +incrementFlyingUAV() : void
+      +decrementFlyingUAV() : void
+      +incrementWaitingUAV() : void
+      +decrementWaitingUAV() : void
+      +calcCongestionRate() : void
+      +resetStatus() : void
+    }
+
+    class Flow {
+      +source : Beacon
+      +destination : Beacon
+      +theNumberOfUAV : double
+      -uavList : Uav[]
+      +getUavList() : Uav[]
+      +getUav(int) : Uav
+    }
+
+    class Uav {
+      -speed : double
+      -id : int
+      -clientId : int
+      -stayedBeaconId : int
+      -path : int[]
+      -isFlying : boolean
+      -isWaiting : boolean
+      -Source : Beacon
+      -Destination : Beacon
+      -flightTimer : UAVFlightTimer
+      -waitingTimer : UAVWaitingTimer
+      -flyingLink : Link
+      -passedLink : Link
+      +setPath(int[]) : void
+      +startTimer() : void
+      +stopTimer() : void
+      +startWaitingTimer() : void
+      +stopWaitingTimer() : void
+    }
+
+    class UAVFlightTimer {
+      -startTime : long
+      -totalElapsedTime : long
+      -isTiming : boolean
+      +start(Uav) : void
+      +stop(Uav) : void
+      +cancel(Uav, Link[][], double) : void
+      +getFlightTime() : long
+    }
+
+    class UAVWaitingTimer {
+      -startTime : long
+      -totalElapsedTime : long
+      -isTiming : boolean
+      +start(Uav) : void
+      +stop(Uav) : void
+      +getFlightTime() : long
+    }
+
+    class ClientTimer {
+      -startTime : long
+      -endTime : long
+      -isTiming : boolean
+      +start() : void
+      +stop() : void
+      +getFlightTime() : long
+    }
+  }
+
+  ' =========================================================
+  '  shared.client
+  ' =========================================================
+  package "shared.client" #D5F5E3 {
+
+    class Client {
+      -flow : Flow
+      -Id : int
+      -finishFlyingCounter : int
+      +getFlow() : Flow
+      +getId() : int
+      +createUav(Flow) : void
+      +incrementFinishFlyingCounter() : void
+    }
+
+    class ClientController {
+      -clientList : ArrayList<Client>
+      -clientTimer : ClientTimer
+      -isTiming : boolean
+      +addClient(Client) : void
+      +removeClient(Client) : void
+      +startTimer() : void
+      +stopTimer() : void
+      +getFlightTime() : long
+      +getClientList() : ArrayList<Client>
+    }
+  }
+
+  ' =========================================================
+  '  shared.network
+  ' =========================================================
+  package "shared.network" #FEF9E7 {
+
+    class TopologyFileReader {
+      +{static} readTopologyFile(String) : TopologyData
+      +{static} printTopologyInfo(TopologyData) : void
+    }
+
+    class "TopologyFileReader.TopologyData" as TopologyData {
+      +nodeCount : int
+      +nodes : List<NodeInfo>
+      +links : List<LinkInfo>
+    }
+
+    class "TopologyFileReader.NodeInfo" as NodeInfo {
+      +id : int
+      +x : double
+      +y : double
+      +districtType : int
+    }
+
+    class "TopologyFileReader.LinkInfo" as LinkInfo {
+      +source : int
+      +dest : int
+      +capacity : double
+      +distance : double
+      +lTubeLength : double
+    }
+
+    class NetworkTopologyManager {
+      -node : int
+      -link : Link[][]
+      -beaconCluster : BeaconCluster
+      -adjMatrix : int[][]
+      -topologyData : TopologyData
+      +setupBasicLinks() : void
+      +setupDetailedLinks() : void
+    }
+  }
+
+  ' =========================================================
+  '  shared.redis
+  ' =========================================================
+  package "shared.redis" #FADBD8 {
+
+    class RedisConnectionManager <<singleton>> {
+      -{static} instance : RedisConnectionManager
+      -redissonClient : RedissonClient
+      -isConnected : boolean
+      -redisHost : String
+      -redisPort : int
+      +{static} getInstance() : RedisConnectionManager
+      +connect() : void
+      +getClient() : RedissonClient
+      +disconnect() : void
+      +testConnection() : boolean
+    }
+
+    class ClientTimeManager <<singleton>> {
+      -{static} instance : ClientTimeManager
+      -clientStartTime : ConcurrentHashMap<Integer,Long>
+      -clientRequiredUAVs : ConcurrentHashMap<Integer,Integer>
+      -clientCompletedUAVs : ConcurrentHashMap<Integer,AtomicInteger>
+      -clientCompleted : ConcurrentHashMap<Integer,Boolean>
+      +{static} getInstance() : ClientTimeManager
+      +startClientTime(int, int) : void
+      +onUAVCompleted(int) : void
+      +reset() : void
+      +isStarted(int) : boolean
+      +getCompletedCount(int) : int
+    }
+  }
+
+  ' =========================================================
+  '  shared.util
+  ' =========================================================
+  package "shared.util" #F2F3F4 {
+
+    class LogManager <<singleton>> {
+      -{static} instance : LogManager
+      -loggingEnabled : boolean
+      -logWriter : PrintWriter
+      -simulationStartTime : long
+      +{static} getInstance() : LogManager
+      +log(String) : void
+      +error(String) : void
+      +error(String, Exception) : void
+      +close() : void
+      +logSimulationSummary(int, long) : void
+    }
+
+    class LinkStatusRecorder <<singleton>> {
+      -{static} instance : LinkStatusRecorder
+      -snapshotIntervalSeconds : int
+      -snapshotCount : int
+      +{static} getInstance() : LinkStatusRecorder
+      +startSimulation() : void
+      +stopSimulation() : void
+      +onLinkEnter(int, int) : void
+      +onLinkExit(int, int) : void
+      +onWaitingStart(int, int) : void
+      +onWaitingEnd(int, int) : void
+      +takeSnapshot() : void
+      +getAverageLoadRate() : double
+      +getCongestedLinkRate() : double
+    }
+
+    class Link117DebugLogger <<singleton>> {
+      -{static} instance : Link117DebugLogger
+      +{static} getInstance() : Link117DebugLogger
+      +log(String, String) : void
+      +logCapacityChange(int,int,String,double,double) : void
+      +logRouteAssign(int,int,int[],int) : void
+      +logWaitingQueue(int,int,String,int) : void
+    }
+
+    class ResultOutputManager <<utility>> {
+      +{static} outputFlightTimeResult(UAVJob, int) : void
+      +{static} outputFlowSummary(List<UAVJob>, int) : void
+      +{static} outputToPajek(Client,...) : void
+      +{static} outputRouteAssignment(UAVJob, int) : void
+      +{static} outputAverageFlightStatus() : void
+    }
+
+    class EPSSavePoint {
+      -savedLink : Link[][]
+      -nodeCount : int
+      -isAvailable : boolean
+      +EPSSavePoint(int)
+      +saveEPSState(Link[][], double[][], ...) : void
+      +restoreEPSState(Link[][], double[][], ...) : void
+      +isAvailable() : boolean
+      +clear() : void
+    }
+
+    class BiCGSTABSolver <<utility>> {
+      +{static} solve(double[][], double[], double[], ...) : int
+    }
+
+    class ICCGSolver <<utility>> {
+      +{static} solve(double[][], double[], double[], ...) : int
+    }
+
+    class MathUtils <<utility>> {
+      +{static} roundWithConservation(double[]) : void
+      +{static} roundWithTargetSum(double[], int) : void
+    }
+  }
+
+  ' =========================================================
+  '  operator.config
+  ' =========================================================
+  package "operator.config" #FAD7A0 {
+
+    class SimulationConfig <<singleton>> {
+      -{static} instance : SimulationConfig
+      -seed : long
+      -durationMinutes : int
+      -snapshotIntervalSec : int
+      -topologyPath : String
+      -routeSearchMethod : String
+      -phases : PhaseSettings
+      +{static} getInstance() : SimulationConfig
+      +{static} load(String) : boolean
+      +{static} loadDefault() : boolean
+      +{static} reset() : void
+    }
+
+    class StatisticalSimulationConfig <<singleton>> {
+      -{static} instance : StatisticalSimulationConfig
+      -seed : long
+      -simulationDurationHours : double
+      -snapshotIntervalSec : int
+      +{static} getInstance() : StatisticalSimulationConfig
+      +{static} load(String) : boolean
+      +getDurationSeconds() : long
+    }
+  }
+
+  ' =========================================================
+  '  operator.route
+  ' =========================================================
+  package "operator.route" #F9EBEA {
+
+    interface RouteSearcher {
+      +search(Client, int) : void
+    }
+
+    abstract class AbstractPhysarumSolverRouteSearcher {
+      #serverController : ServerController
+      #adjMatrix : int[][]
+      #link : Link[][]
+      #beaconCluster : BeaconCluster
+      #node : int
+      #Q_Kirchhoff : double[]
+      #P_tubePressure : double[]
+      #D_tubeThickness_deltaT : double[][]
+      #pressureCoefficient : double[][]
+      #Q_tubeFlow_sigmoidOutput : double[][]
+      #tubeFlow : int[][]
+      +search(Client, int) : void
+      #{abstract} updateTubeThickness(int) : void
+      #{abstract} solvePressureEquation(...) : int
+      #runUAVFlowRedis(int,int,int,Client) : void
+      #explorePath(...) : int
+      #explorePathGreedy(...) : boolean
+    }
+
+    class DijkstraRouteSearcher {
+      -serverController : ServerController
+      -adjMatrix : int[][]
+      -link : Link[][]
+      -beaconCluster : BeaconCluster
+      -node : int
+      +search(Client, int) : void
+      -dijkstra(Client) : int[]
+      -runUAVFlowRedis(Client, int[], int) : void
+    }
+
+    class PhysarumSolverRouteSearcher {
+      +updateTubeThickness(int) : void
+      +solvePressureEquation(...) : int
+      +getRouteRecordTag() : String
+    }
+
+    class ExtendedPhysarumSolverRouteSearcher {
+      #disconnectedLinkCount : int
+      +updateTubeThickness(int) : void
+      +solvePressureEquation(...) : int
+      #disconnectZeroCapacityLinks() : void
+      #restoreDisconnectedLinks() : void
+    }
+
+    class HybridPhysarumSolverRouteSearcher {
+      -currentFlow : double
+      -requestedFlow : double
+      -stableIterationCount : int
+      +search(Client, int) : void
+      -calculateSourcePressureScore() : double
+      -applyUAVFlowReduction(double, String) : boolean
+    }
+
+    class BinaryExtendedPhysarumSolverRouteSearcher {
+      +search(Client, int) : void
+      -testFlowStability(Client, double, double) : FlowTestResult
+      -performDynamicBinarySearchEPS(Client, double) : void
+    }
+
+    class BisectionalPressureGuidedEPSRouteSearcher {
+      +search(Client, int) : void
+      -testFlowStability(Client, double, double) : FlowTestResult
+    }
+
+    class StepControlledPressureGuidedEPSRouteSearcher {
+      +search(Client, int) : void
+      -calculateSourcePressureScore() : double
+      -applyUAVFlowReduction(double, String) : boolean
+    }
+
+    class SolverFailedException {
+      -clientId : int
+      -iteration : int
+      -searcherType : String
+      +getClientId() : int
+      +getSearcherType() : String
+      +getReason() : String
+    }
+  }
+
+  ' =========================================================
+  '  operator.scheduler
+  ' =========================================================
+  package "operator.scheduler" #FDEBD0 {
+
+    class ExponentialIntervalGenerator {
+      -random : Random
+      -meanIntervalSec : double
+      -sampleCount : long
+      -sumIntervals : double
+      +nextIntervalSec() : double
+      +nextIntervalMillis() : long
+      +getObservedMeanSec() : double
+    }
+
+    class PhaseController <<singleton>> {
+      -{static} instance : PhaseController
+      -currentPhase : Phase
+      -config : SimulationConfig
+      -clientGenerator : RandomClientGenerator
+      -link : Link[][]
+      -nodeCount : int
+      -originalCapacity : double[][]
+      +{static} getInstance() : PhaseController
+      +initialize(SimulationConfig, RandomClientGenerator, Consumer) : void
+      +setLinkArray(Link[][], int) : void
+      +start() : void
+      +stop() : void
+      +generateNextClient() : ScheduleEntry
+      +halveAllLinkCapacity() : void
+      +restoreAllLinkCapacity() : void
+      +getCurrentPhase() : Phase
+    }
+
+    class RandomClientGenerator {
+      -random : Random
+      -nodeCount : int
+      -beaconCluster : BeaconCluster
+      -minUavCount : int
+      -maxUavCount : int
+      +RandomClientGenerator(long, int, BeaconCluster)
+      +applyConfig(SimulationConfig) : void
+      +generateEntry() : ScheduleEntry
+      +generateClient(BoundaryController) : Client
+      +getNextIntervalMillis() : long
+    }
+
+    class SearcherRetryManager <<singleton>> {
+      -{static} instance : SearcherRetryManager
+      -searcherInUse : AtomicBoolean
+      -waitingQueue : LinkedList<SearchRequest>
+      -retryInfoMap : ConcurrentHashMap<Integer,RetryInfo>
+      +{static} getInstance() : SearcherRetryManager
+      +requestSearch(SearchRequest) : boolean
+      +getWaitingQueueSize() : int
+      +isSearcherInUse() : boolean
+      +shutdown() : void
+    }
+
+    class StatisticalSimulationController <<singleton>> {
+      -{static} instance : StatisticalSimulationController
+      -config : StatisticalSimulationConfig
+      -intervalGenerator : ExponentialIntervalGenerator
+      -nodeCount : int
+      -beaconCluster : BeaconCluster
+      +{static} getInstance() : StatisticalSimulationController
+      +initialize(StatisticalSimulationConfig, int, BeaconCluster) : void
+      +start() : void
+      +stop() : void
+      +generateNextClient() : ScheduleEntry
+      +getProgressPercent() : double
+      +getElapsedSeconds() : long
+    }
+  }
+
+  ' =========================================================
+  '  operator.uav
+  ' =========================================================
+  package "operator.uav" #FDEDEC {
+
+    class FlightDataRecorder <<utility>> {
+      +{static} recordRoute(Uav, String) : void
+      +{static} saveFlightData(ClientController, Uav, double) : void
+    }
+  }
+
+  ' =========================================================
+  '  operator  /  operator.controller
+  ' =========================================================
+  package "operator" #E8DAEF {
+
+    class BoundaryController {
+      -{static} num_loop : int
+      -{static} nodeNum : int
+      -{static} beaconCluster : BeaconCluster
+      -{static} server : ServerController
+      -{static} client : Client
+      -{static} clientController : ClientController
+      -{static} passedClient : Queue<Client>
+      -{static} asyncWorkers : List<AsyncUAVWorker>
+      -{static} flightScheduler : FlightScheduler
+      -{static} currentSessionId : String
+      +setNetworkTopology() : void
+      +routeRequest(Client) : void
+      +routeRequestAsync(Client, Runnable) : void
+      -{static} initializeRedisWorker() : void
+      -{static} shutdownRedisWorker() : void
+    }
+
+    enum "BoundaryController.RouteSearchMethod" as RouteSearchMethod {
+      DIJKSTRA
+      PS
+      EPS
+      HYBRID
+      BINARY
+      BISECTIONAL_PGEPS
+      STEP_CONTROLLED_PGEPS
+    }
+
+    class ClientScheduleLoader {
+      +{static} load(String) : List<ScheduleEntry>
+    }
+
+    class "ClientScheduleLoader.ScheduleEntry" as ScheduleEntry {
+      +clientId : int
+      +sourceId : int
+      +destinationId : int
+      +uavCount : int
+      +intervalAfterSec : double
+    }
+  }
+
+  package "operator.controller" #D2B4DE {
+
+    class ServerController {
+      -{static} node : int
+      -{static} link : Link[][]
+      -{static} beaconCluster : BeaconCluster
+      -adjMatrix : int[][]
+      -dijkstraRouteSearcher : RouteSearcher
+      -physarumSolverRouteSearcher : RouteSearcher
+      -extendedPhysarumSolverRouteSearcher : RouteSearcher
+      -hybridPhysarumSolverRouteSearcher : RouteSearcher
+      -binaryExtendedPhysarumSolverRouteSearcher : RouteSearcher
+      -bisectionalPGEPSRouteSearcher : RouteSearcher
+      -stepControlledPGEPSRouteSearcher : RouteSearcher
+      +initialize(int) : void
+      +run_Dijkstra(Client, ClientController) : void
+      +run_EPS(Client, ClientController, int) : void
+      +run_Hybrid(Client, ClientController, int) : void
+      +{static} getLinkStatic(int, int) : Link
+      +{static} getNodeCount() : int
+      +{static} getLinkArray() : Link[][]
+    }
+  }
+
+  ' =========================================================
+  '  network_manager.redis
+  ' =========================================================
+  package "network_manager.redis" #E8EAF6 {
+
+    class UAVJob <<Serializable>> {
+      -uavId : int
+      -clientId : int
+      -path : int[]
+      -speed : double
+      -startTime : long
+      -currentPathIndex : int
+      -elapsedFlightTime : double
+      -totalWaitingTime : double
+      -pathWaitTime : double
+      -sessionId : String
+      -isCompleted : boolean
+      -isCancelled : volatile boolean
+      +getCurrentPathIndex() : int
+      +addElapsedFlightTime(double) : void
+      +startWaiting() / endWaiting() : void
+      +startPathWaiting() / endPathWaiting() : void
+      +markCompleted() : boolean
+      +getTotalTime() : double
+    }
+
+    class UAVJobQueue {
+      -queue : RBlockingQueue<UAVJob>
+      +enqueueJob(UAVJob) : boolean
+      +dequeueJob(long, TimeUnit) : UAVJob
+      +getQueueSize() : int
+      +clearQueue() : void
+    }
+
+    class LinkCapacityManager {
+      -client : RedissonClient
+      -script : RScript
+      +updateAllCapacities(Link[][], int[][], int) : void
+      +decrementCapacity(int, int, double) : double
+      +incrementCapacity(int, int, double) : double
+      +tryConsumeCapacity(int, int) : boolean
+      +recoverCapacity(int, int) : double
+      +syncCapacitiesToMemory(Link[][], int) : void
+    }
+
+    class LinkCapacityReader {
+      -client : RedissonClient
+      +getCapacity(int, int) : double
+      +getFlyingCount(int, int) : long
+      +validateCapacity(Link[][], int[][], int) : boolean
+    }
+
+    class UAVStateManager {
+      -client : RedissonClient
+      +saveUAVState(Uav) : void
+      +getUAVState(int) : Map<String,Object>
+      +deleteUAVState(int) : void
+    }
+
+    class UAVStateValidator {
+      -stateManager : UAVStateManager
+      +validateUAVState(Uav) : boolean
+    }
+
+    class WaitingUAVManager {
+      -client : RedissonClient
+      +enqueue(int, int, UAVJob) : void
+      +dequeue(int, int) : UAVJob
+      +hasWaitingUAV(int, int) : boolean
+      +getWaitingCount(int, int) : int
+      +getTotalWaitingCount() : int
+    }
+
+    class PathWaitingManager {
+      -client : RedissonClient
+      +enqueue(int, UAVJob) : void
+      +dequeue(int) : UAVJob
+      +hasWaitingUAV(int) : boolean
+      +getWaitingCount(int) : int
+      +getTotalWaitingCount() : int
+    }
+
+    class UAVStatisticsManager {
+      +saveGlobalStats(int, int, long) : void
+      +saveClientStats(ClientController) : void
+      +saveBeaconStats(BeaconCluster, int) : void
+    }
+
+    class UAVStatisticsReader {
+      +getGlobalStats() : Map<String,Object>
+      +getAllClientStats() : Map<Integer,Map<String,Object>>
+      +validateAllStats(...) : boolean
+    }
+
+    class FlightLogReader {
+      +getFlightLog(int) : Map<String,Object>
+      +getAllFlightLogs() : Map<Integer,Map<String,Object>>
+      +getFlightLogsByClient(int) : List<Map<String,Object>>
+    }
+
+    class UAVCompletionEvent <<Serializable>> {
+      -uavId : int
+      -clientId : int
+      -actualFlightTime : double
+      -totalWaitingTime : double
+      -path : int[]
+      -sourceBeaconId : int
+      -destinationBeaconId : int
+      -lastLinkFromNode : int
+      -lastLinkToNode : int
+      +getFlightEfficiency() : double
+    }
+
+    class UAVLinkPassedEvent <<Serializable>> {
+      -uavId : int
+      -clientId : int
+      -passedFromNode : int
+      -passedToNode : int
+      -nextFromNode : int
+      -nextToNode : int
+      -path : int[]
+      -currentLinkIndex : int
+      -elapsedFlightTime : double
+      +isLastLink() : boolean
+    }
+
+    class UAVCompletionListener {
+      -topic : RTopic
+      -completedCount : AtomicInteger
+      +startListening() : void
+      +stopListening() : void
+      +getCompletedCount() : int
+    }
+
+    class UAVEventChannels <<constants>> {
+      +{static} LINK_PASSED : String
+      +{static} COMPLETION : String
+      +{static} WAITING_QUEUE_PREFIX : String
+      +{static} PATH_WAITING_QUEUE_PREFIX : String
+      +{static} getWaitingQueueKey(int, int) : String
+      +{static} getPathWaitingQueueKey(int) : String
+    }
+  }
+
+  ' =========================================================
+  '  network_manager.worker / network_manager.scheduler
+  ' =========================================================
+  package "network_manager.worker" #C5CAE9 {
+
+    class AsyncUAVWorker {
+      -workerId : String
+      -jobQueue : UAVJobQueue
+      -capacityManager : LinkCapacityManager
+      -waitingManager : WaitingUAVManager
+      -flightScheduler : FlightScheduler
+      -running : AtomicBoolean
+      -processedJobs : AtomicInteger
+      +start() : void
+      +stop() : void
+      +getProcessedJobs() : int
+      +isRunning() : boolean
+    }
+  }
+
+  package "network_manager.scheduler" #9FA8DA {
+
+    class FlightScheduler <<singleton>> {
+      -{static} instance : FlightScheduler
+      -capacityManager : LinkCapacityManager
+      -waitingManager : WaitingUAVManager
+      -jobQueue : UAVJobQueue
+      -pathWaitingManager : PathWaitingManager
+      -activeFlights : AtomicInteger
+      -completedFlights : AtomicInteger
+      -activeClientUAVs : ConcurrentHashMap<Integer, ConcurrentHashMap<Integer,UAVJob>>
+      +{static} getInstance() : FlightScheduler
+      +startFlight(UAVJob) : void
+      +cancelClientFlights(int) : int
+      +isAllFlightsCompleted() : boolean
+      +getFlightStatus() : int[]
+      +setSessionId(String) : void
+      +shutdown() : void
+    }
+  }
+
+  ' =========================================================
+  '  RELATIONSHIPS
+  ' =========================================================
+
+  ' ---- shared.item 内部 ----
+  BeaconCluster "1" *-- "1..*" Beacon : contains >
+  Beacon "1" o-- "0..*" Uav : waitingUavList >
+  Flow "1" *-- "1..*" Uav : uavList >
+  Flow "n" --> "1" Beacon : source
+  Flow "n" --> "1" Beacon : destination
+  Uav "1" *-- "1" UAVFlightTimer
+  Uav "1" *-- "1" UAVWaitingTimer
+  Uav "n" --> "1" Beacon : Source
+  Uav "n" --> "1" Beacon : Destination
+  Uav "n" --> "0..1" Link : flyingLink
+  Link "n" --> "1" Beacon : beacon1
+  Link "n" --> "1" Beacon : beacon2
+  UAVFlightTimer ..> Uav : callback
+  UAVWaitingTimer ..> Uav : callback
+
+  ' ---- shared.client ----
+  Client "1" *-- "1" Flow
+  ClientController "1" *-- "0..*" Client : manages >
+  ClientController "1" *-- "1" ClientTimer
+
+  ' ---- shared.network ----
+  TopologyFileReader ..> TopologyData : creates >
+  TopologyData "1" *-- "1..*" NodeInfo
+  TopologyData "1" *-- "1..*" LinkInfo
+  BeaconCluster ..> TopologyData : constructs from
+  NetworkTopologyManager ..> Link : initialises
+  NetworkTopologyManager ..> BeaconCluster : uses
+  NetworkTopologyManager ..> TopologyData : reads
+
+  ' ---- shared.redis / util ----
+  RedisConnectionManager ..> LogManager : uses
+  ClientTimeManager ..> LogManager : uses
+  LinkStatusRecorder ..> LogManager : uses
+  Link117DebugLogger ..> LogManager : uses
+  EPSSavePoint ..> Link : saves/restores
+  EPSSavePoint ..> LogManager : uses
+
+  ' ---- operator.route 継承 ----
+  DijkstraRouteSearcher ..|> RouteSearcher
+  AbstractPhysarumSolverRouteSearcher ..|> RouteSearcher
+  PhysarumSolverRouteSearcher --|> AbstractPhysarumSolverRouteSearcher
+  ExtendedPhysarumSolverRouteSearcher --|> AbstractPhysarumSolverRouteSearcher
+  HybridPhysarumSolverRouteSearcher --|> ExtendedPhysarumSolverRouteSearcher
+  BinaryExtendedPhysarumSolverRouteSearcher --|> ExtendedPhysarumSolverRouteSearcher
+  BisectionalPressureGuidedEPSRouteSearcher --|> ExtendedPhysarumSolverRouteSearcher
+  StepControlledPressureGuidedEPSRouteSearcher --|> ExtendedPhysarumSolverRouteSearcher
+  SolverFailedException --|> RuntimeException
+
+  ' ---- operator.route 依存 ----
+  AbstractPhysarumSolverRouteSearcher "n" --> "1" ServerController : serverController
+  AbstractPhysarumSolverRouteSearcher "n" --> "1" BeaconCluster : beaconCluster
+  AbstractPhysarumSolverRouteSearcher ..> EPSSavePoint : uses
+  AbstractPhysarumSolverRouteSearcher ..> BiCGSTABSolver : uses
+  AbstractPhysarumSolverRouteSearcher ..> ICCGSolver : uses
+  AbstractPhysarumSolverRouteSearcher ..> LogManager : uses
+  DijkstraRouteSearcher "n" --> "1" ServerController : serverController
+  DijkstraRouteSearcher "n" --> "1" BeaconCluster : beaconCluster
+
+  ' ---- operator.controller ----
+  ServerController "1" *-- "7" RouteSearcher : searchers
+  ServerController ..> Link : link[][]
+  ServerController ..> BeaconCluster : beaconCluster
+  ServerController ..> Client : processes
+  ServerController ..> ClientController : uses
+  ServerController ..> LogManager : uses
+  ServerController ..> ResultOutputManager : uses
+  ServerController ..> LinkCapacityManager : reads capacity
+
+  ' ---- operator (BoundaryController) ----
+  BoundaryController +-- RouteSearchMethod
+  ClientScheduleLoader +-- ScheduleEntry
+  BoundaryController "1" --> "1" ServerController : server
+  BoundaryController "1" --> "0..1" Client : client
+  BoundaryController "1" --> "1" ClientController : clientController
+  BoundaryController "1" --> "1" BeaconCluster : beaconCluster
+  BoundaryController "1" --> "0..*" AsyncUAVWorker : asyncWorkers
+  BoundaryController "1" --> "1" FlightScheduler : flightScheduler
+  BoundaryController ..> StatisticalSimulationController : starts/stops
+  BoundaryController ..> UAVCompletionListener : registers
+  BoundaryController ..> LinkStatusRecorder : uses
+  BoundaryController ..> LogManager : uses
+  BoundaryController ..> ClientScheduleLoader : uses
+
+  ' ---- operator.scheduler ----
+  StatisticalSimulationController "1" --> "1" StatisticalSimulationConfig
+  StatisticalSimulationController "1" --> "1" ExponentialIntervalGenerator
+  StatisticalSimulationController "1" --> "1" BeaconCluster
+  StatisticalSimulationController ..> ClientTimeManager : uses
+  StatisticalSimulationController ..> PathWaitingManager : monitors
+  StatisticalSimulationController ..> LinkStatusRecorder : uses
+  StatisticalSimulationController ..> LogManager : uses
+
+  PhaseController "1" --> "1" SimulationConfig
+  PhaseController "1" --> "1" RandomClientGenerator
+  PhaseController ..> FlightScheduler : monitors
+  PhaseController ..> LinkStatusRecorder : uses
+  PhaseController ..> LogManager : uses
+
+  RandomClientGenerator "1" --> "1" BeaconCluster
+  RandomClientGenerator ..> SimulationConfig : reads
+  RandomClientGenerator ..> Flow : creates
+  RandomClientGenerator ..> Client : creates
+
+  SearcherRetryManager ..> PathWaitingManager : uses
+  SearcherRetryManager ..> FlightScheduler : waits on
+  SearcherRetryManager ..> RouteSearcher : executes
+  SearcherRetryManager ..> LogManager : uses
+
+  ' ---- operator.uav ----
+  FlightDataRecorder ..> Uav : reads
+  FlightDataRecorder ..> ClientController : reads
+  FlightDataRecorder ..> RedisConnectionManager : uses
+  FlightDataRecorder ..> ClientTimeManager : uses
+  FlightDataRecorder ..> LogManager : uses
+
+  ' ---- network_manager.redis ----
+  UAVJobQueue ..> RedisConnectionManager : uses
+  UAVJobQueue "1" o-- "0..*" UAVJob : enqueued
+
+  LinkCapacityManager ..> RedisConnectionManager : uses
+  LinkCapacityManager ..> Link : reads/writes
+  LinkCapacityManager ..> Link117DebugLogger : uses
+
+  LinkCapacityReader ..> RedisConnectionManager : uses
+  LinkCapacityReader ..> Link : validates
+
+  UAVStateManager ..> RedisConnectionManager : uses
+  UAVStateManager ..> Uav : reads
+  UAVStateManager ..> Link : reads
+
+  UAVStateValidator "1" --> "1" UAVStateManager
+  UAVStateValidator ..> Uav : validates
+
+  WaitingUAVManager ..> RedisConnectionManager : uses
+  WaitingUAVManager "1" o-- "0..*" UAVJob : link-waiting queue
+  WaitingUAVManager ..> UAVEventChannels : uses
+
+  PathWaitingManager ..> RedisConnectionManager : uses
+  PathWaitingManager "1" o-- "0..*" UAVJob : path-waiting queue
+  PathWaitingManager ..> UAVEventChannels : uses
+
+  UAVStatisticsManager ..> RedisConnectionManager : uses
+  UAVStatisticsManager ..> ClientController : reads
+  UAVStatisticsManager ..> BeaconCluster : reads
+  UAVStatisticsManager ..> Client : reads
+
+  UAVStatisticsReader ..> RedisConnectionManager : uses
+
+  FlightLogReader ..> RedisConnectionManager : uses
+
+  UAVCompletionListener ..> RedisConnectionManager : uses
+  UAVCompletionListener ..> UAVEventChannels : COMPLETION channel
+  UAVCompletionListener ..> UAVCompletionEvent : handles
+
+  ' ---- network_manager.worker ----
+  AsyncUAVWorker "1" --> "1" UAVJobQueue
+  AsyncUAVWorker "1" --> "1" LinkCapacityManager
+  AsyncUAVWorker "1" --> "1" WaitingUAVManager
+  AsyncUAVWorker "1" --> "1" FlightScheduler
+  AsyncUAVWorker ..> RedisConnectionManager : init
+  AsyncUAVWorker ..> LogManager : uses
+
+  ' ---- network_manager.scheduler ----
+  FlightScheduler "1" --> "1" LinkCapacityManager
+  FlightScheduler "1" --> "1" WaitingUAVManager
+  FlightScheduler "1" --> "1" UAVJobQueue
+  FlightScheduler "1" --> "1" PathWaitingManager
+  FlightScheduler "1" o-- "0..*" UAVJob : activeClientUAVs
+  FlightScheduler ..> RedisConnectionManager : uses
+  FlightScheduler ..> UAVCompletionEvent : publishes >
+  FlightScheduler ..> UAVLinkPassedEvent : publishes >
+  FlightScheduler ..> UAVEventChannels : uses
+  FlightScheduler ..> ClientTimeManager : notifies
+  FlightScheduler ..> ResultOutputManager : outputs
+  FlightScheduler ..> LinkStatusRecorder : records
+  FlightScheduler ..> Link117DebugLogger : debugs
+  FlightScheduler ..> StatisticalSimulationController : diagnoses
+
+  @enduml

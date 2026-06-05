@@ -1,10 +1,10 @@
 package test;
 
 import org.redisson.api.RedissonClient;
-import server.redis.RedisConnectionManager;
-import server.redis.UAVJob;
-import server.redis.UAVJobQueue;
-import server.util.LogManager;
+import shared.redis.RedisConnectionManager;
+import shared.item.UAVJob;
+import shared.redis.UAVJobQueue;
+import shared.util.LogManager;
 
 import java.io.IOException;
 

@@ -150,7 +150,7 @@ run: compile ensure-redis kill-sim
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
 	@echo $$$$ > $(PID_FILE)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="controller.BoundaryController"; \
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
 	rm -f $(PID_FILE)
 
 # シミュレータを実行（コンパイルなし）
@@ -165,7 +165,7 @@ run-quick: ensure-redis kill-sim
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
 	@echo $$$$ > $(PID_FILE)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="controller.BoundaryController"; \
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
 	rm -f $(PID_FILE)
 
 # シミュレータを実行（メモリ制限なし、短時間テスト用）
@@ -174,7 +174,7 @@ run-light: compile ensure-redis kill-sim
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
 	@echo $$$$ > $(PID_FILE)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		mvn exec:java -Dexec.mainClass="controller.BoundaryController"; \
+		mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
 	rm -f $(PID_FILE)
 
 # ビルド成果物をクリーンアップ

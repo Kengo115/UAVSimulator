@@ -3,8 +3,8 @@ package test;
 import org.redisson.api.RBucket;
 import org.redisson.api.RMap;
 import org.redisson.api.RedissonClient;
-import server.redis.RedisConnectionManager;
-import server.util.LogManager;
+import shared.redis.RedisConnectionManager;
+import shared.util.LogManager;
 
 import java.io.IOException;
 

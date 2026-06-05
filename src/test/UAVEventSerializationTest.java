@@ -3,11 +3,11 @@ package test;
 import org.redisson.api.RBucket;
 import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
-import server.redis.RedisConnectionManager;
-import server.redis.UAVCompletionEvent;
-import server.redis.UAVEventChannels;
-import server.redis.UAVJob;
-import server.redis.UAVLinkPassedEvent;
+import shared.redis.RedisConnectionManager;
+import network_manager.redis.UAVCompletionEvent;
+import network_manager.redis.UAVEventChannels;
+import shared.item.UAVJob;
+import network_manager.redis.UAVLinkPassedEvent;
 
 import java.io.IOException;
 import java.util.Arrays;

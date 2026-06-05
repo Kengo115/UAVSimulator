@@ -215,7 +215,7 @@ def load_data(lambda_values, methods, sim_mapping, base_dir="src/result"):
 
 def plot_scatter(all_data, lambda_values, y_max, y_interval, output_file):
     """散布図を生成"""
-    fig, ax = plt.subplots(figsize=(14, 8))
+    fig, ax = plt.subplots(figsize=(14, 6))
 
     # クローズドグラフ設定
     for spine in ax.spines.values():
@@ -269,7 +269,7 @@ def plot_scatter(all_data, lambda_values, y_max, y_interval, output_file):
     ax.set_xticks(lambda_values)
 
     # Y軸設定
-    ax.set_ylabel('Capacity Overflow Rate [%]', fontsize=FONT_SIZE_TITLE, fontweight='bold', color='black')
+    ax.set_ylabel('Rate [%]', fontsize=FONT_SIZE_TITLE, fontweight='bold', color='black')
     ax.tick_params(axis='y', direction='in', labelsize=FONT_SIZE_TICK, colors='black', which='both')
 
     if y_max is not None:
@@ -288,7 +288,7 @@ def plot_scatter(all_data, lambda_values, y_max, y_interval, output_file):
     ax.set_axisbelow(True)
 
     # 凡例
-    legend = ax.legend(loc='lower right', framealpha=1.0, fontsize=26, edgecolor='black', bbox_to_anchor=(0.95, 0.08), labelspacing=0.8)
+    legend = ax.legend(loc='lower right', framealpha=1.0, fontsize=26, edgecolor='black', bbox_to_anchor=(0.95, 0.05), labelspacing=0.8)
     for text in legend.get_texts():
         text.set_color("black")
 
