@@ -59,6 +59,9 @@ output/
 ### Process Management ###
 .sim_*.pid
 
+### TeX ###
+tex/
+
 ### Build ###
 Makefile
 
