@@ -1,0 +1,399 @@
+@startuml UAVSimulator_Shared
+  skinparam classAttributeIconSize 0
+  skinparam packageStyle rectangle
+  skinparam linetype ortho
+  skinparam dpi 96
+  skinparam nodesep 30
+  skinparam ranksep 40
+
+  ' =========================================================
+  '  shared.item
+  ' =========================================================
+  package "shared.item" #D6EAF8 {
+
+    class Beacon {
+      -x : double
+      -y : double
+      -id : int
+      -waitingUavList : Uav[]
+      -waitingUavCount : int
+      +getId() : int
+      +addUav(Uav) : void
+      +removeUav(Uav) : void
+      +getWaitingUavCount() : int
+    }
+
+    class BeaconCluster {
+      -beaconList : Beacon[]
+      -beaconNum : int
+      +BeaconCluster(TopologyData)
+      +getBeacon(int) : Beacon
+      +getBeaconList() : Beacon[]
+      +getBeaconNum() : int
+    }
+
+    class Link {
+      -beacon1 : Beacon
+      -beacon2 : Beacon
+      -distance : double
+      -capacity : double
+      -initCapacity : double
+      -flyingUAV : int
+      -waitingUAV : int
+      -D_tubeThickness : double
+      -initD_tubeThickness : double
+      -L_tubeLength : double
+      -initL_tubeLength : double
+      -Q_tubeFlow : double
+      -congestionRate : double
+      -loadRate : double
+      +setLink(Beacon,Beacon,double) : void
+      +decrementCapacity() : void
+      +incrementFlyingUAV() : void
+      +decrementFlyingUAV() : void
+      +incrementWaitingUAV() : void
+      +decrementWaitingUAV() : void
+      +calcCongestionRate() : void
+      +resetStatus() : void
+    }
+
+    class Flow {
+      +source : Beacon
+      +destination : Beacon
+      +theNumberOfUAV : double
+      -uavList : Uav[]
+      +getUavList() : Uav[]
+      +getUav(int) : Uav
+    }
+
+    class Uav {
+      -speed : double
+      -id : int
+      -clientId : int
+      -stayedBeaconId : int
+      -path : int[]
+      -isFlying : boolean
+      -isWaiting : boolean
+      -Source : Beacon
+      -Destination : Beacon
+      -flightTimer : UAVFlightTimer
+      -waitingTimer : UAVWaitingTimer
+      -flyingLink : Link
+      -passedLink : Link
+      +setPath(int[]) : void
+      +startTimer() : void
+      +stopTimer() : void
+      +startWaitingTimer() : void
+      +stopWaitingTimer() : void
+    }
+
+    class UAVFlightTimer {
+      -startTime : long
+      -totalElapsedTime : long
+      -isTiming : boolean
+      +start(Uav) : void
+      +stop(Uav) : void
+      +cancel(Uav, Link[][], double) : void
+      +getFlightTime() : long
+    }
+
+    class UAVWaitingTimer {
+      -startTime : long
+      -totalElapsedTime : long
+      -isTiming : boolean
+      +start(Uav) : void
+      +stop(Uav) : void
+      +getFlightTime() : long
+    }
+
+    class ClientTimer {
+      -startTime : long
+      -endTime : long
+      -isTiming : boolean
+      +start() : void
+      +stop() : void
+      +getFlightTime() : long
+    }
+
+    class UAVJob <<Serializable>> {
+      -uavId : int
+      -clientId : int
+      -path : int[]
+      -speed : double
+      -startTime : long
+      -currentPathIndex : int
+      -elapsedFlightTime : double
+      -totalWaitingTime : double
+      -pathWaitTime : double
+      -sessionId : String
+      -isCompleted : boolean
+      -isCancelled : volatile boolean
+      +getCurrentPathIndex() : int
+      +addElapsedFlightTime(double) : void
+      +startWaiting() / endWaiting() : void
+      +startPathWaiting() / endPathWaiting() : void
+      +markCompleted() : boolean
+      +getTotalTime() : double
+    }
+  }
+
+  ' =========================================================
+  '  shared.client
+  ' =========================================================
+  package "shared.client" #D5F5E3 {
+
+    class Client {
+      -flow : Flow
+      -Id : int
+      -finishFlyingCounter : int
+      +getFlow() : Flow
+      +getId() : int
+      +createUav(Flow) : void
+      +incrementFinishFlyingCounter() : void
+    }
+
+    class ClientController {
+      -clientList : ArrayList<Client>
+      -clientTimer : ClientTimer
+      -isTiming : boolean
+      +addClient(Client) : void
+      +removeClient(Client) : void
+      +startTimer() : void
+      +stopTimer() : void
+      +getFlightTime() : long
+      +getClientList() : ArrayList<Client>
+    }
+  }
+
+  ' =========================================================
+  '  shared.network
+  ' =========================================================
+  package "shared.network" #FEF9E7 {
+
+    class TopologyFileReader {
+      +{static} readTopologyFile(String) : TopologyData
+      +{static} printTopologyInfo(TopologyData) : void
+    }
+
+    class "TopologyFileReader.TopologyData" as TopologyData {
+      +nodeCount : int
+      +nodes : List<NodeInfo>
+      +links : List<LinkInfo>
+    }
+
+    class "TopologyFileReader.NodeInfo" as NodeInfo {
+      +id : int
+      +x : double
+      +y : double
+      +districtType : int
+    }
+
+    class "TopologyFileReader.LinkInfo" as LinkInfo {
+      +source : int
+      +dest : int
+      +capacity : double
+      +distance : double
+      +lTubeLength : double
+    }
+
+    class NetworkTopologyManager {
+      -node : int
+      -link : Link[][]
+      -beaconCluster : BeaconCluster
+      -adjMatrix : int[][]
+      -topologyData : TopologyData
+      +setupBasicLinks() : void
+      +setupDetailedLinks() : void
+    }
+  }
+
+  ' =========================================================
+  '  shared.redis
+  ' =========================================================
+  package "shared.redis" #FADBD8 {
+
+    class RedisConnectionManager <<singleton>> {
+      -{static} instance : RedisConnectionManager
+      -redissonClient : RedissonClient
+      -isConnected : boolean
+      -redisHost : String
+      -redisPort : int
+      +{static} getInstance() : RedisConnectionManager
+      +connect() : void
+      +getClient() : RedissonClient
+      +disconnect() : void
+      +testConnection() : boolean
+    }
+
+    class ClientTimeManager <<singleton>> {
+      -{static} instance : ClientTimeManager
+      -clientStartTime : ConcurrentHashMap<Integer,Long>
+      -clientRequiredUAVs : ConcurrentHashMap<Integer,Integer>
+      -clientCompletedUAVs : ConcurrentHashMap<Integer,AtomicInteger>
+      -clientCompleted : ConcurrentHashMap<Integer,Boolean>
+      +{static} getInstance() : ClientTimeManager
+      +startClientTime(int, int) : void
+      +onUAVCompleted(int) : void
+      +reset() : void
+      +isStarted(int) : boolean
+      +getCompletedCount(int) : int
+    }
+
+    class UAVJobQueue {
+      -queue : RBlockingQueue<UAVJob>
+      +enqueueJob(UAVJob) : boolean
+      +dequeueJob(long, TimeUnit) : UAVJob
+      +getQueueSize() : int
+      +clearQueue() : void
+    }
+
+    class LinkCapacityManager {
+      -client : RedissonClient
+      -script : RScript
+      +updateAllCapacities(Link[][], int[][], int) : void
+      +decrementCapacity(int, int, double) : double
+      +incrementCapacity(int, int, double) : double
+      +tryConsumeCapacity(int, int) : boolean
+      +recoverCapacity(int, int) : double
+      +syncCapacitiesToMemory(Link[][], int) : void
+    }
+
+    class PathWaitingManager {
+      -client : RedissonClient
+      +enqueue(int, UAVJob) : void
+      +dequeue(int) : UAVJob
+      +hasWaitingUAV(int) : boolean
+      +getWaitingCount(int) : int
+      +getTotalWaitingCount() : int
+    }
+  }
+
+  ' =========================================================
+  '  shared.util
+  ' =========================================================
+  package "shared.util" #F2F3F4 {
+
+    class LogManager <<singleton>> {
+      -{static} instance : LogManager
+      -loggingEnabled : boolean
+      -logWriter : PrintWriter
+      -simulationStartTime : long
+      +{static} getInstance() : LogManager
+      +log(String) : void
+      +error(String) : void
+      +error(String, Exception) : void
+      +close() : void
+      +logSimulationSummary(int, long) : void
+    }
+
+    class LinkStatusRecorder <<singleton>> {
+      -{static} instance : LinkStatusRecorder
+      -snapshotIntervalSeconds : int
+      -snapshotCount : int
+      +{static} getInstance() : LinkStatusRecorder
+      +startSimulation() : void
+      +stopSimulation() : void
+      +onLinkEnter(int, int) : void
+      +onLinkExit(int, int) : void
+      +onWaitingStart(int, int) : void
+      +onWaitingEnd(int, int) : void
+      +takeSnapshot() : void
+      +getAverageLoadRate() : double
+      +getCongestedLinkRate() : double
+    }
+
+    class Link117DebugLogger <<singleton>> {
+      -{static} instance : Link117DebugLogger
+      +{static} getInstance() : Link117DebugLogger
+      +log(String, String) : void
+      +logCapacityChange(int,int,String,double,double) : void
+      +logRouteAssign(int,int,int[],int) : void
+      +logWaitingQueue(int,int,String,int) : void
+    }
+
+    class ResultOutputManager <<utility>> {
+      +{static} outputFlightTimeResult(UAVJob, int) : void
+      +{static} outputFlowSummary(List<UAVJob>, int) : void
+      +{static} outputToPajek(Client,...) : void
+      +{static} outputRouteAssignment(UAVJob, int) : void
+      +{static} outputAverageFlightStatus() : void
+    }
+
+    class EPSSavePoint {
+      -savedLink : Link[][]
+      -nodeCount : int
+      -isAvailable : boolean
+      +EPSSavePoint(int)
+      +saveEPSState(Link[][], double[][], ...) : void
+      +restoreEPSState(Link[][], double[][], ...) : void
+      +isAvailable() : boolean
+      +clear() : void
+    }
+
+    class BiCGSTABSolver <<utility>> {
+      +{static} solve(double[][], double[], double[], ...) : int
+    }
+
+    class ICCGSolver <<utility>> {
+      +{static} solve(double[][], double[], double[], ...) : int
+    }
+
+    class MathUtils <<utility>> {
+      +{static} roundWithConservation(double[]) : void
+      +{static} roundWithTargetSum(double[], int) : void
+    }
+  }
+
+  ' =========================================================
+  '  RELATIONSHIPS
+  ' =========================================================
+
+  ' ---- shared.item 内部 ----
+  BeaconCluster "1" *-- "1..*" Beacon : contains >
+  Beacon "1" o-- "0..*" Uav : waitingUavList >
+  Flow "1" *-- "1..*" Uav : uavList >
+  Flow "n" --> "1" Beacon : source
+  Flow "n" --> "1" Beacon : destination
+  Uav "1" *-- "1" UAVFlightTimer
+  Uav "1" *-- "1" UAVWaitingTimer
+  Uav "n" --> "1" Beacon : Source
+  Uav "n" --> "1" Beacon : Destination
+  Uav "n" --> "0..1" Link : flyingLink
+  Link "n" --> "1" Beacon : beacon1
+  Link "n" --> "1" Beacon : beacon2
+  UAVFlightTimer ..> Uav : callback
+  UAVWaitingTimer ..> Uav : callback
+
+  ' ---- shared.client ----
+  Client "1" *-- "1" Flow
+  ClientController "1" *-- "0..*" Client : manages >
+  ClientController "1" *-- "1" ClientTimer
+
+  ' ---- shared.network ----
+  TopologyFileReader ..> TopologyData : creates >
+  TopologyData "1" *-- "1..*" NodeInfo
+  TopologyData "1" *-- "1..*" LinkInfo
+  BeaconCluster ..> TopologyData : constructs from
+  NetworkTopologyManager ..> Link : initialises
+  NetworkTopologyManager ..> BeaconCluster : uses
+  NetworkTopologyManager ..> TopologyData : reads
+
+  ' ---- shared.redis ----
+  UAVJobQueue ..> RedisConnectionManager : uses
+  UAVJobQueue "1" o-- "0..*" UAVJob : enqueued
+  LinkCapacityManager ..> RedisConnectionManager : uses
+  LinkCapacityManager ..> Link : reads/writes
+  LinkCapacityManager ..> Link117DebugLogger : uses
+  PathWaitingManager ..> RedisConnectionManager : uses
+  PathWaitingManager "1" o-- "0..*" UAVJob : path-waiting queue
+  ClientTimeManager ..> LogManager : uses
+
+  ' ---- shared.util ----
+  RedisConnectionManager ..> LogManager : uses
+  LinkStatusRecorder ..> LogManager : uses
+  Link117DebugLogger ..> LogManager : uses
+  EPSSavePoint ..> Link : saves/restores
+  EPSSavePoint ..> LogManager : uses
+  ResultOutputManager ..> UAVJob : reads
+
+@enduml

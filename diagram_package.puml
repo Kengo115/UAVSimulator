@@ -1,0 +1,75 @@
+@startuml UAVSimulator_PackageDiagram
+  skinparam packageStyle rectangle
+  skinparam linetype ortho
+  skinparam dpi 96
+  skinparam nodesep 60
+  skinparam ranksep 80
+  hide empty members
+  hide circle
+
+  ' =========================================================
+  '  shared group
+  ' =========================================================
+  package "shared.item" #D6EAF8 {
+    class "Beacon  BeaconCluster\nLink  Flow  Uav\nUAVJob  (timers)" as SI
+  }
+  package "shared.client" #D5F5E3 {
+    class "Client\nClientController" as SC
+  }
+  package "shared.network" #FEF9E7 {
+    class "NetworkTopologyManager\nTopologyFileReader" as SN
+  }
+  package "shared.redis" #FADBD8 {
+    class "RedisConnectionManager\nLinkCapacityManager  UAVJobQueue\nClientTimeManager  PathWaitingManager" as SR
+  }
+  package "shared.util" #F2F3F4 {
+    class "LogManager  EPSSavePoint\nICCGSolver  BiCGSTABSolver\nResultOutputManager  MathUtils" as SU
+  }
+
+  ' =========================================================
+  '  operator group
+  ' =========================================================
+  package "operator / operator.controller" #D2B4DE {
+    class "BoundaryController\nServerController" as OC
+  }
+  package "operator.config" #FAD7A0 {
+    class "SimulationConfig\nStatisticalSimulationConfig" as OCF
+  }
+  package "operator.route" #F9EBEA {
+    class "RouteSearcher (interface)\nAbstractPhysarumSolverRouteSearcher\n+ EPS / PG-EPS variants\nDijkstraRouteSearcher" as OR
+  }
+  package "operator.scheduler" #FDEBD0 {
+    class "PhaseController\nRandomClientGenerator\nStatisticalSimulationController\nSearcherRetryManager" as OS
+  }
+  package "operator.uav" #FDEDEC {
+    class "FlightDataRecorder" as OU
+  }
+
+  ' =========================================================
+  '  network_manager group
+  ' =========================================================
+  package "network_manager.redis" #E8EAF6 {
+    class "WaitingUAVManager  UAVStateManager\nUAVStatisticsManager  FlightLogReader\nUAVCompletionEvent  UAVEventChannels" as NR
+  }
+  package "network_manager.worker" #C5CAE9 {
+    class "AsyncUAVWorker" as NW
+  }
+  package "network_manager.scheduler" #9FA8DA {
+    class "FlightScheduler" as NS
+  }
+
+  ' =========================================================
+  '  Cross-group dependencies  (package level only)
+  ' =========================================================
+  OR ..> SI : uses
+  OR ..> SU : uses
+  OC ..> SI : uses
+  OC ..> SR : uses
+  OS ..> SR : monitors
+  NW ..> SR : job queue / capacity
+  NS ..> SR : manages queues
+  NS ..> SI : handles UAVJob
+  OC ..> NW : spawns
+  OC ..> NS : uses
+
+@enduml

@@ -1,0 +1,168 @@
+@startuml UAVSimulator_NetworkManager
+  skinparam classAttributeIconSize 0
+  skinparam packageStyle rectangle
+  skinparam linetype ortho
+  skinparam dpi 96
+  skinparam nodesep 30
+  skinparam ranksep 40
+
+  ' =========================================================
+  '  network_manager.redis
+  ' =========================================================
+  package "network_manager.redis" #E8EAF6 {
+
+    class LinkCapacityReader {
+      -client : RedissonClient
+      +getCapacity(int, int) : double
+      +getFlyingCount(int, int) : long
+      +validateCapacity(Link[][], int[][], int) : boolean
+    }
+
+    class UAVStateManager {
+      -client : RedissonClient
+      +saveUAVState(Uav) : void
+      +getUAVState(int) : Map<String,Object>
+      +deleteUAVState(int) : void
+    }
+
+    class UAVStateValidator {
+      -stateManager : UAVStateManager
+      +validateUAVState(Uav) : boolean
+    }
+
+    class WaitingUAVManager {
+      -client : RedissonClient
+      +enqueue(int, int, UAVJob) : void
+      +dequeue(int, int) : UAVJob
+      +hasWaitingUAV(int, int) : boolean
+      +getWaitingCount(int, int) : int
+      +getTotalWaitingCount() : int
+    }
+
+    class UAVStatisticsManager {
+      +saveGlobalStats(int, int, long) : void
+      +saveClientStats(ClientController) : void
+      +saveBeaconStats(BeaconCluster, int) : void
+    }
+
+    class UAVStatisticsReader {
+      +getGlobalStats() : Map<String,Object>
+      +getAllClientStats() : Map<Integer,Map<String,Object>>
+      +validateAllStats(...) : boolean
+    }
+
+    class FlightLogReader {
+      +getFlightLog(int) : Map<String,Object>
+      +getAllFlightLogs() : Map<Integer,Map<String,Object>>
+      +getFlightLogsByClient(int) : List<Map<String,Object>>
+    }
+
+    class UAVCompletionEvent <<Serializable>> {
+      -uavId : int
+      -clientId : int
+      -actualFlightTime : double
+      -totalWaitingTime : double
+      -path : int[]
+      -sourceBeaconId : int
+      -destinationBeaconId : int
+      -lastLinkFromNode : int
+      -lastLinkToNode : int
+      +getFlightEfficiency() : double
+    }
+
+    class UAVLinkPassedEvent <<Serializable>> {
+      -uavId : int
+      -clientId : int
+      -passedFromNode : int
+      -passedToNode : int
+      -nextFromNode : int
+      -nextToNode : int
+      -path : int[]
+      -currentLinkIndex : int
+      -elapsedFlightTime : double
+      +isLastLink() : boolean
+    }
+
+    class UAVCompletionListener {
+      -topic : RTopic
+      -completedCount : AtomicInteger
+      +startListening() : void
+      +stopListening() : void
+      +getCompletedCount() : int
+    }
+
+    class UAVEventChannels <<constants>> {
+      +{static} LINK_PASSED : String
+      +{static} COMPLETION : String
+      +{static} WAITING_QUEUE_PREFIX : String
+      +{static} PATH_WAITING_QUEUE_PREFIX : String
+      +{static} getWaitingQueueKey(int, int) : String
+      +{static} getPathWaitingQueueKey(int) : String
+    }
+  }
+
+  ' =========================================================
+  '  network_manager.worker
+  ' =========================================================
+  package "network_manager.worker" #C5CAE9 {
+
+    class AsyncUAVWorker {
+      -workerId : String
+      -jobQueue : UAVJobQueue
+      -capacityManager : LinkCapacityManager
+      -waitingManager : WaitingUAVManager
+      -flightScheduler : FlightScheduler
+      -running : AtomicBoolean
+      -processedJobs : AtomicInteger
+      +start() : void
+      +stop() : void
+      +getProcessedJobs() : int
+      +isRunning() : boolean
+    }
+  }
+
+  ' =========================================================
+  '  network_manager.scheduler
+  ' =========================================================
+  package "network_manager.scheduler" #9FA8DA {
+
+    class FlightScheduler <<singleton>> {
+      -{static} instance : FlightScheduler
+      -capacityManager : LinkCapacityManager
+      -waitingManager : WaitingUAVManager
+      -jobQueue : UAVJobQueue
+      -pathWaitingManager : PathWaitingManager
+      -activeFlights : AtomicInteger
+      -completedFlights : AtomicInteger
+      -activeClientUAVs : ConcurrentHashMap<Integer, ConcurrentHashMap<Integer,UAVJob>>
+      +{static} getInstance() : FlightScheduler
+      +startFlight(UAVJob) : void
+      +cancelClientFlights(int) : int
+      +isAllFlightsCompleted() : boolean
+      +getFlightStatus() : int[]
+      +setSessionId(String) : void
+      +shutdown() : void
+    }
+  }
+
+  ' =========================================================
+  '  RELATIONSHIPS  (network_manager-internal only)
+  ' =========================================================
+
+  ' ---- network_manager.redis 内部 ----
+  UAVStateValidator "1" --> "1" UAVStateManager
+  WaitingUAVManager ..> UAVEventChannels : uses
+  UAVCompletionListener ..> UAVEventChannels : COMPLETION channel
+  UAVCompletionListener ..> UAVCompletionEvent : handles
+
+  ' ---- network_manager.worker ----
+  AsyncUAVWorker "1" --> "1" WaitingUAVManager
+  AsyncUAVWorker "1" --> "1" FlightScheduler
+
+  ' ---- network_manager.scheduler ----
+  FlightScheduler "1" --> "1" WaitingUAVManager
+  FlightScheduler ..> UAVCompletionEvent : publishes >
+  FlightScheduler ..> UAVLinkPassedEvent : publishes >
+  FlightScheduler ..> UAVEventChannels : uses
+
+@enduml

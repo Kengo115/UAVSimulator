@@ -1,0 +1,321 @@
+@startuml UAVSimulator_Operator
+  skinparam classAttributeIconSize 0
+  skinparam packageStyle rectangle
+  skinparam linetype ortho
+  skinparam dpi 96
+  skinparam nodesep 30
+  skinparam ranksep 40
+
+  ' =========================================================
+  '  operator.config
+  ' =========================================================
+  package "operator.config" #FAD7A0 {
+
+    class SimulationConfig <<singleton>> {
+      -{static} instance : SimulationConfig
+      -seed : long
+      -durationMinutes : int
+      -snapshotIntervalSec : int
+      -topologyPath : String
+      -routeSearchMethod : String
+      -phases : PhaseSettings
+      +{static} getInstance() : SimulationConfig
+      +{static} load(String) : boolean
+      +{static} loadDefault() : boolean
+      +{static} reset() : void
+    }
+
+    class StatisticalSimulationConfig <<singleton>> {
+      -{static} instance : StatisticalSimulationConfig
+      -seed : long
+      -simulationDurationHours : double
+      -snapshotIntervalSec : int
+      +{static} getInstance() : StatisticalSimulationConfig
+      +{static} load(String) : boolean
+      +getDurationSeconds() : long
+    }
+  }
+
+  ' =========================================================
+  '  operator.route
+  ' =========================================================
+  package "operator.route" #F9EBEA {
+
+    interface RouteSearcher {
+      +search(Client, int) : void
+    }
+
+    abstract class AbstractPhysarumSolverRouteSearcher {
+      #serverController : ServerController
+      #adjMatrix : int[][]
+      #link : Link[][]
+      #beaconCluster : BeaconCluster
+      #node : int
+      #Q_Kirchhoff : double[]
+      #P_tubePressure : double[]
+      #D_tubeThickness_deltaT : double[][]
+      #pressureCoefficient : double[][]
+      #Q_tubeFlow_sigmoidOutput : double[][]
+      #tubeFlow : int[][]
+      +search(Client, int) : void
+      #{abstract} updateTubeThickness(int) : void
+      #{abstract} solvePressureEquation(...) : int
+      #runUAVFlowRedis(int,int,int,Client) : void
+      #explorePath(...) : int
+      #explorePathGreedy(...) : boolean
+    }
+
+    class DijkstraRouteSearcher {
+      -serverController : ServerController
+      -adjMatrix : int[][]
+      -link : Link[][]
+      -beaconCluster : BeaconCluster
+      -node : int
+      +search(Client, int) : void
+      -dijkstra(Client) : int[]
+      -runUAVFlowRedis(Client, int[], int) : void
+    }
+
+    class PhysarumSolverRouteSearcher {
+      +updateTubeThickness(int) : void
+      +solvePressureEquation(...) : int
+      +getRouteRecordTag() : String
+    }
+
+    class ExtendedPhysarumSolverRouteSearcher {
+      #disconnectedLinkCount : int
+      +updateTubeThickness(int) : void
+      +solvePressureEquation(...) : int
+      #disconnectZeroCapacityLinks() : void
+      #restoreDisconnectedLinks() : void
+    }
+
+    class HybridPhysarumSolverRouteSearcher {
+      -currentFlow : double
+      -requestedFlow : double
+      -stableIterationCount : int
+      +search(Client, int) : void
+      -calculateSourcePressureScore() : double
+      -applyUAVFlowReduction(double, String) : boolean
+    }
+
+    class BinaryExtendedPhysarumSolverRouteSearcher {
+      +search(Client, int) : void
+      -testFlowStability(Client, double, double) : FlowTestResult
+      -performDynamicBinarySearchEPS(Client, double) : void
+    }
+
+    class BisectionalPressureGuidedEPSRouteSearcher {
+      +search(Client, int) : void
+      -testFlowStability(Client, double, double) : FlowTestResult
+    }
+
+    class StepControlledPressureGuidedEPSRouteSearcher {
+      +search(Client, int) : void
+      -calculateSourcePressureScore() : double
+      -applyUAVFlowReduction(double, String) : boolean
+    }
+
+    class SolverFailedException {
+      -clientId : int
+      -iteration : int
+      -searcherType : String
+      +getClientId() : int
+      +getSearcherType() : String
+      +getReason() : String
+    }
+  }
+
+  ' =========================================================
+  '  operator.scheduler
+  ' =========================================================
+  package "operator.scheduler" #FDEBD0 {
+
+    class ExponentialIntervalGenerator {
+      -random : Random
+      -meanIntervalSec : double
+      -sampleCount : long
+      -sumIntervals : double
+      +nextIntervalSec() : double
+      +nextIntervalMillis() : long
+      +getObservedMeanSec() : double
+    }
+
+    class PhaseController <<singleton>> {
+      -{static} instance : PhaseController
+      -currentPhase : Phase
+      -config : SimulationConfig
+      -clientGenerator : RandomClientGenerator
+      -link : Link[][]
+      -nodeCount : int
+      -originalCapacity : double[][]
+      +{static} getInstance() : PhaseController
+      +initialize(SimulationConfig, RandomClientGenerator, Consumer) : void
+      +setLinkArray(Link[][], int) : void
+      +start() : void
+      +stop() : void
+      +generateNextClient() : ScheduleEntry
+      +halveAllLinkCapacity() : void
+      +restoreAllLinkCapacity() : void
+      +getCurrentPhase() : Phase
+    }
+
+    class RandomClientGenerator {
+      -random : Random
+      -nodeCount : int
+      -beaconCluster : BeaconCluster
+      -minUavCount : int
+      -maxUavCount : int
+      +RandomClientGenerator(long, int, BeaconCluster)
+      +applyConfig(SimulationConfig) : void
+      +generateEntry() : ScheduleEntry
+      +generateClient(BoundaryController) : Client
+      +getNextIntervalMillis() : long
+    }
+
+    class SearcherRetryManager <<singleton>> {
+      -{static} instance : SearcherRetryManager
+      -searcherInUse : AtomicBoolean
+      -waitingQueue : LinkedList<SearchRequest>
+      -retryInfoMap : ConcurrentHashMap<Integer,RetryInfo>
+      +{static} getInstance() : SearcherRetryManager
+      +requestSearch(SearchRequest) : boolean
+      +getWaitingQueueSize() : int
+      +isSearcherInUse() : boolean
+      +shutdown() : void
+    }
+
+    class StatisticalSimulationController <<singleton>> {
+      -{static} instance : StatisticalSimulationController
+      -config : StatisticalSimulationConfig
+      -intervalGenerator : ExponentialIntervalGenerator
+      -nodeCount : int
+      -beaconCluster : BeaconCluster
+      +{static} getInstance() : StatisticalSimulationController
+      +initialize(StatisticalSimulationConfig, int, BeaconCluster) : void
+      +start() : void
+      +stop() : void
+      +generateNextClient() : ScheduleEntry
+      +getProgressPercent() : double
+      +getElapsedSeconds() : long
+    }
+  }
+
+  ' =========================================================
+  '  operator.uav
+  ' =========================================================
+  package "operator.uav" #FDEDEC {
+
+    class FlightDataRecorder <<utility>> {
+      +{static} recordRoute(Uav, String) : void
+      +{static} saveFlightData(ClientController, Uav, double) : void
+    }
+  }
+
+  ' =========================================================
+  '  operator / operator.controller
+  ' =========================================================
+  package "operator" #E8DAEF {
+
+    class BoundaryController {
+      -{static} num_loop : int
+      -{static} nodeNum : int
+      -{static} beaconCluster : BeaconCluster
+      -{static} server : ServerController
+      -{static} client : Client
+      -{static} clientController : ClientController
+      -{static} passedClient : Queue<Client>
+      -{static} asyncWorkers : List<AsyncUAVWorker>
+      -{static} flightScheduler : FlightScheduler
+      -{static} currentSessionId : String
+      +setNetworkTopology() : void
+      +routeRequest(Client) : void
+      +routeRequestAsync(Client, Runnable) : void
+      -{static} initializeRedisWorker() : void
+      -{static} shutdownRedisWorker() : void
+    }
+
+    enum "BoundaryController.RouteSearchMethod" as RouteSearchMethod {
+      DIJKSTRA
+      PS
+      EPS
+      HYBRID
+      BINARY
+      BISECTIONAL_PGEPS
+      STEP_CONTROLLED_PGEPS
+    }
+
+    class ClientScheduleLoader {
+      +{static} load(String) : List<ScheduleEntry>
+    }
+
+    class "ClientScheduleLoader.ScheduleEntry" as ScheduleEntry {
+      +clientId : int
+      +sourceId : int
+      +destinationId : int
+      +uavCount : int
+      +intervalAfterSec : double
+    }
+  }
+
+  package "operator.controller" #D2B4DE {
+
+    class ServerController {
+      -{static} node : int
+      -{static} link : Link[][]
+      -{static} beaconCluster : BeaconCluster
+      -adjMatrix : int[][]
+      -dijkstraRouteSearcher : RouteSearcher
+      -physarumSolverRouteSearcher : RouteSearcher
+      -extendedPhysarumSolverRouteSearcher : RouteSearcher
+      -hybridPhysarumSolverRouteSearcher : RouteSearcher
+      -binaryExtendedPhysarumSolverRouteSearcher : RouteSearcher
+      -bisectionalPGEPSRouteSearcher : RouteSearcher
+      -stepControlledPGEPSRouteSearcher : RouteSearcher
+      +initialize(int) : void
+      +run_Dijkstra(Client, ClientController) : void
+      +run_EPS(Client, ClientController, int) : void
+      +run_Hybrid(Client, ClientController, int) : void
+      +{static} getLinkStatic(int, int) : Link
+      +{static} getNodeCount() : int
+      +{static} getLinkArray() : Link[][]
+    }
+  }
+
+  ' =========================================================
+  '  RELATIONSHIPS  (operator-internal only)
+  ' =========================================================
+
+  ' ---- operator.route 継承 ----
+  DijkstraRouteSearcher ..|> RouteSearcher
+  AbstractPhysarumSolverRouteSearcher ..|> RouteSearcher
+  PhysarumSolverRouteSearcher --|> AbstractPhysarumSolverRouteSearcher
+  ExtendedPhysarumSolverRouteSearcher --|> AbstractPhysarumSolverRouteSearcher
+  HybridPhysarumSolverRouteSearcher --|> ExtendedPhysarumSolverRouteSearcher
+  BinaryExtendedPhysarumSolverRouteSearcher --|> ExtendedPhysarumSolverRouteSearcher
+  BisectionalPressureGuidedEPSRouteSearcher --|> ExtendedPhysarumSolverRouteSearcher
+  StepControlledPressureGuidedEPSRouteSearcher --|> ExtendedPhysarumSolverRouteSearcher
+
+  ' ---- operator.route → operator.controller ----
+  AbstractPhysarumSolverRouteSearcher "n" --> "1" ServerController : serverController
+  DijkstraRouteSearcher "n" --> "1" ServerController : serverController
+
+  ' ---- operator.controller ----
+  ServerController "1" *-- "7" RouteSearcher : searchers
+
+  ' ---- operator (BoundaryController) ----
+  BoundaryController +-- RouteSearchMethod
+  ClientScheduleLoader +-- ScheduleEntry
+  BoundaryController "1" --> "1" ServerController : server
+  BoundaryController ..> StatisticalSimulationController : starts/stops
+  BoundaryController ..> ClientScheduleLoader : uses
+
+  ' ---- operator.scheduler 内部 ----
+  StatisticalSimulationController "1" --> "1" StatisticalSimulationConfig
+  StatisticalSimulationController "1" --> "1" ExponentialIntervalGenerator
+  PhaseController "1" --> "1" SimulationConfig
+  PhaseController "1" --> "1" RandomClientGenerator
+  RandomClientGenerator ..> SimulationConfig : reads
+  SearcherRetryManager ..> RouteSearcher : executes
+
+@enduml
