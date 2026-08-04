@@ -74,6 +74,10 @@ public class FlightScheduler {
     // スレッドプールサイズ（初期値、後方互換性のため残す）
     private static final int SCHEDULER_POOL_SIZE = MIN_POOL_SIZE;
 
+    // デバッグモード: 一時停止フラグ（B レベル完全停止）
+    private final java.util.concurrent.atomic.AtomicBoolean isPaused =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+
     /**
      * シングルトンインスタンス取得
      */
@@ -258,6 +262,12 @@ public class FlightScheduler {
             );
             // 飛行中カウント減少（キャンセル時に処理）
             activeFlights.decrementAndGet();
+            return;
+        }
+
+        // デバッグモード: 一時停止中は 200ms 後に再スケジュール（スレッドをブロックしない）
+        if (isPaused.get()) {
+            scheduler.schedule(() -> onLinkPassed(job, linkIndex), 200, TimeUnit.MILLISECONDS);
             return;
         }
 
@@ -616,6 +626,25 @@ public class FlightScheduler {
     }
 
     /**
+     * デバッグモード RESET 用: 全飛行中UAVをキャンセルしスケジューラキューをパージ。
+     * flushdb の前に呼ぶことで、残タスクが RESET 後に容量操作しないようにする。
+     */
+    public void cancelAllFlights() {
+        int count = 0;
+        for (ConcurrentHashMap<Integer, UAVJob> clientMap : activeClientUAVs.values()) {
+            for (UAVJob job : clientMap.values()) {
+                job.setCancelled(true);
+                count++;
+            }
+        }
+        activeClientUAVs.clear();
+        scheduler.purge();  // キャンセル済みタスクをキューから除去
+        resetCounters();
+        LogManager.getInstance().log(
+            "FlightScheduler: cancelAllFlights() - " + count + " UAVをキャンセル");
+    }
+
+    /**
      * カウンタをリセット
      */
     public void resetCounters() {
@@ -623,6 +652,15 @@ public class FlightScheduler {
         completedFlights.set(0);
         linkPassedCount.set(0);
         skippedJobs.set(0);
+    }
+
+    /**
+     * デバッグモード: 一時停止フラグを設定する
+     * true に設定すると onLinkPassed() イベントが 200ms 遅延で再スケジュールされ、
+     * UAV 飛行が実質停止する（B レベル完全停止）。
+     */
+    public void setPaused(boolean paused) {
+        isPaused.set(paused);
     }
 
     // Phase 3b-8: セッションID関連メソッド

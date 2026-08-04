@@ -1,6 +1,7 @@
 package operator.route;
 import shared.client.Client;
 import operator.BoundaryController;
+import operator.debug.DebugModeHook;
 import shared.item.Uav;
 import shared.item.BeaconCluster;
 import shared.item.Link;
@@ -33,12 +34,12 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     protected static final double INF = 10000.0;
     protected static final double NEG = -1.0;
     protected static final double GAMMA = 1.01;
-    protected static final double DELTA_TIME = 0.01;
+    protected static final double DELTA_TIME = 0.02;
     protected static final int PLOT = 1;
     protected static final int PLOT_2 = 20;
     protected static final double THRESHOLD_1 = 0.5;
     protected static final double THRESHOLD_2 = 2.0;
-    protected static final double coefficient_tanh = 0.5;
+    protected static final double coefficient_tanh = 1.0;
 
     // サーバーコントローラー
     protected final ServerController serverController;
@@ -391,6 +392,28 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 LogManager.getInstance().log("Phase 3b-6: 残り" + needUAV + "台のUAVを再割り当てします。");
                 // Phase 12: pendingJobsを渡す（例外が発生する可能性あり）
                 adjustRemainingFlowRedis(needUAV, startNode, goalNode, client, pendingJobs, linkEnqueueOrder);
+            }
+
+            // デバッグモード: pendingJobs 確定後、FLY_APPROVED まで待機
+            if (DebugModeHook.isDebugMode()) {
+                List<DebugModeHook.PendingJobInfo> debugJobs = new ArrayList<>();
+                for (PendingUAVJob p : pendingJobs) {
+                    debugJobs.add(new DebugModeHook.PendingJobInfo(
+                        p.uavId, p.clientId, p.path, p.linkDistances, p.speed, p.delaySeconds));
+                }
+                DebugModeHook.getInstance().onPendingJobsReady(clientId, debugJobs, startNode, goalNode);
+                try {
+                    DebugModeHook.getInstance().waitForFlyApproved(clientId);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                // RESET によるラッチ解放の場合はジョブ投入をスキップ
+                if (DebugModeHook.isResetActive()) {
+                    LogManager.getInstance().log(
+                        "DebugModeHook: client" + clientId + " RESET検出 → ジョブ投入スキップ");
+                    return;
+                }
             }
 
             // Phase 12: 全UAVの経路が確定したので、まとめてスケジュール登録

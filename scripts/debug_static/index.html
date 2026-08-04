@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UAV Simulator - デバッグモード</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+/* ページ全体を Vue #app で包むための補足スタイル */
+#app { display: contents; }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+<!-- ============================================================
+     Header
+     ============================================================ -->
+<header>
+  <h1>UAV Simulator &mdash; デバッグモード</h1>
+
+  <span style="display:flex;align-items:center;gap:6px;font-size:0.8rem;">
+    <span class="conn-dot" :class="{ ok: connected }"></span>
+    <span>{{ statusMsg }}</span>
+  </span>
+
+  <span class="badge" :class="isPaused ? 'paused' : 'live'">
+    {{ isPaused ? '一時停止中' : 'LIVE' }}
+  </span>
+
+  <span style="font-size:0.8rem;">
+    UAV: <b>{{ uavCount }}</b>
+  </span>
+
+  <div class="header-right">
+    <button class="btn btn-warn"      @click="doPause"  :disabled="isPaused">一時停止</button>
+    <button class="btn btn-success"   @click="doResume" :disabled="!isPaused">再開</button>
+    <button class="btn btn-secondary" @click="doReset">初期化</button>
+  </div>
+</header>
+
+<!-- ============================================================
+     Main: SVG + サイドパネル
+     ============================================================ -->
+<div class="main">
+
+  <!-- SVG トポロジ -->
+  <div id="svg-container">
+    <svg id="topo-svg" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow-route"
+                markerWidth="5" markerHeight="4" refX="4" refY="2" orient="auto">
+          <polygon points="0 0,5 2,0 4" fill="#f39c12"/>
+        </marker>
+      </defs>
+      <g id="g-links"></g>
+      <g id="g-routes"></g>
+      <g id="g-nodes"></g>
+      <g id="g-uavs"></g>
+    </svg>
+  </div>
+
+  <!-- 右サイドパネル -->
+  <div class="sidebar">
+
+    <!-- 事業者生成フォーム -->
+    <div class="sidebar-section">
+      <h2>事業者生成</h2>
+
+      <p class="node-info">出発: <span>{{ srcLabel }}</span></p>
+      <button class="btn btn-secondary btn-full"
+              :style="selectMode === 'src' ? 'border-color:#58a6ff;color:#58a6ff' : ''"
+              @click="startSelectSrc">
+        {{ selectMode === 'src' ? '▶ ノードをクリック中...' : '出発ノードを選択' }}
+      </button>
+
+      <p class="node-info" style="margin-top:8px;">到着: <span>{{ dstLabel }}</span></p>
+      <button class="btn btn-secondary btn-full"
+              :style="selectMode === 'dst' ? 'border-color:#f85149;color:#f85149' : ''"
+              @click="startSelectDst">
+        {{ selectMode === 'dst' ? '▶ ノードをクリック中...' : '到着ノードを選択' }}
+      </button>
+
+      <label style="margin-top:10px;">UAV 台数</label>
+      <input type="number" v-model.number="form.uavCount" min="1" max="60">
+
+      <label>経路探索手法</label>
+      <select v-model.number="form.method">
+        <option v-for="(label, id) in METHOD_LABELS" :key="id" :value="Number(id)">
+          {{ label }}
+        </option>
+      </select>
+
+      <button class="btn btn-primary btn-full" style="margin-top:4px;"
+              @click="doAssign" :disabled="assigning">
+        {{ assigning ? '経路探索中...' : '経路を割り当てる' }}
+      </button>
+    </div>
+
+    <!-- 飛行開始待ちキュー -->
+    <div class="sidebar-section" v-if="pendingFly.length > 0">
+      <h2>飛行開始待ち</h2>
+      <div v-for="p in pendingFly" :key="p.clientId" style="margin-bottom:12px;">
+        <div style="font-size:0.78rem; margin-bottom:6px;">
+          <b>client{{ p.clientId }}</b>: {{ p.src }} → {{ p.dst }}
+          &nbsp;({{ p.uavCount }} 台)
+        </div>
+        <!-- UAV個別ボタン（押すとそのUAVの経路だけ表示、再押しで全表示に戻る） -->
+        <div v-if="routeResults[p.clientId] && routeResults[p.clientId].uavs"
+             class="uav-select-row">
+          <button
+            v-for="(uav, idx) in routeResults[p.clientId].uavs"
+            :key="uav.uavId"
+            class="btn-uav-select"
+            :class="{ active: selectedUavs[p.clientId] === idx }"
+            @click="selectUav(p.clientId, idx)">
+            UAV{{ uav.uavId }}
+          </button>
+        </div>
+        <button class="btn btn-success btn-full" style="margin-top:4px;"
+                @click="doFly(p.clientId)">
+          ▶ 飛行開始 (client{{ p.clientId }})
+        </button>
+      </div>
+    </div>
+
+    <!-- UAV 一覧 -->
+    <div class="uav-list-area">
+      <div style="font-size:0.75rem; color:#8b949e; margin-bottom:6px;">
+        UAV 一覧 ({{ uavCount }} 台)
+      </div>
+      <div v-for="(state, key) in uavStates" :key="key"
+           class="uav-item" :class="state.status">
+        <b>UAV{{ state.uavId }}</b> (c{{ state.clientId }})
+        {{ state.status }}
+        <span v-if="state.status === 'FLYING'">
+          {{ state.fromNode }}→{{ state.toNode }}
+        </span>
+        <span v-else-if="state.currentNode != null">
+          @{{ state.currentNode }}
+        </span>
+      </div>
+      <div v-if="uavCount === 0"
+           style="font-size:0.75rem; color:#8b949e; padding-top:8px;">
+        UAVなし
+      </div>
+    </div>
+
+    <!-- 凡例 -->
+    <div class="legend">
+      <h2>凡例</h2>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#e74c3c"></div>飛行中
+      </div>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#3498db"></div>上空待機
+      </div>
+      <div class="legend-row">
+        <div class="legend-dot" style="background:#27ae60"></div>飛行前待機
+      </div>
+      <div class="legend-row" style="margin-top:4px;">
+        <div style="width:26px;height:4px;background:#f39c12;border-radius:2px;"></div>
+        割り当て経路
+      </div>
+    </div>
+
+  </div><!-- /sidebar -->
+</div><!-- /main -->
+
+<!-- ステータスバー -->
+<div class="status-bar">
+  <span>UAV: <b>{{ uavCount }}</b></span>
+  <span>{{ statusMsg }}</span>
+  <span v-if="selectMode" style="color:#58a6ff;font-weight:600;">
+    {{ selectMode === 'src' ? '出発' : '到着' }}ノードを地図でクリックしてください
+  </span>
+</div>
+
+</div><!-- /#app -->
+
+<!-- Vue 3 CDN -->
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

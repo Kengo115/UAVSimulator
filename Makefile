@@ -1,4 +1,4 @@
-.PHONY: up down down-all restart run compile clean status logs kill-sim \
+.PHONY: up down down-all restart run run-debug run-debug-quick compile clean status logs kill-sim \
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
        plot-topology plot-topology-labels ensure-redis plot-method-comparison \
        plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
@@ -176,6 +176,49 @@ run-light: compile ensure-redis kill-sim
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
 		mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
 	rm -f $(PID_FILE)
+
+# =============================================================================
+# デバッグモード実行
+# =============================================================================
+
+# デバッグモードで起動（コンパイル込み）
+# 使用例: make run-debug
+# ポート 9001 固定、トポロジ koriyama 固定、Redis SIM_ID=1 (port 6379)
+DEBUG_REDIS_PORT := 6379
+DEBUG_PID_FILE   := .debug.pid
+
+run-debug: compile ensure-redis
+	@echo "UAVデバッグモードを起動します..."
+	@echo "  UIポート: 9001 (http://localhost:9001)"
+	@echo "  Redisポート: $(DEBUG_REDIS_PORT)"
+	@mkdir -p src/result
+	@if [ -f $(DEBUG_PID_FILE) ]; then \
+		OLD_PID=$$(cat $(DEBUG_PID_FILE)); \
+		if ps -p $$OLD_PID > /dev/null 2>&1; then \
+			kill $$OLD_PID 2>/dev/null || true; sleep 1; \
+		fi; \
+		rm -f $(DEBUG_PID_FILE); \
+	fi
+	@echo $$$$ > $(DEBUG_PID_FILE)
+	REDIS_PORT=$(DEBUG_REDIS_PORT) SIM_ID=1 DEBUG_MODE=true \
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
+	rm -f $(DEBUG_PID_FILE)
+
+# デバッグモードで起動（コンパイルなし）
+run-debug-quick: ensure-redis
+	@echo "UAVデバッグモードを起動します（コンパイルなし）..."
+	@mkdir -p src/result
+	@if [ -f $(DEBUG_PID_FILE) ]; then \
+		OLD_PID=$$(cat $(DEBUG_PID_FILE)); \
+		if ps -p $$OLD_PID > /dev/null 2>&1; then \
+			kill $$OLD_PID 2>/dev/null || true; sleep 1; \
+		fi; \
+		rm -f $(DEBUG_PID_FILE); \
+	fi
+	@echo $$$$ > $(DEBUG_PID_FILE)
+	REDIS_PORT=$(DEBUG_REDIS_PORT) SIM_ID=1 DEBUG_MODE=true \
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
+	rm -f $(DEBUG_PID_FILE)
 
 # ビルド成果物をクリーンアップ
 clean:

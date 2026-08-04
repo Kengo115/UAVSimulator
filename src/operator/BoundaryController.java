@@ -323,8 +323,19 @@ public class BoundaryController {
     /**
      * Phase 3b-6: Redisワーカーを初期化する
      */
-    private static void initializeRedisWorker() {
+    static void initializeRedisWorker() {
         try {
+            // 既存ワーカーを停止（RESET 時の蓄積防止）
+            if (!asyncWorkers.isEmpty()) {
+                LogManager.getInstance().log("Phase 3b-10: 既存ワーカー(" + asyncWorkers.size() + "台)を停止します");
+                for (AsyncUAVWorker worker : asyncWorkers) {
+                    worker.stop();
+                }
+            }
+            if (workerExecutor != null && !workerExecutor.isShutdown()) {
+                workerExecutor.shutdownNow();
+            }
+
             // Phase 3b-8: セッションIDを生成（古いプロセスからのジョブを無視するため）
             currentSessionId = UUID.randomUUID().toString().substring(0, 8);
             LogManager.getInstance().log("Phase 3b-8: 新しいセッションID生成: " + currentSessionId);
@@ -691,6 +702,43 @@ public class BoundaryController {
         } catch (IOException e) {
             System.err.println("⚠ Redis接続に失敗しました: " + e.getMessage());
             LogManager.getInstance().error("Redis接続失敗", e);
+        }
+
+        // =====================================================================
+        // デバッグモード分岐（DEBUG_MODE=true 環境変数で有効化）
+        // =====================================================================
+        if ("true".equalsIgnoreCase(System.getenv("DEBUG_MODE"))) {
+            try {
+                String topologyFilePath = "config/topology/koriyama_topology.txt";
+                System.out.println("デバッグモード: トポロジ = " + topologyFilePath);
+
+                TopologyFileReader.TopologyData topologyData =
+                    TopologyFileReader.readTopologyFile(topologyFilePath);
+                setLargeScaleMode(true);
+                boundaryController.setNodeNum(topologyData.nodeCount);
+                beaconCluster = new BeaconCluster(topologyData);
+                server = new ServerController(beaconCluster, topologyData);
+                server.initializeRouteSearchers();
+                boundaryController.setNetworkTopology();
+
+                // Redisワーカー初期化（FlightScheduler・AsyncUAVWorker・リンク容量）
+                if (!RedisConnectionManager.getInstance().isConnected()) {
+                    System.err.println("✗ Redis未接続のため終了します。");
+                    System.exit(1);
+                }
+                initializeRedisWorker();
+
+                // practice.net 出力ディレクトリを作成
+                new java.io.File("src/result").mkdirs();
+
+                // デバッグモードコントローラーを起動（内部でブロック）
+                new DebugModeController(boundaryController).start();
+            } catch (Exception e) {
+                System.err.println("デバッグモード起動失敗: " + e.getMessage());
+                e.printStackTrace();
+                System.exit(1);
+            }
+            return;
         }
 
         // ランダムクライアント生成実験

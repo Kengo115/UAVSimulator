@@ -2,6 +2,7 @@ package operator.route;
 
 import shared.client.Client;
 import operator.BoundaryController;
+import operator.debug.DebugModeHook;
 import shared.item.BeaconCluster;
 import shared.item.Link;
 import shared.item.Uav;
@@ -13,6 +14,8 @@ import shared.util.LogManager;
 import shared.util.ResultOutputManager;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -178,6 +181,32 @@ public class DijkstraRouteSearcher implements RouteSearcher {
 
         // メモリベースと同様に2秒間隔でジョブ投入するためのスケジューラ
         ScheduledExecutorService enqueueScheduler = Executors.newScheduledThreadPool(1);
+
+        // デバッグモード: 全UAV情報を収集後に FLY_APPROVED まで待機
+        if (DebugModeHook.isDebugMode()) {
+            List<DebugModeHook.PendingJobInfo> debugJobs = new ArrayList<>();
+            for (int f = 0; f < requiredUAVs; f++) {
+                Uav uav = client.getFlow().getUav(f);
+                debugJobs.add(new DebugModeHook.PendingJobInfo(
+                    uav.getId(), clientId, path, linkDistances, uav.getSpeed(), f * 2));
+            }
+            DebugModeHook.getInstance().onPendingJobsReady(
+                clientId, debugJobs, path[0], path[path.length - 1]);
+            try {
+                DebugModeHook.getInstance().waitForFlyApproved(clientId);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                enqueueScheduler.shutdown();
+                return;
+            }
+            // RESET によるラッチ解放の場合はジョブ投入をスキップ
+            if (DebugModeHook.isResetActive()) {
+                LogManager.getInstance().log(
+                    "DebugModeHook: client" + clientId + " RESET検出 → ジョブ投入スキップ (Dijkstra)");
+                enqueueScheduler.shutdown();
+                return;
+            }
+        }
 
         for (int f = 0; f < requiredUAVs; f++) {
             Uav uav = client.getFlow().getUav(f);

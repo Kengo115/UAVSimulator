@@ -1,10 +1,10 @@
 {
   "seed": 12345,
-  "simulation_duration_hours": 1.0,
+  "simulation_duration_hours": 5.0,
   "snapshot_interval_sec": 10,
 
   "arrival": {
-    "mean_interval_sec": 6.67,
+    "mean_interval_sec": 5.0,
     "uav_count_per_batch": 10,
     "distribution": "exponential"
   },
