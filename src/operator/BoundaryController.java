@@ -18,6 +18,7 @@ import network_manager.scheduler.FlightScheduler;
 import operator.scheduler.PhaseController;
 import operator.scheduler.RandomClientGenerator;
 import operator.scheduler.StatisticalSimulationController;
+import shared.redis.VizStateManager;
 import shared.util.LinkStatusRecorder;
 import shared.util.LogManager;
 import shared.util.ResultOutputManager;
@@ -62,6 +63,9 @@ public class BoundaryController {
     // Phase 5-2: 非同期ルートリクエスト用ExecutorService
     private static ExecutorService routeRequestExecutor;
     private static final int ROUTE_REQUEST_THREAD_COUNT = 4;
+
+    // 可視化サーバープロセス（起動した場合のみnon-null）
+    private static Process vizServerProcess = null;
 
     String filePath = "src/result/practice.net";
 
@@ -429,6 +433,18 @@ public class BoundaryController {
     }
 
     /**
+     * 可視化サーバープロセスを停止する。
+     * 起動していない場合は何もしない。
+     */
+    private static void shutdownVizServer() {
+        if (vizServerProcess != null && vizServerProcess.isAlive()) {
+            vizServerProcess.destroy();
+            LogManager.getInstance().log("VizServer: 可視化サーバーを停止しました");
+            vizServerProcess = null;
+        }
+    }
+
+    /**
      * Phase 3b-6: 完了リスナーを取得する（統計情報用）
      */
     public static UAVCompletionListener getCompletionListener() {
@@ -663,6 +679,15 @@ public class BoundaryController {
             RedisConnectionManager redisManager = RedisConnectionManager.getInstance();
             redisManager.connect();
             System.out.println("✓ Redisに接続しました: " + redisManager.getConnectionInfo());
+
+            // 前回シミュレーションの残存データをクリア
+            // 各SIM_IDは独立したRedisポートを使用するため他シミュレーションには影響しない
+            try {
+                redisManager.getClient().getKeys().flushdb();
+                System.out.println("✓ Redisデータをクリアしました（前回の残存データを削除）");
+            } catch (Exception flushEx) {
+                System.err.println("⚠ Redisクリアに失敗しました（続行）: " + flushEx.getMessage());
+            }
         } catch (IOException e) {
             System.err.println("⚠ Redis接続に失敗しました: " + e.getMessage());
             LogManager.getInstance().error("Redis接続失敗", e);
@@ -875,6 +900,54 @@ public class BoundaryController {
                 System.out.println("無効な入力です。スケジュールファイルを使用します。");
             }
 
+            // 可視化オプション
+            System.out.print("\nシミュレーションの可視化を行いますか? (yes/no) [no]: ");
+            String vizInput = reader.readLine().trim().toLowerCase();
+            boolean enableViz = vizInput.equals("yes") || vizInput.equals("y");
+
+            if (enableViz) {
+                int vizPort = 8000 + Integer.parseInt(SIM_ID);
+                String topologyPath = topologyFilePath;  // 既に取得済み
+
+                // VizStateManagerを有効化
+                VizStateManager.getInstance().enable(SIM_ID, RedisConnectionManager.getInstance().getClient());
+
+                // 可視化サーバーを起動
+                String vizDir = RESULT_BASE_DIR + "/viz";
+                new File(vizDir).mkdirs();
+                String recordingPath = vizDir + "/recording.jsonl";
+
+                String pythonCmd = new File(".venv/bin/python").exists() ? ".venv/bin/python" : "python3";
+                int redisPort = Integer.parseInt(System.getenv("REDIS_PORT") != null ? System.getenv("REDIS_PORT") : "6379");
+                try {
+                    ProcessBuilder pb = new ProcessBuilder(
+                        pythonCmd,
+                        "scripts/viz_server.py",
+                        "--sim-id", SIM_ID,
+                        "--topology", topologyPath,
+                        "--port", String.valueOf(vizPort),
+                        "--redis-port", String.valueOf(redisPort),
+                        "--recording", recordingPath
+                    );
+                    pb.redirectErrorStream(false);
+                    pb.redirectOutput(new File(vizDir + "/server.log"));
+                    pb.redirectError(new File(vizDir + "/server_error.log"));
+                    vizServerProcess = pb.start();
+                    Thread.sleep(1500); // サーバー起動待機
+                    System.out.println("✓ 可視化サーバーを起動しました");
+                    System.out.println("  URL: http://localhost:" + vizPort);
+                    System.out.println("  録画先: " + recordingPath);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw ie;
+                } catch (Exception e) {
+                    System.err.println("可視化サーバーの起動に失敗しました: " + e.getMessage());
+                    System.err.println("  シミュレーションは可視化なしで続行します。");
+                    VizStateManager.getInstance().disable();
+                    enableViz = false;
+                }
+            }
+
             List<ClientScheduleLoader.ScheduleEntry> schedule = new ArrayList<>();
             RandomClientGenerator randomGenerator = null;
             boolean usePhaseControl = (clientGenMode == 3);
@@ -1079,9 +1152,13 @@ public class BoundaryController {
                 System.out.println("  最終平均リンク負荷率: " + String.format("%.2f%%",
                         LinkStatusRecorder.getInstance().getAverageLoadRate()));
 
+                // 可視化: シミュレーション終了通知
+                VizStateManager.getInstance().signalSimulationEnded();
+
                 // ワーカー・スケジューラを停止してJVMが正常終了できるようにする
                 // （非デーモンスレッドを明示的に停止しないとJVMが終了しない）
                 shutdownRedisWorker();
+                shutdownVizServer();
                 try {
                     RedisConnectionManager.getInstance().disconnect();
                 } catch (Exception e) {
@@ -1219,6 +1296,10 @@ public class BoundaryController {
                 LogManager.getInstance().log("Phase 7-9: 4フェーズ制御完了 (生成クライアント数=" + generatedCount + ")");
                 System.out.println("\n✓ シミュレーション完了 (生成クライアント数: " + generatedCount + ")");
 
+                // 可視化: シミュレーション終了通知
+                VizStateManager.getInstance().signalSimulationEnded();
+                shutdownVizServer();
+
                 // フェーズ制御モードでは以降のスケジュール処理をスキップ
                 schedule = new ArrayList<>();
 
@@ -1352,8 +1433,12 @@ public class BoundaryController {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 LogManager.getInstance().log("プログラムを終了します。");
 
+                // 可視化: シミュレーション終了通知
+                VizStateManager.getInstance().signalSimulationEnded();
+
                 // Redisワーカーを停止
                 shutdownRedisWorker();
+                shutdownVizServer();
 
                 // Redis接続を切断
                 try {
