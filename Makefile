@@ -335,9 +335,10 @@ venv-setup:
 	@if [ ! -d "$(VENV)" ]; then \
 		python3 -m venv $(VENV); \
 		$(VENV)/bin/pip install --upgrade pip --quiet; \
-		$(VENV)/bin/pip install matplotlib networkx pandas --quiet; \
+		$(VENV)/bin/pip install matplotlib networkx pandas fastapi "uvicorn[standard]" redis --quiet; \
 		echo "✓ 仮想環境を作成しました: $(VENV)"; \
 	else \
+		$(VENV)/bin/pip install fastapi "uvicorn[standard]" redis --quiet 2>/dev/null || true; \
 		echo "✓ 仮想環境は既に存在します: $(VENV)"; \
 	fi
 

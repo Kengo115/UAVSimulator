@@ -4,6 +4,7 @@ import shared.redis.LinkCapacityManager;
 import shared.redis.PathWaitingManager;
 import shared.redis.RedisConnectionManager;
 import shared.redis.UAVJobQueue;
+import shared.redis.VizStateManager;
 import shared.item.UAVJob;
 
 import org.redisson.api.RMap;
@@ -185,6 +186,15 @@ public class FlightScheduler {
         // 飛行開始時刻を記録
         job.setCurrentLinkStartTime(System.currentTimeMillis());
 
+        // 可視化: FLYING状態を報告
+        VizStateManager.getInstance().reportFlying(
+            job.getUavId(), job.getClientId(),
+            fromNode, toNode,
+            job.getCurrentLinkStartTime(),
+            job.getLinkDistance(linkIndex),
+            job.getSpeed()
+        );
+
         // 飛行中カウント増加
         activeFlights.incrementAndGet();
 
@@ -328,6 +338,16 @@ public class FlightScheduler {
         LinkStatusRecorder.getInstance().onLinkEnter(nextFrom, nextTo);
 
         job.setCurrentLinkStartTime(System.currentTimeMillis());
+
+        // 可視化: 次リンクのFLYING状態を報告
+        VizStateManager.getInstance().reportFlying(
+            job.getUavId(), job.getClientId(),
+            nextFrom, nextTo,
+            job.getCurrentLinkStartTime(),
+            job.getLinkDistance(linkIndex + 1),
+            job.getSpeed()
+        );
+
         scheduleNextLink(job, linkIndex + 1);
     }
 
@@ -351,6 +371,9 @@ public class FlightScheduler {
 
         // 待機キューに登録
         waitingManager.enqueue(fromNode, toNode, job);
+
+        // 可視化: HOVERING状態を報告（飛行中に次ホップ容量超過でノード待機）
+        VizStateManager.getInstance().reportHovering(job.getUavId(), job.getClientId(), fromNode);
 
         // Phase 8-Debug: 待機数が異常に多い場合に警告ログ出力
         int waitingCount = waitingManager.getWaitingCount(fromNode, toNode);
@@ -390,6 +413,9 @@ public class FlightScheduler {
             );
             return;
         }
+
+        // 可視化: 飛行完了を報告（Redis Hashから削除）
+        VizStateManager.getInstance().reportCompleted(job.getUavId(), job.getClientId());
 
         activeFlights.decrementAndGet();
         int completed = completedFlights.incrementAndGet();

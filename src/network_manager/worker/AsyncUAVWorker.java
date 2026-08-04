@@ -1,5 +1,6 @@
 package network_manager.worker;
 import shared.redis.RedisConnectionManager;
+import shared.redis.VizStateManager;
 
 import network_manager.redis.*;
 import network_manager.scheduler.FlightScheduler;
@@ -134,6 +135,10 @@ public class AsyncUAVWorker {
             // Phase 3b-9: 待機開始時刻を記録
             job.startWaiting();
             waitingManager.enqueue(fromNode, toNode, job);
+
+            // 可視化: PRE_WAIT（第一ホップ容量超過、未飛行）として記録
+            VizStateManager.getInstance().reportPreWait(job.getUavId(), job.getClientId(), fromNode);
+
             LogManager.getInstance().log(
                 "Phase 3b-3: Worker " + workerId + " client" + job.getClientId() + " UAV" + job.getUavId() +
                 " 容量不足、待機 (link=" + fromNode + "→" + toNode + ")"

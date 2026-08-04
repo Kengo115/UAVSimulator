@@ -49,6 +49,9 @@ public class PathWaitingManager {
         RDeque<UAVJob> queue = client.getDeque(key);
         queue.addLast(job);
 
+        // 可視化: PRE_WAIT（経路割り当て待ち）として記録
+        VizStateManager.getInstance().reportPreWait(job.getUavId(), clientId, job.getSourceBeaconId());
+
         LogManager.getInstance().log(
             "Phase 4 [経路待ち登録]: client" + clientId + " UAV" + job.getUavId() +
             " を経路待ちキューに追加 (s=" + job.getSourceBeaconId() + "→d=" + job.getDestinationBeaconId() +
