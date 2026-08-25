@@ -33,7 +33,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     // 定数
     protected static final double INF = 10000.0;
     protected static final double NEG = -1.0;
-    protected static final double GAMMA = 1.01;
+    protected static final double GAMMA = 4.0;
     protected static final double DELTA_TIME = 0.02;
     protected static final int PLOT = 1;
     protected static final int PLOT_2 = 20;
@@ -180,27 +180,33 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             // チューブ厚の更新（サブクラスで実装）
             updateTubeThickness(ct);
 
-            // 結果のプロット
+            // イテレーション回数は常に標準出力（大規模・小規模共通）
             if ((ct + 1) % PLOT == 0) {
                 LogManager.getInstance().log("Iteration: " + (ct + 1));
-                ResultOutputManager.outputToPajek(client, eps, client.getFlow().getTheNumberOfUAV(), ct, link, beaconCluster, node, serverController.getRunCounter());
-                ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), client.getFlow().getTheNumberOfUAV());
-                ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, client.getFlow().getTheNumberOfUAV());
             }
 
-            // 追加のプロット（サブクラスでオーバーライド可能）
-            additionalPlotting(client, ct);
-
-            // イテレーション毎の結果を記録
-            try {
-                int sourceNodeId = client.getFlow().getSource().getId();
-                if (sourceNodeId >= 0 && sourceNodeId < P_tubePressure.length) {
-                    double currentSourcePressure = P_tubePressure[sourceNodeId];
-                    ResultOutputManager.outputIterationSourcePressure(ct + 1, currentSourcePressure, serverController.getRunCounter());
+            // ファイル出力は小規模モード時のみ（大規模シミュレーションではスキップ）
+            if (!BoundaryController.isLargeScaleMode()) {
+                if ((ct + 1) % PLOT == 0) {
+                    ResultOutputManager.outputToPajek(client, eps, client.getFlow().getTheNumberOfUAV(), ct, link, beaconCluster, node, serverController.getRunCounter());
+                    ResultOutputManager.outputToExcel(client, ct, link, node, serverController.getRunCounter(), client.getFlow().getTheNumberOfUAV());
+                    ResultOutputManager.outputToTxt(client, ct, link, node, serverController.getRunCounter(), pressureCoefficient, P_tubePressure, client.getFlow().getTheNumberOfUAV());
                 }
-                ResultOutputManager.outputIterationFlow(ct + 1, client.getFlow().getTheNumberOfUAV(), serverController.getRunCounter());
-            } catch (IOException e) {
-                LogManager.getInstance().error("Failed to output iteration data", e);
+
+                // 追加のプロット（サブクラスでオーバーライド可能）
+                additionalPlotting(client, ct);
+
+                // イテレーション毎の結果を記録
+                try {
+                    int sourceNodeId = client.getFlow().getSource().getId();
+                    if (sourceNodeId >= 0 && sourceNodeId < P_tubePressure.length) {
+                        double currentSourcePressure = P_tubePressure[sourceNodeId];
+                        ResultOutputManager.outputIterationSourcePressure(ct + 1, currentSourcePressure, serverController.getRunCounter());
+                    }
+                    ResultOutputManager.outputIterationFlow(ct + 1, client.getFlow().getTheNumberOfUAV(), serverController.getRunCounter());
+                } catch (IOException e) {
+                    LogManager.getInstance().error("Failed to output iteration data", e);
+                }
             }
 
             ct++;
@@ -243,7 +249,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     protected abstract int solvePressureEquation(double[][] pressCoeff, double[] dataAll, double[] output, int n, int maxIter, double eps);
 
     /**
-     * 追加のプロット処理を行う
+     * 追加のプロット処理を行う（小規模モード時のみ呼ばれる）
      * サブクラスでオーバーライド可能
      * @param client クライアント
      * @param ct 現在の反復回数

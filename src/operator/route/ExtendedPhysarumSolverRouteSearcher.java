@@ -75,14 +75,14 @@ public class ExtendedPhysarumSolverRouteSearcher extends AbstractPhysarumSolverR
     }
 
     /**
-     * 追加のプロット処理を行う
+     * 追加のプロット処理を行う（小規模モード時のみ呼ばれる）
      * @param client クライアント
      * @param ct 現在の反復回数
      * @throws IOException 入出力例外
      */
     @Override
     protected void additionalPlotting(Client client, int ct) throws IOException {
-        if (ct % PLOT_2 == 0 || ct == 999) { // 999は最後のループの前
+        if (ct % PLOT_2 == 0 || ct == 999) {
             ResultOutputManager.outputRouteToExcel(client, ct, link, serverController.getRunCounter());
         }
     }

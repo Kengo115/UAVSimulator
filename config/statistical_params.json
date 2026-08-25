@@ -1,6 +1,6 @@
 {
   "seed": 12345,
-  "simulation_duration_hours": 5.0,
+  "simulation_duration_hours": 10.0,
   "snapshot_interval_sec": 10,
 
   "arrival": {

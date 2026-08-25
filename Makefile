@@ -1,6 +1,6 @@
-.PHONY: up down down-all restart run run-debug run-debug-quick compile clean status logs kill-sim \
+.PHONY: up down down-all restart run run-debug run-debug-quick compile clean status logs kill-sim viz \
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
-       plot-topology plot-topology-labels ensure-redis plot-method-comparison \
+       plot-topology plot-topology-labels ensure-redis ensure-debug-redis plot-method-comparison \
        plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
        plot-preflight-wait-cdf-comparison plot-inflight-wait-cdf-comparison \
        plot-distance-cdf-comparison plot-exceeded-rate-comparison \
@@ -21,6 +21,7 @@ LOG_DIR_SIM := src/log/sim_$(SIM_ID)
 
 # PIDファイルのパス（SIM_ID別プロセス管理用）
 PID_FILE := .sim_$(SIM_ID).pid
+VIZ_PID_FILE := $(RESULT_DIR_SIM)/viz/server.pid
 
 # =============================================================================
 # Dockerコンテナ管理
@@ -48,6 +49,10 @@ down-all: stop-all
 		echo "  $$container を停止..."; \
 		docker stop $$container && docker rm $$container; \
 	done
+	@if docker ps --format '{{.Names}}' | grep -q "^uav-redis-debug$$"; then \
+		echo "  uav-redis-debug を停止..."; \
+		docker stop uav-redis-debug && docker rm uav-redis-debug; \
+	fi
 	@echo "✓ 全Redisコンテナが停止しました"
 
 # Dockerコンテナを再起動
@@ -94,6 +99,20 @@ else
 	fi
 endif
 
+# デバッグモード専用Redis（ポート6399、通常シミュレーションとは独立）
+ensure-debug-redis:
+	@if ! docker ps --format '{{.Names}}' | grep -q "^uav-redis-debug$$"; then \
+		echo "デバッグモード用Redisを起動します (port: $(DEBUG_REDIS_PORT))..."; \
+		docker run -d --name uav-redis-debug \
+			-p $(DEBUG_REDIS_PORT):6379 \
+			redis:7.2-alpine \
+			redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru; \
+		echo "✓ デバッグRedis起動完了 (ポート: $(DEBUG_REDIS_PORT))"; \
+		sleep 1; \
+	else \
+		echo "✓ デバッグRedis既に起動中 (ポート: $(DEBUG_REDIS_PORT))"; \
+	fi
+
 # =============================================================================
 # プロセス管理（SIM_ID別）
 # =============================================================================
@@ -109,6 +128,30 @@ kill-sim:
 		fi; \
 		rm -f $(PID_FILE); \
 	fi
+	@if [ -f $(VIZ_PID_FILE) ]; then \
+		OLD_VIZ_PID=$$(cat $(VIZ_PID_FILE)); \
+		if ps -p $$OLD_VIZ_PID > /dev/null 2>&1; then \
+			kill $$OLD_VIZ_PID 2>/dev/null || true; \
+		fi; \
+		rm -f $(VIZ_PID_FILE); \
+	fi
+
+# シミュレーション終了後の録画再閲覧用
+# 使用例: make viz SIM_ID=1
+viz:
+	@$(MAKE) kill-sim
+	@TIMESTAMP=$$(date +%Y%m%d_%H%M%S); \
+	 mkdir -p $(RESULT_DIR_SIM)/viz/$$TIMESTAMP; \
+	 PYTHONCMD=$$([ -f .venv/bin/python ] && echo .venv/bin/python || echo python3); \
+	 $$PYTHONCMD scripts/viz_server.py \
+	    --sim-id $(SIM_ID) \
+	    --topology $(TOPOLOGY) \
+	    --port $$(expr 8000 + $(SIM_ID)) \
+	    --redis-port $(REDIS_PORT_NUM) \
+	    --session-dir $(RESULT_DIR_SIM)/viz/$$TIMESTAMP & \
+	 echo $$! > $(VIZ_PID_FILE)
+	@echo "✓ 可視化サーバーを起動しました (履歴参照モード)"
+	@echo "  URL: http://localhost:$$(expr 8000 + $(SIM_ID))"
 
 # 全シミュレーションを停止
 stop-all:
@@ -124,6 +167,14 @@ stop-all:
 			rm -f "$$f"; \
 		fi; \
 	done
+	@if [ -f .debug.pid ]; then \
+		OLD_PID=$$(cat .debug.pid); \
+		if ps -p $$OLD_PID > /dev/null 2>&1; then \
+			kill $$OLD_PID 2>/dev/null || true; \
+		fi; \
+		rm -f .debug.pid; \
+	fi
+	@pkill -f "scripts/viz_server.py" 2>/dev/null || true
 	@echo "✓ 全シミュレーション停止完了"
 
 # プロジェクトをコンパイル
@@ -183,11 +234,11 @@ run-light: compile ensure-redis kill-sim
 
 # デバッグモードで起動（コンパイル込み）
 # 使用例: make run-debug
-# ポート 9001 固定、トポロジ koriyama 固定、Redis SIM_ID=1 (port 6379)
-DEBUG_REDIS_PORT := 6379
+# ポート 9001 固定、トポロジ koriyama 固定、専用Redis (port 6399)
+DEBUG_REDIS_PORT := 6399
 DEBUG_PID_FILE   := .debug.pid
 
-run-debug: compile ensure-redis
+run-debug: compile ensure-debug-redis
 	@echo "UAVデバッグモードを起動します..."
 	@echo "  UIポート: 9001 (http://localhost:9001)"
 	@echo "  Redisポート: $(DEBUG_REDIS_PORT)"
@@ -205,7 +256,7 @@ run-debug: compile ensure-redis
 	rm -f $(DEBUG_PID_FILE)
 
 # デバッグモードで起動（コンパイルなし）
-run-debug-quick: ensure-redis
+run-debug-quick: ensure-debug-redis
 	@echo "UAVデバッグモードを起動します（コンパイルなし）..."
 	@mkdir -p src/result
 	@if [ -f $(DEBUG_PID_FILE) ]; then \

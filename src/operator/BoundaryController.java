@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
 
 
 public class BoundaryController {
-    private static int num_loop = 500;
+    private static int num_loop = 1000;
     private static int nodeNum;
     // ビーコンクラスタークラスを生成
     static BeaconCluster beaconCluster;
@@ -62,7 +62,7 @@ public class BoundaryController {
 
     // Phase 5-2: 非同期ルートリクエスト用ExecutorService
     private static ExecutorService routeRequestExecutor;
-    private static final int ROUTE_REQUEST_THREAD_COUNT = 4;
+    private static final int ROUTE_REQUEST_THREAD_COUNT = 16;
 
     // 可視化サーバープロセス（起動した場合のみnon-null）
     private static Process vizServerProcess = null;
@@ -963,7 +963,9 @@ public class BoundaryController {
                 // 可視化サーバーを起動
                 String vizDir = RESULT_BASE_DIR + "/viz";
                 new File(vizDir).mkdirs();
-                String recordingPath = vizDir + "/recording.jsonl";
+                String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new java.util.Date());
+                String sessionDir = vizDir + "/" + timestamp;
+                new File(sessionDir).mkdirs();
 
                 String pythonCmd = new File(".venv/bin/python").exists() ? ".venv/bin/python" : "python3";
                 int redisPort = Integer.parseInt(System.getenv("REDIS_PORT") != null ? System.getenv("REDIS_PORT") : "6379");
@@ -975,16 +977,19 @@ public class BoundaryController {
                         "--topology", topologyPath,
                         "--port", String.valueOf(vizPort),
                         "--redis-port", String.valueOf(redisPort),
-                        "--recording", recordingPath
+                        "--session-dir", sessionDir
                     );
                     pb.redirectErrorStream(false);
                     pb.redirectOutput(new File(vizDir + "/server.log"));
                     pb.redirectError(new File(vizDir + "/server_error.log"));
                     vizServerProcess = pb.start();
+                    try (java.io.FileWriter pidWriter = new java.io.FileWriter(vizDir + "/server.pid")) {
+                        pidWriter.write(String.valueOf(vizServerProcess.pid()));
+                    }
                     Thread.sleep(1500); // サーバー起動待機
                     System.out.println("✓ 可視化サーバーを起動しました");
                     System.out.println("  URL: http://localhost:" + vizPort);
-                    System.out.println("  録画先: " + recordingPath);
+                    System.out.println("  セッション: " + sessionDir);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw ie;
@@ -1206,7 +1211,6 @@ public class BoundaryController {
                 // ワーカー・スケジューラを停止してJVMが正常終了できるようにする
                 // （非デーモンスレッドを明示的に停止しないとJVMが終了しない）
                 shutdownRedisWorker();
-                shutdownVizServer();
                 try {
                     RedisConnectionManager.getInstance().disconnect();
                 } catch (Exception e) {
@@ -1346,7 +1350,6 @@ public class BoundaryController {
 
                 // 可視化: シミュレーション終了通知
                 VizStateManager.getInstance().signalSimulationEnded();
-                shutdownVizServer();
 
                 // フェーズ制御モードでは以降のスケジュール処理をスキップ
                 schedule = new ArrayList<>();
@@ -1486,7 +1489,6 @@ public class BoundaryController {
 
                 // Redisワーカーを停止
                 shutdownRedisWorker();
-                shutdownVizServer();
 
                 // Redis接続を切断
                 try {
