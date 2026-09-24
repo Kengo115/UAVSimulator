@@ -40,6 +40,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     protected static final double THRESHOLD_1 = 0.5;
     protected static final double THRESHOLD_2 = 2.0;
     protected static final double coefficient_tanh = 1.0;
+    protected static final double TANH_DELTA = 1.0;
 
     // サーバーコントローラー
     protected final ServerController serverController;
@@ -177,7 +178,7 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                 }
             }
 
-            // チューブ厚の更新（サブクラスで実装）
+            // チューブ厚の更新（サブクラスで実装、内部でDebugIterationRecorderも呼ぶ）
             updateTubeThickness(ct);
 
             // イテレーション回数は常に標準出力（大規模・小規模共通）
@@ -229,11 +230,21 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     }
 
     /**
-     * チューブ厚を更新する抽象メソッド
-     * サブクラスで実装する
+     * チューブ厚を更新するテンプレートメソッド。
+     * doUpdateTubeThickness() を呼んだ後、DebugIterationRecorder にイテレーション記録を行う。
+     * サブクラスから呼び出す際は常にこのメソッドを呼ぶこと。
      * @param ct 現在の反復回数
      */
-    protected abstract void updateTubeThickness(int ct);
+    protected final void updateTubeThickness(int ct) {
+        doUpdateTubeThickness(ct);
+        shared.util.DebugIterationRecorder.getInstance().recordIteration(link, node);
+    }
+
+    /**
+     * チューブ厚の実際の更新ロジック（サブクラスで実装）
+     * @param ct 現在の反復回数
+     */
+    protected abstract void doUpdateTubeThickness(int ct);
     
     /**
      * 線形方程式を解く抽象メソッド
@@ -408,6 +419,9 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
                         p.uavId, p.clientId, p.path, p.linkDistances, p.speed, p.delaySeconds));
                 }
                 DebugModeHook.getInstance().onPendingJobsReady(clientId, debugJobs, startNode, goalNode);
+                // イテレーション記録をここで保存（waitForFlyApproved ブロック前に書き出すことで
+                // フロント側で「飛行開始」前にドロップダウンから参照できるようにする）
+                shared.util.DebugIterationRecorder.getInstance().stopAndSave();
                 try {
                     DebugModeHook.getInstance().waitForFlyApproved(clientId);
                 } catch (InterruptedException ie) {

@@ -293,8 +293,16 @@ public class ServerController {
                 } else {
                     capacityManager.syncCapacitiesToMemory(link, node);
                 }
+                if (numLoop > 0) {
+                    shared.util.DebugIterationRecorder.getInstance().startRecording(
+                        client.getId(),
+                        client.getFlow().getSource().getId(),
+                        client.getFlow().getDestination().getId(),
+                        (int) client.getFlow().getTheNumberOfUAV(),
+                        "PS", link, node);
+                }
             },
-            () -> {}
+            () -> shared.util.DebugIterationRecorder.getInstance().stopAndSave()
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -330,8 +338,16 @@ public class ServerController {
                 } else {
                     capacityManager.syncCapacitiesToMemory(link, node);
                 }
+                if (numLoop > 0) {
+                    shared.util.DebugIterationRecorder.getInstance().startRecording(
+                        client.getId(),
+                        client.getFlow().getSource().getId(),
+                        client.getFlow().getDestination().getId(),
+                        (int) client.getFlow().getTheNumberOfUAV(),
+                        "EPS", link, node);
+                }
             },
-            () -> {}
+            () -> shared.util.DebugIterationRecorder.getInstance().stopAndSave()
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -367,8 +383,16 @@ public class ServerController {
                 } else {
                     capacityManager.syncCapacitiesToMemory(link, node);
                 }
+                if (numLoop > 0) {
+                    shared.util.DebugIterationRecorder.getInstance().startRecording(
+                        client.getId(),
+                        client.getFlow().getSource().getId(),
+                        client.getFlow().getDestination().getId(),
+                        (int) client.getFlow().getTheNumberOfUAV(),
+                        "Hybrid", link, node);
+                }
             },
-            () -> {}
+            () -> shared.util.DebugIterationRecorder.getInstance().stopAndSave()
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -404,8 +428,16 @@ public class ServerController {
                 } else {
                     capacityManager.syncCapacitiesToMemory(link, node);
                 }
+                if (numLoop > 0) {
+                    shared.util.DebugIterationRecorder.getInstance().startRecording(
+                        client.getId(),
+                        client.getFlow().getSource().getId(),
+                        client.getFlow().getDestination().getId(),
+                        (int) client.getFlow().getTheNumberOfUAV(),
+                        "BinaryEPS", link, node);
+                }
             },
-            () -> {}
+            () -> shared.util.DebugIterationRecorder.getInstance().stopAndSave()
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -442,8 +474,16 @@ public class ServerController {
                 } else {
                     capacityManager.syncCapacitiesToMemory(link, node);
                 }
+                if (numLoop > 0) {
+                    shared.util.DebugIterationRecorder.getInstance().startRecording(
+                        client.getId(),
+                        client.getFlow().getSource().getId(),
+                        client.getFlow().getDestination().getId(),
+                        (int) client.getFlow().getTheNumberOfUAV(),
+                        "BisectionalPGEPS", link, node);
+                }
             },
-            () -> {}
+            () -> shared.util.DebugIterationRecorder.getInstance().stopAndSave()
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
@@ -480,8 +520,16 @@ public class ServerController {
                 } else {
                     capacityManager.syncCapacitiesToMemory(link, node);
                 }
+                if (numLoop > 0) {
+                    shared.util.DebugIterationRecorder.getInstance().startRecording(
+                        client.getId(),
+                        client.getFlow().getSource().getId(),
+                        client.getFlow().getDestination().getId(),
+                        (int) client.getFlow().getTheNumberOfUAV(),
+                        "StepControlledPGEPS", link, node);
+                }
             },
-            () -> {}
+            () -> shared.util.DebugIterationRecorder.getInstance().stopAndSave()
         );
 
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);

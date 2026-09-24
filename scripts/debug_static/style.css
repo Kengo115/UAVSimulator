@@ -286,6 +286,114 @@ select:focus {
 }
 
 /* ============================================================
+   イテレーション可視化パネル
+   ============================================================ */
+.viz-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.viz-radio-group {
+  display: flex;
+  gap: 12px;
+  font-size: 0.78rem;
+  margin-bottom: 8px;
+}
+.viz-radio-group label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+
+.viz-meta {
+  font-size: 0.70rem;
+  color: var(--text-mute);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.viz-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.viz-slider-row input[type="range"] {
+  flex: 1;
+  width: auto;
+  padding: 0;
+  margin-bottom: 0;
+  background: transparent;
+  border: none;
+  accent-color: var(--accent);
+}
+.viz-iter-label {
+  font-size: 0.70rem;
+  color: var(--text-mute);
+  white-space: nowrap;
+  min-width: 52px;
+  text-align: right;
+}
+
+.viz-controls {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.viz-speed-btn {
+  padding: 3px 7px;
+  font-size: 0.70rem;
+  margin-bottom: 0;
+}
+.viz-speed-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ============================================================
+   SVG 可視化グラデーション凡例（右上）
+   ============================================================ */
+.viz-legend {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: rgba(22, 27, 34, 0.88);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  pointer-events: none;
+  z-index: 10;
+}
+.viz-legend-bar {
+  width: 120px;
+  height: 9px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    hsl(240, 80%, 55%),
+    hsl(120, 80%, 55%),
+    hsl(0,   80%, 55%)
+  );
+  margin-bottom: 3px;
+}
+.viz-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.60rem;
+  color: var(--text-mute);
+  width: 120px;
+}
+
+/* ============================================================
    経路表示（SVG 上の太い矢印）
    ============================================================ */
 .route-path-line {

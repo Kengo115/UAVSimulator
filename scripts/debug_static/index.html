@@ -55,14 +55,79 @@
         </marker>
       </defs>
       <g id="g-links"></g>
+      <g id="g-viz"></g>
       <g id="g-routes"></g>
       <g id="g-nodes"></g>
       <g id="g-uavs"></g>
     </svg>
+
+    <!-- イテレーション可視化グラデーション凡例 -->
+    <div v-if="vizEnabled && vizData" class="viz-legend">
+      <div style="font-size:0.65rem;color:var(--text-mute);margin-bottom:3px;">流量 / 容量</div>
+      <div class="viz-legend-bar"></div>
+      <div class="viz-legend-labels">
+        <span>0%</span><span>50%</span><span>100%</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:5px;margin-top:4px;">
+        <div style="width:16px;height:3px;background:#8e44ad;border-radius:1px;"></div>
+        <span style="font-size:0.62rem;color:var(--text-mute)">&gt;100%</span>
+      </div>
+    </div>
   </div>
 
   <!-- 右サイドパネル -->
   <div class="sidebar">
+
+    <!-- イテレーション可視化パネル -->
+    <div class="sidebar-section">
+      <h2>イテレーション可視化</h2>
+      <label class="viz-checkbox-label">
+        <input type="checkbox" v-model="vizEnabled"> デバッグモード
+      </label>
+      <template v-if="vizEnabled">
+        <div class="viz-radio-group">
+          <label><input type="radio" v-model="vizMode" value="flow"> 流量</label>
+          <label><input type="radio" v-model="vizMode" value="pressure" disabled> 圧力値（モック）</label>
+        </div>
+        <div style="display:flex;gap:4px;margin-bottom:8px;">
+          <select v-model="vizClientId" @change="loadVizData" style="flex:1;margin-bottom:0">
+            <option :value="null">-- クライアント選択 --</option>
+            <option v-for="c in vizClients" :key="c.key" :value="c.key">{{ c.label }}</option>
+          </select>
+          <button class="btn btn-secondary" @click="fetchVizClients"
+                  style="padding:4px 10px;margin-bottom:0;" title="リスト更新">↻</button>
+        </div>
+        <template v-if="vizData">
+          <div class="viz-meta">
+            <span>{{ vizData.meta.source }} → {{ vizData.meta.destination }}
+              &nbsp;({{ vizData.meta.numUAVs }} UAV)</span>
+            <span>{{ vizData.meta.method }}</span>
+          </div>
+          <div class="viz-slider-row">
+            <input type="range" v-model.number="vizCurrentIter"
+                   :min="0" :max="vizTotalIterations - 1" step="1"
+                   @input="renderVizOverlay">
+            <span class="viz-iter-label">{{ vizCurrentIter + 1 }}/{{ vizTotalIterations }}</span>
+          </div>
+          <div class="viz-controls">
+            <button class="btn btn-secondary" style="flex:1;" @click="toggleAutoPlay">
+              {{ vizAutoPlay ? '⏸ 一時停止' : '▶ 再生' }}
+            </button>
+            <button class="btn btn-secondary" @click="stopViz" title="選択解除・描画クリア">■ 停止</button>
+            <button v-for="s in VIZ_SPEEDS" :key="s.fps"
+                    class="btn btn-secondary viz-speed-btn"
+                    :class="{ active: vizSpeed === s.fps }"
+                    @click="setVizSpeed(s.fps)">
+              {{ s.label }}
+            </button>
+          </div>
+        </template>
+        <div v-else-if="vizClientId !== null"
+             style="font-size:0.72rem;color:var(--text-mute);padding:4px 0;">
+          データ読み込み中...
+        </div>
+      </template>
+    </div>
 
     <!-- 事業者生成フォーム -->
     <div class="sidebar-section">

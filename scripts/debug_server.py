@@ -47,11 +47,12 @@ parser.add_argument("--redis-port", type=int, default=6379,        help="Redis p
 parser.add_argument("--redis-host",           default="localhost", help="Redis host")
 args = parser.parse_args()
 
-SERVER_PORT   = args.port
-TOPOLOGY_PATH = args.topology
-REDIS_HOST    = args.redis_host
-REDIS_PORT    = args.redis_port
-SIM_ID        = os.environ.get("SIM_ID", "1")
+SERVER_PORT     = args.port
+TOPOLOGY_PATH   = args.topology
+REDIS_HOST      = args.redis_host
+REDIS_PORT      = args.redis_port
+SIM_ID          = os.environ.get("SIM_ID", "1")
+ITERATIONS_DIR  = Path(__file__).parent.parent / "src" / "result" / "debug" / "iterations"
 
 COMMAND_CHANNEL   = "debug:command"
 VIZ_STATES_KEY    = f"viz:sim_{SIM_ID}:states"
@@ -117,6 +118,20 @@ app = FastAPI(title="UAV Debug Server", lifespan=lifespan)
 
 # static ファイルは /static/ でサーブ（index.html は / で個別返却）
 _static_dir = Path(__file__).parent / "debug_static"
+
+# デバッグツールのため app.js / style.css を毎回最新版で配信する（キャッシュ無効）
+_NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"}
+
+@app.get("/static/app.js")
+async def serve_app_js():
+    return FileResponse(str(_static_dir / "app.js"),
+                        media_type="application/javascript", headers=_NO_CACHE)
+
+@app.get("/static/style.css")
+async def serve_style_css():
+    return FileResponse(str(_static_dir / "style.css"),
+                        media_type="text/css", headers=_NO_CACHE)
+
 app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 # =============================================================================
@@ -209,7 +224,7 @@ async def broadcast(message: dict) -> None:
 
 @app.get("/")
 async def root():
-    return FileResponse(str(_static_dir / "index.html"))
+    return FileResponse(str(_static_dir / "index.html"), headers=_NO_CACHE)
 
 @app.get("/api/topology")
 async def get_topology():
@@ -217,6 +232,47 @@ async def get_topology():
         "nodes": [v for v in TOPOLOGY["nodes"].values()],
         "links": TOPOLOGY["links"],
     })
+
+@app.get("/api/debug/clients")
+async def get_debug_clients():
+    """DebugIterationRecorder が書き出した {method}_{yyyyMMdd}_{HHmmss}.json の一覧を返す。
+    形式: [{ "key": "BisectionalPGEPS_20240115_143000", "method": "BisectionalPGEPS",
+             "label": "BisectionalPGEPS (2024-01-15 14:30:00)" }, ...]
+    """
+    if not ITERATIONS_DIR.exists():
+        return JSONResponse([])
+    entries = []
+    for f in sorted(ITERATIONS_DIR.glob("*.json")):
+        stem  = f.stem          # e.g. "BisectionalPGEPS_20240115_143000"
+        # 末尾から2つ分だけ分割してタイムスタンプを取り出す
+        parts = stem.rsplit("_", 2)
+        if len(parts) != 3:
+            continue
+        method, dp, tp = parts  # "BisectionalPGEPS", "20240115", "143000"
+        if len(dp) != 8 or len(tp) != 6:
+            continue
+        try:
+            int(dp); int(tp)   # 数値かどうか確認
+        except ValueError:
+            continue
+        label_ts = f" ({dp[:4]}-{dp[4:6]}-{dp[6:]} {tp[:2]}:{tp[2:4]}:{tp[4:]})"
+        entries.append({
+            "key":    stem,
+            "method": method,
+            "label":  f"{method}{label_ts}",
+        })
+    return JSONResponse(entries)
+
+@app.get("/api/debug/iterations/{file_key}")
+async def get_debug_iterations(file_key: str):
+    """指定キー（ファイルステム）のイテレーションデータ JSON を返す。"""
+    # path traversal 防止
+    if any(c in file_key for c in ("/", "\\", "..")):
+        return JSONResponse({"error": "invalid key"}, status_code=400)
+    fpath = ITERATIONS_DIR / f"{file_key}.json"
+    if not fpath.exists():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(str(fpath), media_type="application/json")
 
 @app.get("/api/route-results/{client_id}")
 async def get_route_results(client_id: int):

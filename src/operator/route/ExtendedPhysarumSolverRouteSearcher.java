@@ -37,27 +37,29 @@ public class ExtendedPhysarumSolverRouteSearcher extends AbstractPhysarumSolverR
      * @param ct 現在の反復回数
      */
     @Override
-    protected void updateTubeThickness(int ct) {
-        // チューブ厚の更新 - ExtendedPhysarumSolverでは容量制約を考慮
+    protected void doUpdateTubeThickness(int ct) {
+        // チューブ厚の更新 - PSと同一のsigmoid + degeneracyEffectを使用
+        double degeneracyEffect = 0.5;
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF) {
-                    // 容量制約を考慮した更新式
-                    double deltaThickness = (Math.abs(link[i][j].getQ_tubeFlow()) - link[i][j].getD_tubeThickness()) * DELTA_TIME;
+                    // PSと同一: sigmoid出力とdegeneracyEffectを使用
+                    double deltaThickness = (Q_tubeFlow_sigmoidOutput[i][j] - (degeneracyEffect * link[i][j].getD_tubeThickness())) * DELTA_TIME;
                     D_tubeThickness_deltaT[i][j] = deltaThickness;
                 }
             }
         }
 
-        // ExtendedPhysarumSolverの特徴: 容量制約を考慮したチューブ厚の更新
+        // EPSの特徴: tanhによる容量制約（+TANH_DELTAで境界問題を回避）
         for (int i = 0; i < node; i++) {
             for (int j = 0; j < node; j++) {
                 if (link[i][j].getL_tubeLength() != INF) {
-                    // tanhを使用して容量制約を考慮
                     double oldThickness = link[i][j].getD_tubeThickness();
                     double capacity = link[i][j].getCapacity();
                     double flow = Math.abs(link[i][j].getQ_tubeFlow());
-                    double tanhValue = Math.tanh((capacity - flow) * coefficient_tanh);
+                    // TANH_DELTAシフトにより|Q|=capacityでもD成長が継続し、
+                    // |Q|=capacity+TANH_DELTAで停止、超過時は縮退する
+                    double tanhValue = Math.tanh((capacity - flow + TANH_DELTA) * coefficient_tanh);
                     double newThickness = oldThickness + (D_tubeThickness_deltaT[i][j]) * tanhValue;
                     link[i][j].setD_tubeThickness(newThickness);
 

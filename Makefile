@@ -1,4 +1,4 @@
-.PHONY: up down down-all restart run run-debug run-debug-quick compile clean status logs kill-sim viz \
+.PHONY: up down down-all down-debug down-sim restart run run-debug run-debug-quick compile clean status logs kill-sim viz \
        heatmap heatmap-all extract-links venv-setup plot-congestion heatmap-video plot-link \
        plot-topology plot-topology-labels ensure-redis ensure-debug-redis plot-method-comparison \
        plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
@@ -42,7 +42,8 @@ down:
 	@echo "✓ Redisコンテナが停止しました"
 
 # 全SIM_ID用Redisコンテナとシミュレータを停止
-down-all: stop-all
+down-all:
+	@$(MAKE) stop-all || true
 	@echo "全Redisコンテナを停止します..."
 	@docker compose down 2>/dev/null || true
 	@for container in $$(docker ps --format '{{.Names}}' | grep '^uav-redis-sim'); do \
@@ -54,6 +55,31 @@ down-all: stop-all
 		docker stop uav-redis-debug && docker rm uav-redis-debug; \
 	fi
 	@echo "✓ 全Redisコンテナが停止しました"
+
+# デバッグモード専用Redisコンテナを停止
+down-debug:
+	@if docker ps --format '{{.Names}}' | grep -q "^uav-redis-debug$$"; then \
+		echo "uav-redis-debug を停止します..."; \
+		docker stop uav-redis-debug && docker rm uav-redis-debug; \
+		echo "✓ uav-redis-debug が停止しました"; \
+	else \
+		echo "uav-redis-debug は起動していません"; \
+	fi
+
+# SIM_ID用Redisコンテナを停止（SIM_ID=1はdocker compose管理のためdownを使用）
+# 使用例: make down-sim SIM_ID=2
+down-sim:
+ifeq ($(SIM_ID),1)
+	@$(MAKE) down
+else
+	@if docker ps --format '{{.Names}}' | grep -q "^uav-redis-sim$(SIM_ID)$$"; then \
+		echo "uav-redis-sim$(SIM_ID) を停止します..."; \
+		docker stop uav-redis-sim$(SIM_ID) && docker rm uav-redis-sim$(SIM_ID); \
+		echo "✓ uav-redis-sim$(SIM_ID) が停止しました"; \
+	else \
+		echo "uav-redis-sim$(SIM_ID) は起動していません"; \
+	fi
+endif
 
 # Dockerコンテナを再起動
 restart:
@@ -199,9 +225,11 @@ run: compile ensure-redis kill-sim
 	@echo "  ログ出力先: $(LOG_DIR_SIM)"
 	@echo "  JVM設定: $(JVM_OPTS)"
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
-	@echo $$$$ > $(PID_FILE)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
+	MVN_PID=$$!; \
+	echo $$MVN_PID > $(PID_FILE); \
+	wait $$MVN_PID; \
 	rm -f $(PID_FILE)
 
 # シミュレータを実行（コンパイルなし）
@@ -214,18 +242,22 @@ run-quick: ensure-redis kill-sim
 	@echo "  ログ出力先: $(LOG_DIR_SIM)"
 	@echo "  JVM設定: $(JVM_OPTS)"
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
-	@echo $$$$ > $(PID_FILE)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
+	MVN_PID=$$!; \
+	echo $$MVN_PID > $(PID_FILE); \
+	wait $$MVN_PID; \
 	rm -f $(PID_FILE)
 
 # シミュレータを実行（メモリ制限なし、短時間テスト用）
 run-light: compile ensure-redis kill-sim
 	@echo "UAVシミュレータを起動します（軽量モード）..."
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
-	@echo $$$$ > $(PID_FILE)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
+		mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
+	MVN_PID=$$!; \
+	echo $$MVN_PID > $(PID_FILE); \
+	wait $$MVN_PID; \
 	rm -f $(PID_FILE)
 
 # =============================================================================
@@ -250,9 +282,11 @@ run-debug: compile ensure-debug-redis
 		fi; \
 		rm -f $(DEBUG_PID_FILE); \
 	fi
-	@echo $$$$ > $(DEBUG_PID_FILE)
 	REDIS_PORT=$(DEBUG_REDIS_PORT) SIM_ID=1 DEBUG_MODE=true \
-		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
+	MVN_PID=$$!; \
+	echo $$MVN_PID > $(DEBUG_PID_FILE); \
+	wait $$MVN_PID; \
 	rm -f $(DEBUG_PID_FILE)
 
 # デバッグモードで起動（コンパイルなし）
@@ -266,9 +300,11 @@ run-debug-quick: ensure-debug-redis
 		fi; \
 		rm -f $(DEBUG_PID_FILE); \
 	fi
-	@echo $$$$ > $(DEBUG_PID_FILE)
 	REDIS_PORT=$(DEBUG_REDIS_PORT) SIM_ID=1 DEBUG_MODE=true \
-		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"; \
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
+	MVN_PID=$$!; \
+	echo $$MVN_PID > $(DEBUG_PID_FILE); \
+	wait $$MVN_PID; \
 	rm -f $(DEBUG_PID_FILE)
 
 # ビルド成果物をクリーンアップ
@@ -377,9 +413,11 @@ help:
 	@echo "  make compile      プロジェクトをコンパイル"
 	@echo "  make clean        ビルド成果物をクリーンアップ"
 	@echo "  make redis-clear  SIM_ID=1用Redisデータをクリア"
-	@echo "  make up           SIM_ID=1用Redisを手動起動"
-	@echo "  make down         SIM_ID=1用Redisを停止"
-	@echo "  make down-all     全シミュレータ＋全Redisを停止"
+	@echo "  make up             SIM_ID=1用Redisを手動起動"
+	@echo "  make down           SIM_ID=1用Redisを停止"
+	@echo "  make down-sim SIM_ID=N  SIM_ID=N用Redisを停止"
+	@echo "  make down-debug     デバッグ用Redis(uav-redis-debug)を停止"
+	@echo "  make down-all       全シミュレータ＋全Redisを停止"
 	@echo ""
 	@echo "-------------------------------------------------------------------------------"
 	@echo "【ディレクトリ構造】"

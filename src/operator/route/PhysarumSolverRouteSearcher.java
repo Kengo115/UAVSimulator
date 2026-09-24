@@ -32,7 +32,7 @@ public class PhysarumSolverRouteSearcher extends AbstractPhysarumSolverRouteSear
      * @param ct 現在の反復回数
      */
     @Override
-    protected void updateTubeThickness(int ct) {
+    protected void doUpdateTubeThickness(int ct) {
         // チューブ厚の更新 - PSでは容量制約を考慮せず
         double degeneracyEffect = 0.5;
         

@@ -3,7 +3,7 @@
  * Vue 3 CDN + SVG トポロジ描画 + WebSocket リアルタイム更新
  */
 
-const { createApp, ref, reactive, computed, onMounted, nextTick } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
 
 // ============================================================
 // 定数
@@ -12,6 +12,12 @@ const SVG_PADDING  = 40;
 const NODE_RADIUS  = 3.5;
 const UAV_RADIUS   = 3.2;
 const LINK_OFFSET  = 4;  // 双方向リンクのオフセット px
+
+const VIZ_SPEEDS = [
+  { fps: 2,  label: "2/s" },
+  { fps: 10, label: "10/s" },
+  { fps: 30, label: "30/s" },
+];
 
 const METHOD_LABELS = {
   1: "Dijkstra",
@@ -70,6 +76,20 @@ createApp({
 
     // --- 飛行開始待ちの clientId 一覧 ---
     const pendingFly = ref([]);   // [{ clientId, src, dst, uavCount }]
+
+    // --- イテレーション可視化 ---
+    const vizEnabled     = ref(false);
+    const vizMode        = ref("flow");
+    const vizClients     = ref([]);        // { key, clientId, label }[]
+    const vizClientId    = ref(null);      // string | null  (ファイルステム)
+    const vizData        = ref(null);      // { meta, links, flows } | null
+    const vizCurrentIter = ref(0);
+    const vizAutoPlay    = ref(false);
+    const vizSpeed       = ref(10);        // iter/sec
+    let   vizTimerId     = null;
+    const vizTotalIterations = computed(() =>
+      vizData.value ? vizData.value.flows.length : 0
+    );
 
     // --- WebSocket ---
     let ws = null;
@@ -333,6 +353,8 @@ createApp({
           }];
         }
         statusMsg.value = `client${cid} の経路が確定 → 飛行開始ボタンを押してください`;
+        // 可視化が有効なら自動でクライアントリストを更新する
+        if (vizEnabled.value) fetchVizClients();
       } else if (msg.type === "reset_done") {
         uavStates.value    = {};
         routeResults.value = {};
@@ -428,6 +450,162 @@ createApp({
     }
 
     // ============================================================
+    // イテレーション可視化
+    // ============================================================
+
+    /** 利用可能なクライアントファイル一覧を取得する */
+    async function fetchVizClients() {
+      try {
+        const res = await fetch("/api/debug/clients");
+        vizClients.value = await res.json();  // [{ key, clientId, label }]
+      } catch (e) { /* ignore */ }
+    }
+
+    /** 選択クライアントのイテレーションデータを読み込む */
+    async function loadVizData() {
+      console.log("[viz] loadVizData called, key=", vizClientId.value);
+      if (vizClientId.value === null) {
+        vizData.value = null;
+        clearVizOverlay();
+        return;
+      }
+      let data = null;
+      try {
+        const res = await fetch(`/api/debug/iterations/${vizClientId.value}`);
+        console.log("[viz] fetch status=", res.status);
+        if (!res.ok) {
+          console.error("[viz] HTTP error", res.status, await res.text());
+          vizData.value = null;
+          return;
+        }
+        data = await res.json();
+        console.log("[viz] parsed: links=", data?.links?.length, "flows=", data?.flows?.length);
+      } catch (e) {
+        console.error("[viz] fetch/parse error:", e);
+        vizData.value = null;
+        return;
+      }
+      vizData.value = data;
+      vizCurrentIter.value = 0;
+      console.log("[viz] vizData.value set:", vizData.value !== null);
+      try {
+        renderVizOverlay();
+      } catch (e) {
+        console.error("[viz] renderVizOverlay error:", e);
+      }
+    }
+
+    /**
+     * flow/capacity 比率を SVG スタイル { color, width } に変換する。
+     * ratio <= 0 は null（非表示）を返す。
+     */
+    function flowToStyle(ratio) {
+      if (ratio <= 0) return null;
+      if (ratio > 1.0) return { color: "#8e44ad", width: 3.5 };  // >100%: 紫+太線
+      // 0–100%: 青(hsl240) → 緑(hsl120) → 赤(hsl0)
+      const hue = Math.round(240 * (1 - ratio));
+      return { color: `hsl(${hue},80%,55%)`, width: 1.8 };
+    }
+
+    /** SVG 可視化オーバーレイを現在のイテレーションで描画する */
+    function renderVizOverlay() {
+      const gViz = document.getElementById("g-viz");
+      if (!gViz) return;
+      // innerHTML = "" はSVG要素上でブラウザによって不安定なため子ノードを個別削除
+      while (gViz.firstChild) gViz.removeChild(gViz.firstChild);
+
+      if (!vizEnabled.value || !vizData.value || !topology.value) return;
+
+      const { links, flows } = vizData.value;
+      const iterFlows = flows[vizCurrentIter.value];
+      if (!iterFlows) return;
+
+      for (let k = 0; k < links.length; k++) {
+        const [src, dst, cap] = links[k];
+        if (cap <= 0) continue;
+        const style = flowToStyle(iterFlows[k] / cap);
+        if (!style) continue;
+
+        const a = nodeMap.value[src], b = nodeMap.value[dst];
+        if (!a || !b) continue;
+
+        const line = makeSvgEl("line");
+        line.setAttribute("x1", toSvgX(a.x));
+        line.setAttribute("y1", toSvgY(a.y));
+        line.setAttribute("x2", toSvgX(b.x));
+        line.setAttribute("y2", toSvgY(b.y));
+        line.setAttribute("stroke",       style.color);
+        line.setAttribute("stroke-width", style.width);
+        line.setAttribute("stroke-opacity", "0.85");
+
+        const title = makeSvgEl("title");
+        const pct = (iterFlows[k] / cap * 100).toFixed(1);
+        title.textContent = `${src}–${dst}: flow=${iterFlows[k].toFixed(2)} cap=${cap} (${pct}%)`;
+        line.appendChild(title);
+        gViz.appendChild(line);
+      }
+    }
+
+    function clearVizOverlay() {
+      const gViz = document.getElementById("g-viz");
+      if (gViz) while (gViz.firstChild) gViz.removeChild(gViz.firstChild);
+    }
+
+    /** 自動再生のトグル */
+    function toggleAutoPlay() {
+      if (vizAutoPlay.value) {
+        stopAutoPlay();
+      } else {
+        vizAutoPlay.value = true;
+        startAutoPlay();
+      }
+    }
+
+    function startAutoPlay() {
+      if (vizTimerId !== null) { clearInterval(vizTimerId); vizTimerId = null; }
+      const delay = Math.round(1000 / vizSpeed.value);
+      vizTimerId = setInterval(() => {
+        if (!vizData.value) return;
+        vizCurrentIter.value =
+          vizCurrentIter.value < vizTotalIterations.value - 1
+            ? vizCurrentIter.value + 1
+            : 0;
+        renderVizOverlay();
+      }, delay);
+    }
+
+    function stopAutoPlay() {
+      vizAutoPlay.value = false;
+      if (vizTimerId !== null) { clearInterval(vizTimerId); vizTimerId = null; }
+    }
+
+    /** 再生を完全停止してファイル選択なし状態・描画クリアに戻す */
+    function stopViz() {
+      stopAutoPlay();
+      vizClientId.value = null;
+      vizData.value     = null;
+      clearVizOverlay();
+    }
+
+    /** 再生速度を変更する（再生中なら即時反映） */
+    function setVizSpeed(fps) {
+      vizSpeed.value = fps;
+      if (vizAutoPlay.value) startAutoPlay();
+    }
+
+    // vizEnabled ON → クライアントリスト取得・オーバーレイ再描画
+    // vizEnabled OFF → オーバーレイ消去・再生停止
+    watch(vizEnabled, (enabled) => {
+      if (enabled) {
+        fetchVizClients();
+        renderVizOverlay();
+      } else {
+        stopAutoPlay();
+        clearVizOverlay();
+      }
+    });
+
+    // ============================================================
     // ノード選択モード
     // ============================================================
     function startSelectSrc() { selectMode.value = "src"; }
@@ -467,6 +645,7 @@ createApp({
       window.addEventListener("resize", () => {
         renderTopology();
         renderRoutePaths();
+        renderVizOverlay();
       });
     });
 
@@ -480,6 +659,13 @@ createApp({
       METHOD_LABELS,
       doAssign, doFly, doPause, doResume, doReset,
       startSelectSrc, startSelectDst,
+      // イテレーション可視化
+      VIZ_SPEEDS,
+      vizEnabled, vizMode, vizClients, vizClientId,
+      vizData, vizCurrentIter, vizTotalIterations,
+      vizAutoPlay, vizSpeed,
+      fetchVizClients, loadVizData,
+      renderVizOverlay, toggleAutoPlay, stopViz, setVizSpeed,
     };
   },
 }).mount("#app");
