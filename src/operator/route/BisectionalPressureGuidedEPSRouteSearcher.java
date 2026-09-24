@@ -28,8 +28,8 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     // 定数
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
-    private static final int MAX_ITERATIONS = 1000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 200; // 収束判定用の連続安定回数（100→200に変更）
+    private static final int MAX_ITERATIONS = 5000; // 最大イテレーション数
+    private static final int REQUIRED_STABLE_ITERATIONS = 500; // 収束判定用の連続安定回数（100→200に変更）
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 10; // 二分探索の最大回数
     private static final double MIN_ASSIGNMENT_RATIO = 1.0 / 4.0; // EPS最低割当比率（1/4 = 25%）
 

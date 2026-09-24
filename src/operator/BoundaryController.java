@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
 
 
 public class BoundaryController {
-    private static int num_loop = 500;
+    private static int num_loop = 1000;
     private static int nodeNum;
     // ビーコンクラスタークラスを生成
     static BeaconCluster beaconCluster;
@@ -62,7 +62,7 @@ public class BoundaryController {
 
     // Phase 5-2: 非同期ルートリクエスト用ExecutorService
     private static ExecutorService routeRequestExecutor;
-    private static final int ROUTE_REQUEST_THREAD_COUNT = 4;
+    private static final int ROUTE_REQUEST_THREAD_COUNT = 16;
 
     // 可視化サーバープロセス（起動した場合のみnon-null）
     private static Process vizServerProcess = null;
@@ -323,8 +323,19 @@ public class BoundaryController {
     /**
      * Phase 3b-6: Redisワーカーを初期化する
      */
-    private static void initializeRedisWorker() {
+    static void initializeRedisWorker() {
         try {
+            // 既存ワーカーを停止（RESET 時の蓄積防止）
+            if (!asyncWorkers.isEmpty()) {
+                LogManager.getInstance().log("Phase 3b-10: 既存ワーカー(" + asyncWorkers.size() + "台)を停止します");
+                for (AsyncUAVWorker worker : asyncWorkers) {
+                    worker.stop();
+                }
+            }
+            if (workerExecutor != null && !workerExecutor.isShutdown()) {
+                workerExecutor.shutdownNow();
+            }
+
             // Phase 3b-8: セッションIDを生成（古いプロセスからのジョブを無視するため）
             currentSessionId = UUID.randomUUID().toString().substring(0, 8);
             LogManager.getInstance().log("Phase 3b-8: 新しいセッションID生成: " + currentSessionId);
@@ -693,6 +704,43 @@ public class BoundaryController {
             LogManager.getInstance().error("Redis接続失敗", e);
         }
 
+        // =====================================================================
+        // デバッグモード分岐（DEBUG_MODE=true 環境変数で有効化）
+        // =====================================================================
+        if ("true".equalsIgnoreCase(System.getenv("DEBUG_MODE"))) {
+            try {
+                String topologyFilePath = "config/topology/koriyama_topology.txt";
+                System.out.println("デバッグモード: トポロジ = " + topologyFilePath);
+
+                TopologyFileReader.TopologyData topologyData =
+                    TopologyFileReader.readTopologyFile(topologyFilePath);
+                setLargeScaleMode(true);
+                boundaryController.setNodeNum(topologyData.nodeCount);
+                beaconCluster = new BeaconCluster(topologyData);
+                server = new ServerController(beaconCluster, topologyData);
+                server.initializeRouteSearchers();
+                boundaryController.setNetworkTopology();
+
+                // Redisワーカー初期化（FlightScheduler・AsyncUAVWorker・リンク容量）
+                if (!RedisConnectionManager.getInstance().isConnected()) {
+                    System.err.println("✗ Redis未接続のため終了します。");
+                    System.exit(1);
+                }
+                initializeRedisWorker();
+
+                // practice.net 出力ディレクトリを作成
+                new java.io.File("src/result").mkdirs();
+
+                // デバッグモードコントローラーを起動（内部でブロック）
+                new DebugModeController(boundaryController).start();
+            } catch (Exception e) {
+                System.err.println("デバッグモード起動失敗: " + e.getMessage());
+                e.printStackTrace();
+                System.exit(1);
+            }
+            return;
+        }
+
         // ランダムクライアント生成実験
         try {
             System.out.println("=== UAVシミュレーター ===");
@@ -915,7 +963,9 @@ public class BoundaryController {
                 // 可視化サーバーを起動
                 String vizDir = RESULT_BASE_DIR + "/viz";
                 new File(vizDir).mkdirs();
-                String recordingPath = vizDir + "/recording.jsonl";
+                String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new java.util.Date());
+                String sessionDir = vizDir + "/" + timestamp;
+                new File(sessionDir).mkdirs();
 
                 String pythonCmd = new File(".venv/bin/python").exists() ? ".venv/bin/python" : "python3";
                 int redisPort = Integer.parseInt(System.getenv("REDIS_PORT") != null ? System.getenv("REDIS_PORT") : "6379");
@@ -927,16 +977,19 @@ public class BoundaryController {
                         "--topology", topologyPath,
                         "--port", String.valueOf(vizPort),
                         "--redis-port", String.valueOf(redisPort),
-                        "--recording", recordingPath
+                        "--session-dir", sessionDir
                     );
                     pb.redirectErrorStream(false);
                     pb.redirectOutput(new File(vizDir + "/server.log"));
                     pb.redirectError(new File(vizDir + "/server_error.log"));
                     vizServerProcess = pb.start();
+                    try (java.io.FileWriter pidWriter = new java.io.FileWriter(vizDir + "/server.pid")) {
+                        pidWriter.write(String.valueOf(vizServerProcess.pid()));
+                    }
                     Thread.sleep(1500); // サーバー起動待機
                     System.out.println("✓ 可視化サーバーを起動しました");
                     System.out.println("  URL: http://localhost:" + vizPort);
-                    System.out.println("  録画先: " + recordingPath);
+                    System.out.println("  セッション: " + sessionDir);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw ie;
@@ -1158,7 +1211,6 @@ public class BoundaryController {
                 // ワーカー・スケジューラを停止してJVMが正常終了できるようにする
                 // （非デーモンスレッドを明示的に停止しないとJVMが終了しない）
                 shutdownRedisWorker();
-                shutdownVizServer();
                 try {
                     RedisConnectionManager.getInstance().disconnect();
                 } catch (Exception e) {
@@ -1298,7 +1350,6 @@ public class BoundaryController {
 
                 // 可視化: シミュレーション終了通知
                 VizStateManager.getInstance().signalSimulationEnded();
-                shutdownVizServer();
 
                 // フェーズ制御モードでは以降のスケジュール処理をスキップ
                 schedule = new ArrayList<>();
@@ -1438,7 +1489,6 @@ public class BoundaryController {
 
                 // Redisワーカーを停止
                 shutdownRedisWorker();
-                shutdownVizServer();
 
                 // Redis接続を切断
                 try {
