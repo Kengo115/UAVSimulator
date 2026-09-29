@@ -128,7 +128,8 @@ public class BoundaryController {
         HYBRID(4, "Hybrid"),
         BINARY(5, "Binary"),
         BISECTIONAL_PGEPS(6, "Bisectional"),
-        STEP_CONTROLLED_PGEPS(7, "StepControlled");
+        STEP_CONTROLLED_PGEPS(7, "StepControlled"),
+        SIGMOID_BISECTIONAL_PGEPS(8, "SigmoidBisectional");
 
         private final int id;
         private final String name;
@@ -581,6 +582,9 @@ public class BoundaryController {
                     break;
                 case STEP_CONTROLLED_PGEPS:
                     server.run_StepControlledPGEPS(client, clientController, num_loop);
+                    break;
+                case SIGMOID_BISECTIONAL_PGEPS:
+                    server.run_SigmoidBisectionalPGEPS(client, clientController, num_loop);
                     break;
                 case EPS:
                 default:

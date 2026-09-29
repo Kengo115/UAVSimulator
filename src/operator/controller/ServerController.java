@@ -15,6 +15,7 @@ import operator.route.HybridPhysarumSolverRouteSearcher;
 import operator.route.PhysarumSolverRouteSearcher;
 import operator.route.RouteSearcher;
 import operator.route.StepControlledPressureGuidedEPSRouteSearcher;
+import operator.route.SigmoidBisectionalPGEPSRouteSearcher;
 import shared.redis.LinkCapacityManager;
 import operator.scheduler.SearcherRetryManager;
 import shared.util.LogManager;
@@ -62,6 +63,7 @@ public class ServerController {
     // Phase 4: PG-EPS (Pressure-Guided EPS)
     private RouteSearcher bisectionalPGEPSRouteSearcher;
     private RouteSearcher stepControlledPGEPSRouteSearcher;
+    private RouteSearcher sigmoidBisectionalPGEPSRouteSearcher;
     
     // ネットワークトポロジーマネージャー
     private NetworkTopologyManager networkTopologyManager;
@@ -127,6 +129,7 @@ public class ServerController {
         // Phase 4: PG-EPS (Pressure-Guided EPS)
         this.bisectionalPGEPSRouteSearcher = new BisectionalPressureGuidedEPSRouteSearcher(this, adjMatrix, link, beaconCluster, node);
         this.stepControlledPGEPSRouteSearcher = new StepControlledPressureGuidedEPSRouteSearcher(this, adjMatrix, link, beaconCluster, node);
+        this.sigmoidBisectionalPGEPSRouteSearcher = new SigmoidBisectionalPGEPSRouteSearcher(this, adjMatrix, link, beaconCluster, node);
     }
 
     /**
@@ -535,6 +538,50 @@ public class ServerController {
         boolean success = SearcherRetryManager.getInstance().requestSearch(request);
         if (!success) {
             LogManager.getInstance().log("Phase 5: client" + client.getId() + " の経路探索がスキップされました（StepControlledPGEPS）");
+        }
+
+        runCounter++;
+    }
+
+    /**
+     * シグモイド+tanh型二分法圧力誘導EPS (Sigmoid Bisectional PG-EPS) による経路探索を実行する
+     * @param client クライアント
+     * @param clientController クライアントコントローラー
+     * @param numLoop 反復回数
+     * @throws IOException 入出力例外
+     */
+    public void run_SigmoidBisectionalPGEPS(Client client, ClientController clientController, int numLoop) throws IOException {
+        final int currentRunCounter = runCounter;
+        SearcherRetryManager.SearchRequest request = new SearcherRetryManager.SearchRequest(
+            client,
+            clientController,
+            numLoop,
+            sigmoidBisectionalPGEPSRouteSearcher,
+            () -> {
+                if (currentRunCounter != 0) {
+                    reset();
+                }
+                LinkCapacityManager capacityManager = new LinkCapacityManager();
+                if (currentRunCounter == 0) {
+                    capacityManager.initializeCapacitiesToRedis(link, node);
+                } else {
+                    capacityManager.syncCapacitiesToMemory(link, node);
+                }
+                if (numLoop > 0) {
+                    shared.util.DebugIterationRecorder.getInstance().startRecording(
+                        client.getId(),
+                        client.getFlow().getSource().getId(),
+                        client.getFlow().getDestination().getId(),
+                        (int) client.getFlow().getTheNumberOfUAV(),
+                        "SigmoidBisectionalPGEPS", link, node);
+                }
+            },
+            () -> shared.util.DebugIterationRecorder.getInstance().stopAndSave()
+        );
+
+        boolean success = SearcherRetryManager.getInstance().requestSearch(request);
+        if (!success) {
+            LogManager.getInstance().log("Phase 5: client" + client.getId() + " の経路探索がスキップされました（SigmoidBisectionalPGEPS）");
         }
 
         runCounter++;

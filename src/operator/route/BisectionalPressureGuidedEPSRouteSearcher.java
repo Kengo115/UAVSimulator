@@ -28,14 +28,13 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     // 定数
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
-    private static final int MAX_ITERATIONS = 5000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 500; // 収束判定用の連続安定回数（100→200に変更）
+    private static final int MAX_ITERATIONS = 20000; // 最大イテレーション数
+    private static final int REQUIRED_STABLE_ITERATIONS = 2000; // 収束判定用の連続安定回数
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 10; // 二分探索の最大回数
     private static final double MIN_ASSIGNMENT_RATIO = 1.0 / 4.0; // EPS最低割当比率（1/4 = 25%）
 
     // ソースノード圧力専用閾値
-    private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値
-    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.50; // 50%変化率閾値（フロー減少用）
+    private static final double SOURCE_PRESSURE_EMERGENCY = 150; // 圧力絶対値閾値（フロー減少用）
     private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 50%減少閾値（フロー増加用）
 
     // フロー減少（UAV整数値対応）
@@ -215,11 +214,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
      * フローテスト結果の状態
      */
     private enum FlowTestStatus {
-        STABLE,                    // 安定
-        UNSTABLE_PRESSURE,         // 圧力絶対値による不安定
-        UNSTABLE_PRESSURE_CHANGE,  // 圧力変化率による不安定
-        SOLVER_ERROR,              // ソルバーエラー
-        MAX_ITERATIONS             // 最大イテレーション到達
+        STABLE,            // 安定
+        UNSTABLE_PRESSURE, // 圧力絶対値による不安定
+        SOLVER_ERROR,      // ソルバーエラー
+        MAX_ITERATIONS     // 最大イテレーション到達
     }
 
     /**
@@ -339,14 +337,6 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                 // 圧力絶対値チェック
                 if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
                     return new FlowTestResult(FlowTestStatus.UNSTABLE_PRESSURE, maxSourcePressure, ct);
-                }
-
-                // 圧力変化率チェック（10%増）
-                if (previousSourcePressure > 0.0) {
-                    double changeRate = (currentSourcePressure - previousSourcePressure) / previousSourcePressure;
-                    if (changeRate >= SOURCE_PRESSURE_CHANGE_THRESHOLD) {
-                        return new FlowTestResult(FlowTestStatus.UNSTABLE_PRESSURE_CHANGE, maxSourcePressure, ct);
-                    }
                 }
 
                 // イテレーション毎の結果を記録（テスト段階でも記録）
@@ -551,19 +541,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                 throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-NegativePressure");
             }
 
-            // 圧力変化率チェック（30%増）
-            if (previousSourcePressure > 0.0) {
-                double changeRate = (currentSourcePressure - previousSourcePressure) / previousSourcePressure;
-                if (changeRate >= SOURCE_PRESSURE_CHANGE_THRESHOLD) {
-                    LogManager.getInstance().log("BisectionalPGEPS: Final EPS run terminated due to pressure change rate at iteration " + (ct + 1) + " (change rate: " + (changeRate * 100) + "%)");
-                    break;
-                }
-            }
-
             // 安定カウンター増加
             stableIterationCount++;
-            
-            // 前回のソース圧力を更新（次回の変化率計算用）
+
+            // 前回のソース圧力を更新
             previousSourcePressure = currentSourcePressure;
 
             // イテレーション毎の結果を記録
@@ -1041,36 +1022,6 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                         stableIterationCount = 0; // リセット
                         currentFlowBaselineCaptured = false; // 基準圧力をリセット
                         flowChanged = true; // 復元により状態が変化したことを示す
-                    }
-                }
-                // 【優先度2】圧力増加率チェック（現在フロー基準圧力からの30%増加でフロー減少）
-                else if (currentFlowBaselineCaptured && currentFlowBaselinePressure > 0.0) {
-                    double increaseThreshold = currentFlowBaselinePressure * (1.0 + SOURCE_PRESSURE_CHANGE_THRESHOLD);
-                    if (currentSourcePressure >= increaseThreshold) {
-                        double increaseRate = (currentSourcePressure - currentFlowBaselinePressure) / currentFlowBaselinePressure;
-                        LogManager.getInstance().log("BisectionalPGEPS: [Priority 2] Pressure increase detected at iteration " + (ct + 1) + 
-                                                   " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) + 
-                                                   ", currentPressure=" + String.format("%.4f", currentSourcePressure) + 
-                                                   ", increase rate: " + String.format("%.2f%%", increaseRate * 100) + "). Applying binary search flow reduction.");
-                        
-                        // 上限を現在のフロー値に更新
-                        upperBound = currentFlow;
-                        double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
-                        
-                        if (newFlow != currentFlow && newFlow > lowerBound) {
-                            LogManager.getInstance().log("BisectionalPGEPS: Binary search flow reduction: " + currentFlow + " → " + newFlow +
-                                                       " (new bounds: " + lowerBound + " - " + upperBound + ")");
-                            
-                            currentFlow = newFlow;
-                            stableIterationCount = 0; // リセット
-                            currentFlowBaselineCaptured = false; // 基準圧力をリセット
-                            flowChanged = true;
-                            
-                            // フロー減少後に安定化フェーズを開始
-                            inStabilizationPhase = true;
-                            stabilizationIterationCount = 0;
-                            LogManager.getInstance().log("BisectionalPGEPS: Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
-                        }
                     }
                 }
             } else {

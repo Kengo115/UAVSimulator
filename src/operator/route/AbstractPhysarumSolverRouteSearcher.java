@@ -111,6 +111,8 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
         int testIter = 10;
         boolean fig_DIST = false;
 
+        double baselineSourcePressure = -1.0; // 1イテレーション目のソース圧力（基準値）
+
         while (ct < numLoop) {
             // sourceとdistを取得
             int source = client.getFlow().getSource().getId();
@@ -181,9 +183,17 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
             // チューブ厚の更新（サブクラスで実装、内部でDebugIterationRecorderも呼ぶ）
             updateTubeThickness(ct);
 
+            // ソース圧力を取得し、初回のみ基準値を記録
+            double currentSourcePressure = Math.abs(P_tubePressure[source]);
+            if (baselineSourcePressure < 0.0) {
+                baselineSourcePressure = currentSourcePressure;
+            }
+
             // イテレーション回数は常に標準出力（大規模・小規模共通）
             if ((ct + 1) % PLOT == 0) {
-                LogManager.getInstance().log("Iteration: " + (ct + 1));
+                LogManager.getInstance().log("Iteration: " + (ct + 1) +
+                    " pressure: " + String.format("%.4f", currentSourcePressure) +
+                    " (baseline: " + String.format("%.4f", baselineSourcePressure) + ")");
             }
 
             // ファイル出力は小規模モード時のみ（大規模シミュレーションではスキップ）
@@ -199,10 +209,8 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
 
                 // イテレーション毎の結果を記録
                 try {
-                    int sourceNodeId = client.getFlow().getSource().getId();
-                    if (sourceNodeId >= 0 && sourceNodeId < P_tubePressure.length) {
-                        double currentSourcePressure = P_tubePressure[sourceNodeId];
-                        ResultOutputManager.outputIterationSourcePressure(ct + 1, currentSourcePressure, serverController.getRunCounter());
+                    if (source >= 0 && source < P_tubePressure.length) {
+                        ResultOutputManager.outputIterationSourcePressure(ct + 1, P_tubePressure[source], serverController.getRunCounter());
                     }
                     ResultOutputManager.outputIterationFlow(ct + 1, client.getFlow().getTheNumberOfUAV(), serverController.getRunCounter());
                 } catch (IOException e) {
