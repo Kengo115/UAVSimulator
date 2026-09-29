@@ -27,6 +27,7 @@ const METHOD_LABELS = {
   5: "Binary Search EPS+PS",
   6: "Bisectional PG-EPS",
   7: "StepControlled PG-EPS",
+  8: "Bisectional PG-EPS(add-sigmoid)",
 };
 
 // ============================================================

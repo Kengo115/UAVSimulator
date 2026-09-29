@@ -109,12 +109,14 @@ header h1 {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .sidebar-section {
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .sidebar-section h2 {
@@ -191,8 +193,9 @@ select:focus {
    UAV リスト
    ============================================================ */
 .uav-list-area {
-  flex: 1;
+  flex-shrink: 0;
   overflow-y: auto;
+  max-height: 200px;
   padding: 8px 14px;
 }
 
@@ -210,7 +213,7 @@ select:focus {
 /* ============================================================
    凡例
    ============================================================ */
-.legend { padding: 8px 14px; border-top: 1px solid var(--border); }
+.legend { padding: 8px 14px; border-top: 1px solid var(--border); flex-shrink: 0; }
 .legend h2 {
   font-size: 0.78rem;
   color: var(--text-mute);

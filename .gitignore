@@ -58,6 +58,7 @@ output/
 
 ### Process Management ###
 .sim_*.pid
+.debug.pid
 
 ### TeX ###
 tex/

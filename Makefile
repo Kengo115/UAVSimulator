@@ -201,6 +201,7 @@ stop-all:
 		rm -f .debug.pid; \
 	fi
 	@pkill -f "scripts/viz_server.py" 2>/dev/null || true
+	@jps 2>/dev/null | awk '/BoundaryController/{print $$1}' | xargs -r kill 2>/dev/null || true
 	@echo "✓ 全シミュレーション停止完了"
 
 # プロジェクトをコンパイル
@@ -282,6 +283,7 @@ run-debug: compile ensure-debug-redis
 		fi; \
 		rm -f $(DEBUG_PID_FILE); \
 	fi
+	@jps 2>/dev/null | awk '/BoundaryController/{print $$1}' | xargs -r kill 2>/dev/null || true
 	REDIS_PORT=$(DEBUG_REDIS_PORT) SIM_ID=1 DEBUG_MODE=true \
 		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
 	MVN_PID=$$!; \
@@ -300,6 +302,7 @@ run-debug-quick: ensure-debug-redis
 		fi; \
 		rm -f $(DEBUG_PID_FILE); \
 	fi
+	@jps 2>/dev/null | awk '/BoundaryController/{print $$1}' | xargs -r kill 2>/dev/null || true
 	REDIS_PORT=$(DEBUG_REDIS_PORT) SIM_ID=1 DEBUG_MODE=true \
 		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
 	MVN_PID=$$!; \
