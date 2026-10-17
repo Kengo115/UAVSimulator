@@ -1096,6 +1096,13 @@ public class BoundaryController {
             String vizInput = reader.readLine().trim().toLowerCase();
             boolean enableViz = vizInput.equals("yes") || vizInput.equals("y");
 
+            boolean enableRecording = false;
+            if (enableViz) {
+                System.out.print("録画しますか? (yes/no) [no]: ");
+                String recInput = reader.readLine().trim().toLowerCase();
+                enableRecording = recInput.equals("yes") || recInput.equals("y");
+            }
+
             if (enableViz) {
                 int vizPort = 8000 + Integer.parseInt(SIM_ID);
                 String topologyPath = topologyFilePath;  // 既に取得済み
@@ -1106,22 +1113,30 @@ public class BoundaryController {
                 // 可視化サーバーを起動
                 String vizDir = RESULT_BASE_DIR + "/viz";
                 new File(vizDir).mkdirs();
-                String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new java.util.Date());
-                String sessionDir = vizDir + "/" + timestamp;
-                new File(sessionDir).mkdirs();
 
                 String pythonCmd = new File(".venv/bin/python").exists() ? ".venv/bin/python" : "python3";
                 int redisPort = Integer.parseInt(System.getenv("REDIS_PORT") != null ? System.getenv("REDIS_PORT") : "6379");
+
+                List<String> cmd = new ArrayList<>();
+                cmd.add(pythonCmd);
+                cmd.add("scripts/viz_server.py");
+                cmd.add("--sim-id"); cmd.add(SIM_ID);
+                cmd.add("--topology"); cmd.add(topologyPath);
+                cmd.add("--port"); cmd.add(String.valueOf(vizPort));
+                cmd.add("--redis-port"); cmd.add(String.valueOf(redisPort));
+
+                String sessionDir = null;
+                if (enableRecording) {
+                    String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new java.util.Date());
+                    sessionDir = vizDir + "/" + timestamp;
+                    new File(sessionDir).mkdirs();
+                    cmd.add("--session-dir"); cmd.add(sessionDir);
+                } else {
+                    cmd.add("--no-recording");
+                }
+
                 try {
-                    ProcessBuilder pb = new ProcessBuilder(
-                        pythonCmd,
-                        "scripts/viz_server.py",
-                        "--sim-id", SIM_ID,
-                        "--topology", topologyPath,
-                        "--port", String.valueOf(vizPort),
-                        "--redis-port", String.valueOf(redisPort),
-                        "--session-dir", sessionDir
-                    );
+                    ProcessBuilder pb = new ProcessBuilder(cmd);
                     pb.redirectErrorStream(false);
                     pb.redirectOutput(new File(vizDir + "/server.log"));
                     pb.redirectError(new File(vizDir + "/server_error.log"));
@@ -1132,7 +1147,11 @@ public class BoundaryController {
                     Thread.sleep(1500); // サーバー起動待機
                     System.out.println("✓ 可視化サーバーを起動しました");
                     System.out.println("  URL: http://localhost:" + vizPort);
-                    System.out.println("  セッション: " + sessionDir);
+                    if (enableRecording) {
+                        System.out.println("  セッション: " + sessionDir);
+                    } else {
+                        System.out.println("  ※ 録画なし（リアルタイム表示のみ）");
+                    }
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw ie;

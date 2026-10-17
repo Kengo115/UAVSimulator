@@ -54,6 +54,7 @@ parser.add_argument("--redis-port", type=int, default=6379, help="Redis port")
 parser.add_argument("--redis-host", default="localhost", help="Redis host")
 parser.add_argument("--recording", default=None, help="[レガシー] Path to recording JSONL file")
 parser.add_argument("--session-dir", default=None, help="セッションディレクトリ（チャンクモード）")
+parser.add_argument("--no-recording", action="store_true", help="録画を行わない（リアルタイム表示のみ）")
 args = parser.parse_args()
 
 SIM_ID = args.sim_id
@@ -63,17 +64,22 @@ REDIS_HOST = args.redis_host
 REDIS_PORT = args.redis_port
 RECORDING_PATH = args.recording
 SESSION_DIR = args.session_dir
+NO_RECORDING = args.no_recording
 
-if not SESSION_DIR and not RECORDING_PATH:
-    print("[viz_server] --session-dir または --recording のいずれかを指定してください", file=sys.stderr)
+if not SESSION_DIR and not RECORDING_PATH and not NO_RECORDING:
+    print("[viz_server] --session-dir、--recording、または --no-recording のいずれかを指定してください", file=sys.stderr)
     sys.exit(1)
 
 # VIZ_DIR: セッション一覧を取得するルートディレクトリ
 if SESSION_DIR:
     VIZ_DIR = str(Path(SESSION_DIR).parent)
     CURR_SESSION_ID = Path(SESSION_DIR).name
-else:
+elif RECORDING_PATH:
     VIZ_DIR = str(Path(RECORDING_PATH).parent)
+    CURR_SESSION_ID = None
+else:
+    # --no-recording: 既存セッション一覧は参照できるが新規録画はしない
+    VIZ_DIR = f"src/result/sim_{SIM_ID}/viz"
     CURR_SESSION_ID = None
 
 FRAMES_PER_CHUNK = 500    # チャンクあたりのフレーム数
@@ -274,8 +280,8 @@ async def redis_poller() -> None:
             ended_val = await redis_client.get(REDIS_SIM_ENDED_KEY)
             if ended_val == "1" and not sim_ended:
                 sim_ended = True
-                # 最終マニフェスト更新
-                if SESSION_DIR:
+                # 最終マニフェスト更新（録画有効時のみ）
+                if SESSION_DIR and not NO_RECORDING:
                     async with recording_lock:
                         _update_manifest()
 
@@ -288,12 +294,13 @@ async def redis_poller() -> None:
                 snapshot = build_snapshot()
                 await broadcast(snapshot)
 
-            # 録画スナップショット（500msごと）
-            now_ms = int(time.time() * 1000)
-            if now_ms - last_record_ms >= RECORD_INTERVAL_MS:
-                snapshot = build_snapshot()
-                await write_recording_line(snapshot)
-                last_record_ms = now_ms
+            # 録画スナップショット（500msごと）- 録画有効時のみ
+            if not NO_RECORDING:
+                now_ms = int(time.time() * 1000)
+                if now_ms - last_record_ms >= RECORD_INTERVAL_MS:
+                    snapshot = build_snapshot()
+                    await write_recording_line(snapshot)
+                    last_record_ms = now_ms
 
         except Exception as e:
             print(f"[viz_server] pollerエラー: {e}", file=sys.stderr)

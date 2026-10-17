@@ -34,12 +34,12 @@ public abstract class AbstractPhysarumSolverRouteSearcher implements RouteSearch
     protected static final double INF = 10000.0;
     protected static final double NEG = -1.0;
     protected static final double GAMMA = 4.0;
-    protected static final double DELTA_TIME = 0.01;
+    protected static final double DELTA_TIME = 0.02;
     protected static final int PLOT = 1;
     protected static final int PLOT_2 = 20;
     protected static final double THRESHOLD_1 = 0.5;
     protected static final double THRESHOLD_2 = 2.0;
-    protected static final double coefficient_tanh = 0.5;
+    protected static final double coefficient_tanh = 1.0;
     protected static final double TANH_DELTA = 1.0;
 
     // サーバーコントローラー

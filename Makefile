@@ -4,7 +4,8 @@
        plot-flight-cdf-comparison plot-real-flight-cdf-comparison \
        plot-preflight-wait-cdf-comparison plot-inflight-wait-cdf-comparison \
        plot-distance-cdf-comparison plot-exceeded-rate-comparison \
-       plot-exceeded-rate-comparison-jp
+       plot-exceeded-rate-comparison-jp \
+       plot-iteration
 
 # =============================================================================
 # 並列シミュレーション設定
@@ -854,3 +855,25 @@ plot-exceeded-rate-comparison-jp: venv-setup
 	@mkdir -p output
 	$(PYTHON) scripts/plot_exceeded_rate_comparison_jp.py
 	@echo "✓ グラフ生成完了"
+
+# =============================================================================
+# イテレーション遷移グラフ生成
+# =============================================================================
+
+# 圧力・フローのイテレーション遷移グラフ生成
+# Usage: make plot-iteration FLOW_FILE=<path> PRESSURE_FILE=<path> [X_MAX=N] [X_INTERVAL=N] [Y_MAX_FLOW=N] [Y_INTERVAL_FLOW=N] [Y_MAX_PRESSURE=N] [Y_INTERVAL_PRESSURE=N]
+#
+# 例:
+#   make plot-iteration \
+#     FLOW_FILE=src/result/mode1-1_G1/small_scale/Bisectional/iteration/flow/client1/iteration_flow.txt \
+#     PRESSURE_FILE=src/result/mode1-1_G1/small_scale/Bisectional/iteration/sourcePressure/client1/iteration_source_pressure.txt
+#
+#   make plot-iteration \
+#     FLOW_FILE=src/result/mode1-1_G1/small_scale/Bisectional/iteration/flow/client1/iteration_flow.txt \
+#     PRESSURE_FILE=src/result/mode1-1_G1/small_scale/Bisectional/iteration/sourcePressure/client1/iteration_source_pressure.txt \
+#     X_MAX=500 X_INTERVAL=100 Y_MAX_FLOW=60 Y_INTERVAL_FLOW=10 Y_MAX_PRESSURE=200 Y_INTERVAL_PRESSURE=50
+#
+# 出力先: FLOW_FILEから3階層上のディレクトリ（iterationディレクトリ直下）
+plot-iteration: venv-setup
+	$(PYTHON) scripts/plot_iteration_transition.py
+	@echo "✓ イテレーション遷移グラフを生成しました"
