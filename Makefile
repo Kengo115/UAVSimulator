@@ -227,11 +227,7 @@ run: compile ensure-redis kill-sim
 	@echo "  JVM設定: $(JVM_OPTS)"
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
-	MVN_PID=$$!; \
-	echo $$MVN_PID > $(PID_FILE); \
-	wait $$MVN_PID; \
-	rm -f $(PID_FILE)
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"
 
 # シミュレータを実行（コンパイルなし）
 # 使用例: make run-quick SIM_ID=2
@@ -244,22 +240,14 @@ run-quick: ensure-redis kill-sim
 	@echo "  JVM設定: $(JVM_OPTS)"
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
-	MVN_PID=$$!; \
-	echo $$MVN_PID > $(PID_FILE); \
-	wait $$MVN_PID; \
-	rm -f $(PID_FILE)
+		MAVEN_OPTS="$(JVM_OPTS)" mvn exec:java -Dexec.mainClass="operator.BoundaryController"
 
 # シミュレータを実行（メモリ制限なし、短時間テスト用）
 run-light: compile ensure-redis kill-sim
 	@echo "UAVシミュレータを起動します（軽量モード）..."
 	@mkdir -p $(RESULT_DIR_SIM) $(LOG_DIR_SIM)
 	REDIS_PORT=$(REDIS_PORT_NUM) RESULT_DIR=$(RESULT_DIR_SIM) LOG_DIR=$(LOG_DIR_SIM) SIM_ID=$(SIM_ID) \
-		mvn exec:java -Dexec.mainClass="operator.BoundaryController" & \
-	MVN_PID=$$!; \
-	echo $$MVN_PID > $(PID_FILE); \
-	wait $$MVN_PID; \
-	rm -f $(PID_FILE)
+		mvn exec:java -Dexec.mainClass="operator.BoundaryController"
 
 # =============================================================================
 # デバッグモード実行
