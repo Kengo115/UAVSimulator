@@ -19,8 +19,11 @@ import operator.scheduler.PhaseController;
 import operator.scheduler.RandomClientGenerator;
 import operator.scheduler.StatisticalSimulationController;
 import shared.redis.VizStateManager;
+import operator.route.BisectionalPressureGuidedEPSRouteSearcher;
+import shared.util.EffectiveResistanceSolver;
 import shared.util.LinkStatusRecorder;
 import shared.util.LogManager;
+import shared.util.MaxFlowSolver;
 import shared.util.ResultOutputManager;
 import network_manager.worker.AsyncUAVWorker;
 
@@ -302,6 +305,75 @@ public class BoundaryController {
      */
     public static boolean isStatisticalSimulationMode() {
         return isStatisticalSimulationMode;
+    }
+
+    /**
+     * G_0（初期ネットワーク）と G_N（現在ネットワーク）の構造を検証する
+     * 差分が CAPACITY のみであれば有効と判定する
+     *
+     * @param initial G_0 のトポロジデータ
+     * @param current G_N のトポロジデータ
+     * @return null=有効, String=エラーメッセージ
+     */
+    private static String validateNetworkStructure(
+            TopologyFileReader.TopologyData initial,
+            TopologyFileReader.TopologyData current) {
+
+        // ノード数チェック
+        if (initial.nodeCount != current.nodeCount) {
+            return "ノード数が異なります（G_0=" + initial.nodeCount + ", G_N=" + current.nodeCount + "）";
+        }
+
+        // ノード情報チェック（id / x / y / districtType）
+        if (initial.nodes.size() != current.nodes.size()) {
+            return "ノードリストのサイズが異なります";
+        }
+        for (int i = 0; i < initial.nodes.size(); i++) {
+            TopologyFileReader.NodeInfo a = initial.nodes.get(i);
+            TopologyFileReader.NodeInfo b = current.nodes.get(i);
+            if (a.id != b.id) {
+                return "ノードIDが異なります（インデックス" + i + ": G_0=" + a.id + ", G_N=" + b.id + "）";
+            }
+            if (Math.abs(a.x - b.x) > 1e-6) {
+                return "ノード座標Xが異なります（ノード" + a.id + ": G_0=" + a.x + ", G_N=" + b.x + "）";
+            }
+            if (Math.abs(a.y - b.y) > 1e-6) {
+                return "ノード座標Yが異なります（ノード" + a.id + ": G_0=" + a.y + ", G_N=" + b.y + "）";
+            }
+            if (a.districtType != b.districtType) {
+                return "地区タイプが異なります（ノード" + a.id + ": G_0=" + a.districtType + ", G_N=" + b.districtType + "）";
+            }
+        }
+
+        // リンク数チェック
+        if (initial.links.size() != current.links.size()) {
+            return "リンク数が異なります（G_0=" + initial.links.size() + ", G_N=" + current.links.size() + "）";
+        }
+
+        // リンク構造チェック（source / dest / distance / lTubeLength）
+        // "source-dest" をキーに Map 化して順序非依存で比較
+        java.util.Map<String, TopologyFileReader.LinkInfo> initialLinkMap = new java.util.HashMap<>();
+        for (TopologyFileReader.LinkInfo link : initial.links) {
+            initialLinkMap.put(link.source + "-" + link.dest, link);
+        }
+        for (TopologyFileReader.LinkInfo bLink : current.links) {
+            String key = bLink.source + "-" + bLink.dest;
+            TopologyFileReader.LinkInfo aLink = initialLinkMap.get(key);
+            if (aLink == null) {
+                return "G_N にリンク(" + bLink.source + "→" + bLink.dest + ") が存在しますが G_0 に存在しません";
+            }
+            if (Math.abs(aLink.distance - bLink.distance) > 1e-6) {
+                return "リンク(" + bLink.source + "→" + bLink.dest + ") の distance が異なります"
+                     + "（G_0=" + aLink.distance + ", G_N=" + bLink.distance + "）";
+            }
+            if (Math.abs(aLink.lTubeLength - bLink.lTubeLength) > 1e-6) {
+                return "リンク(" + bLink.source + "→" + bLink.dest + ") の lTubeLength が異なります"
+                     + "（G_0=" + aLink.lTubeLength + ", G_N=" + bLink.lTubeLength + "）";
+            }
+            // capacity は異なっても OK
+        }
+
+        return null; // バリデーション通過
     }
 
     /**
@@ -719,6 +791,21 @@ public class BoundaryController {
                 TopologyFileReader.TopologyData topologyData =
                     TopologyFileReader.readTopologyFile(topologyFilePath);
                 setLargeScaleMode(true);
+
+                // 全ノード間の最大フロー計算（G_0 = 初期状態で一度だけ実行）
+                MaxFlowSolver.computeAll(topologyData, topologyFilePath, isLargeScaleMode);
+
+                // 等価抵抗の計算（L+擬似逆行列, 圧力閾値導出に使用）
+                EffectiveResistanceSolver.compute(topologyData);
+
+                // p_limit ファイル出力（R_eff / R_eff*Q_max / p_limit_high / p_limit_low）
+                EffectiveResistanceSolver.outputPLimitFile(
+                        MaxFlowSolver.getMaxFlowMatrix(),
+                        BisectionalPressureGuidedEPSRouteSearcher.ALPHA,
+                        BisectionalPressureGuidedEPSRouteSearcher.BETA,
+                        topologyFilePath,
+                        isLargeScaleMode);
+
                 boundaryController.setNodeNum(topologyData.nodeCount);
                 beaconCluster = new BeaconCluster(topologyData);
                 server = new ServerController(beaconCluster, topologyData);
@@ -777,8 +864,8 @@ public class BoundaryController {
 
             System.out.println("ネットワーク規模: " + (isLargeScale ? "大規模" : "小規模"));
 
-            // トポロジファイルのパスを入力
-            System.out.println("トポロジファイルのパスを入力してください（空欄でデフォルト: " + defaultPath + "）:");
+            // 初期ネットワーク状態（G_0）のパスを入力
+            System.out.println("初期ネットワーク状態のパスを入力してください（空欄でデフォルト: " + defaultPath + "）:");
             System.out.print("> ");
 
             String topologyFilePath = reader.readLine().trim();
@@ -786,12 +873,64 @@ public class BoundaryController {
                 topologyFilePath = defaultPath;
             }
 
-            // トポロジの初期化（外部ファイルから読み込み）
-            System.out.println("トポロジファイルを読み込んでいます: " + topologyFilePath);
+            // G_0 の読み込み
+            System.out.println("初期ネットワーク状態を読み込んでいます: " + topologyFilePath);
             TopologyFileReader.TopologyData topologyData =
                 TopologyFileReader.readTopologyFile(topologyFilePath);
 
-            // トポロジ情報を表示
+            // 全ノード間の最大フロー計算（G_0 = 初期状態で一度だけ実行）
+            MaxFlowSolver.computeAll(topologyData, topologyFilePath, isLargeScale);
+
+            // 等価抵抗の計算（L+擬似逆行列, 圧力閾値導出に使用）
+            EffectiveResistanceSolver.compute(topologyData);
+
+            // p_limit ファイル出力（R_eff / R_eff*Q_max / p_limit_high / p_limit_low）
+            // ALPHA/BETA は BisectionalPressureGuidedEPSRouteSearcher の定数を単一参照
+            EffectiveResistanceSolver.outputPLimitFile(
+                    MaxFlowSolver.getMaxFlowMatrix(),
+                    BisectionalPressureGuidedEPSRouteSearcher.ALPHA,
+                    BisectionalPressureGuidedEPSRouteSearcher.BETA,
+                    topologyFilePath,
+                    isLargeScale);
+
+            // 現在のネットワーク状態（G_N）確認
+            System.out.println("現在のネットワークは初期ネットワーク（G_0）と異なりますか？ [yes/no]:");
+            System.out.print("> ");
+            String gNInput = reader.readLine().trim().toLowerCase();
+
+            if (gNInput.equals("yes")) {
+                // G_N のパス入力・バリデーションループ
+                while (true) {
+                    System.out.println("現在のネットワーク状態のパスを入力してください:");
+                    System.out.print("> ");
+                    String currentNetworkPath = reader.readLine().trim();
+
+                    System.out.println("現在のネットワーク状態を読み込んでいます: " + currentNetworkPath);
+                    TopologyFileReader.TopologyData currentTopologyData;
+                    try {
+                        currentTopologyData = TopologyFileReader.readTopologyFile(currentNetworkPath);
+                    } catch (IOException e) {
+                        System.out.println("ファイルの読み込みに失敗しました: " + e.getMessage() + " - 再入力してください");
+                        continue;
+                    }
+
+                    // バリデーション: CAPACITY 以外の構造が G_0 と同一か確認
+                    String validationError = validateNetworkStructure(topologyData, currentTopologyData);
+                    if (validationError != null) {
+                        System.out.println("エラー: 初期ネットワークと異なります（" + validationError + "）- 再入力してください");
+                        continue;
+                    }
+
+                    // 有効: topologyData を G_N で上書き（Q_max / p_limit は G_0 のまま）
+                    topologyData = currentTopologyData;
+                    System.out.println("現在のネットワーク状態（G_N）を適用しました: " + currentNetworkPath);
+                    System.out.println("最大フロー・p_limit は初期状態（G_0）の値を維持します");
+                    break;
+                }
+            }
+            // no の場合: G_0 からシミュレーション開始（topologyData はそのまま）
+
+            // トポロジ情報を表示（G_N 適用後の状態）
             TopologyFileReader.printTopologyInfo(topologyData);
 
             // トポロジ描画オプション

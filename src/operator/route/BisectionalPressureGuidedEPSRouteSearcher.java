@@ -4,9 +4,11 @@ import shared.client.Client;
 import shared.item.BeaconCluster;
 import shared.item.Link;
 import operator.controller.ServerController;
+import shared.util.EffectiveResistanceSolver;
 import shared.util.EPSSavePoint;
 import shared.util.ICCGSolver;
 import shared.util.LogManager;
+import shared.util.MaxFlowSolver;
 import shared.util.MathUtils;
 import shared.util.ResultOutputManager;
 import shared.redis.ClientTimeManager;
@@ -25,17 +27,87 @@ import java.io.IOException;
  */
 public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumSolverRouteSearcher {
 
+    // ===== 実験モード定義 =====
+    // 上限タイプ × トリガー構成 = 9通り
+    //   上限タイプ: 1=固定100 / 2=理論値p_limit_high / 3=理論値p_limit_high+下限p_limit_low
+    //   トリガー:   1=なし    / 2=-θのみ(Trigger2) / 3=±θ(Trigger1+Trigger2)
+    private enum ExperimentMode {
+        // ---- 上限100（固定値）----
+        /** 固定上限p_limit=100 / トリガーなし */
+        MODE_1_1,
+        /** 固定上限p_limit=100 / Trigger2(-θ)のみ */
+        MODE_1_2,
+        /** 固定上限p_limit=100 / Trigger1(+θ) + Trigger2(-θ) */
+        MODE_1_3,
+        // ---- 理論的上限p_limit_high ----
+        /** 理論的上限p_limit_high / トリガーなし */
+        MODE_2_1,
+        /** 理論的上限p_limit_high / Trigger2(-θ)のみ */
+        MODE_2_2,
+        /** 理論的上限p_limit_high / Trigger1(+θ) + Trigger2(-θ) */
+        MODE_2_3,
+        // ---- 理論的上限p_limit_high + 下限p_limit_low ----
+        /** 理論的上限p_limit_high / 下限p_limit_low / トリガーなし */
+        MODE_3_1,
+        /** 理論的上限p_limit_high / 下限p_limit_low / Trigger2(-θ)のみ */
+        MODE_3_2,
+        /** 理論的上限p_limit_high / 下限p_limit_low / Trigger1(+θ) + Trigger2(-θ) */
+        MODE_3_3
+    }
+    /** ← ここを変えるだけでモード切替 */
+    private static final ExperimentMode EXPERIMENT_MODE = ExperimentMode.MODE_3_3;
+
+    // ===== モード判定ヘルパー（static final フィールドと同等に扱える） =====
+
+    /** 理論的p_limit_highを使用するか（Mode 2_x / 3_x） */
+    private static boolean usesTheoreticalPLimit() {
+        return EXPERIMENT_MODE == ExperimentMode.MODE_2_1
+            || EXPERIMENT_MODE == ExperimentMode.MODE_2_2
+            || EXPERIMENT_MODE == ExperimentMode.MODE_2_3
+            || EXPERIMENT_MODE == ExperimentMode.MODE_3_1
+            || EXPERIMENT_MODE == ExperimentMode.MODE_3_2
+            || EXPERIMENT_MODE == ExperimentMode.MODE_3_3;
+    }
+    /** p_limit_low（下限絶対値閾値）を使用するか（Mode 3_x） */
+    private static boolean usesLowerBound() {
+        return EXPERIMENT_MODE == ExperimentMode.MODE_3_1
+            || EXPERIMENT_MODE == ExperimentMode.MODE_3_2
+            || EXPERIMENT_MODE == ExperimentMode.MODE_3_3;
+    }
+    /** Trigger 1（+θ 圧力増加率 → フロー削減）を使用するか（modeN_3） */
+    private static boolean usesTrigger1() {
+        return EXPERIMENT_MODE == ExperimentMode.MODE_1_3
+            || EXPERIMENT_MODE == ExperimentMode.MODE_2_3
+            || EXPERIMENT_MODE == ExperimentMode.MODE_3_3;
+    }
+    /** Trigger 2（-θ 圧力減少率 → フロー増加）を使用するか（modeN_2 / modeN_3） */
+    private static boolean usesTrigger2() {
+        return EXPERIMENT_MODE == ExperimentMode.MODE_1_2
+            || EXPERIMENT_MODE == ExperimentMode.MODE_1_3
+            || EXPERIMENT_MODE == ExperimentMode.MODE_2_2
+            || EXPERIMENT_MODE == ExperimentMode.MODE_2_3
+            || EXPERIMENT_MODE == ExperimentMode.MODE_3_2
+            || EXPERIMENT_MODE == ExperimentMode.MODE_3_3;
+    }
+
     // 定数
     private static final double INIT_THICKNESS = 0.5; // 初期チューブ厚
     private static final double INIT_LENGTH = 1.0; // 初期チューブ長
-    private static final int MAX_ITERATIONS = 20000; // 最大イテレーション数
-    private static final int REQUIRED_STABLE_ITERATIONS = 2000; // 収束判定用の連続安定回数
+    private static final int MAX_ITERATIONS = 10000; // 最大イテレーション数
+    private static final int REQUIRED_STABLE_ITERATIONS = 1000; // 収束判定用の連続安定回数
     private static final int MAX_BINARY_SEARCH_ITERATIONS = 10; // 二分探索の最大回数
     private static final double MIN_ASSIGNMENT_RATIO = 1.0 / 4.0; // EPS最低割当比率（1/4 = 25%）
 
     // ソースノード圧力専用閾値
-    private static final double SOURCE_PRESSURE_EMERGENCY = 150; // 圧力絶対値閾値（フロー減少用）
-    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 50%減少閾値（フロー増加用）
+    private static final double SOURCE_PRESSURE_EMERGENCY = 100; // 圧力絶対値閾値（Mode 1/2用ベース値）
+    private static final double SOURCE_PRESSURE_CHANGE_THRESHOLD = 0.50; // 50%増加閾値（Trigger 1 / Mode 1,3用）
+    private static final double SOURCE_PRESSURE_REDUCTION_THRESHOLD = 0.50; // 50%減少閾値（Trigger 2 / Mode 1,2,3用）
+
+    // 理論的閾値パラメータ（Mode 2_x / 3_x 用）
+    /** p_limit_high = ALPHA × Q_max × R_eff の倍率係数（BoundaryController のファイル出力でも参照） */
+    public static final double ALPHA = 1.2; // 圧力上限の倍率係数
+    /** p_limit_low  = BETA  × p_limit_high の係数（BoundaryController のファイル出力でも参照） */
+    public static final double BETA  = 0.2;  // 圧力下限の係数（Mode 3_x）
 
     // フロー減少（UAV整数値対応）
     private static final double MINIMUM_FLOW_RATIO = 0.1; // 最小安全フロー（要求フローの10%）
@@ -64,8 +136,15 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
     private double upperBound; // 上限（要求フロー）
     private int binarySearchIteration = 0; // 二分探索回数
 
+    // 実行時の圧力閾値（モードと(s,d)ペアに応じてsearch()冒頭で設定）
+    private double activePLimit;    // 圧力上限値（Trigger 3）
+    private double activePLimitLow; // 圧力下限値（Mode 3_x用）
+
     // EPSセーブポイント機能
     private EPSSavePoint epsSavePoint = null; // EPSセーブポイント
+
+    // 二分探索スタック時のシフト方向制御
+    private int shiftDirection = 0; // 0=なし, -1=下方シフト中, +1=上方シフト中
 
     // Phase 5: 現在処理中のクライアントID
     private int currentClientId = -1;
@@ -115,6 +194,32 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         this.destNode = client.getFlow().getDestination().getId();
         this.currentClientId = client.getId();  // Phase 5: クライアントID保存
         double eps = 1e-10;
+
+        // 実験モードに応じた圧力閾値の初期化
+        this.activePLimit    = SOURCE_PRESSURE_EMERGENCY; // Mode 1/2 デフォルト（= 100）
+        this.activePLimitLow = BETA * activePLimit;
+
+        if (usesTheoreticalPLimit()) {
+            // 理論的圧力閾値: p_limit(s,d) = α × Q_max(G_0) × R_eff_sim^(0)(s,d)
+            if (MaxFlowSolver.isInitialized() && EffectiveResistanceSolver.isInitialized()) {
+                double qMax = MaxFlowSolver.getMaxFlow(sourceNode, destNode);
+                double rEff = EffectiveResistanceSolver.getReff(sourceNode, destNode);
+                if (qMax > 0 && rEff > 0) {
+                    this.activePLimit    = ALPHA * qMax * rEff;
+                    this.activePLimitLow = BETA * activePLimit;
+                    LogManager.getInstance().log("BisectionalPGEPS: [" + EXPERIMENT_MODE + "] Theoretical p_limit(s=" + sourceNode + ",d=" + destNode + ")=" +
+                                               String.format("%.4f", activePLimit) +
+                                               " (Q_max=" + qMax + ", R_eff=" + String.format("%.4f", rEff) + ", α=" + ALPHA + ", β=" + BETA + ")");
+                } else {
+                    LogManager.getInstance().log("BisectionalPGEPS: [" + EXPERIMENT_MODE + "] WARNING: Q_max=" + qMax + " or R_eff=" + rEff +
+                                               " is invalid, falling back to SOURCE_PRESSURE_EMERGENCY=" + SOURCE_PRESSURE_EMERGENCY);
+                }
+            } else {
+                LogManager.getInstance().log("BisectionalPGEPS: [" + EXPERIMENT_MODE + "] WARNING: Solvers not initialized, falling back to SOURCE_PRESSURE_EMERGENCY=" + SOURCE_PRESSURE_EMERGENCY);
+            }
+        }
+
+        LogManager.getInstance().log("BisectionalPGEPS: [" + EXPERIMENT_MODE + "] activePLimit=" + String.format("%.4f", activePLimit) + ", activePLimitLow=" + String.format("%.4f", activePLimitLow));
 
         LogManager.getInstance().log("BisectionalPGEPS: Starting dynamic binary search EPS with requested flow " + requestedFlow);
 
@@ -334,9 +439,17 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                 double currentSourcePressure = Math.abs(P_tubePressure[sourceNode]);
                 maxSourcePressure = Math.max(maxSourcePressure, currentSourcePressure);
 
-                // 圧力絶対値チェック
-                if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
+                // 圧力絶対値チェック（Trigger 3）
+                if (currentSourcePressure >= activePLimit) {
                     return new FlowTestResult(FlowTestStatus.UNSTABLE_PRESSURE, maxSourcePressure, ct);
+                }
+
+                // 圧力増加率チェック（Trigger 1 / modeN_3のみ）
+                if (usesTrigger1() && currentFlowBaselineCaptured && currentFlowBaselinePressure > 0.0) {
+                    double increaseThreshold = currentFlowBaselinePressure * (1.0 + SOURCE_PRESSURE_CHANGE_THRESHOLD);
+                    if (currentSourcePressure >= increaseThreshold) {
+                        return new FlowTestResult(FlowTestStatus.UNSTABLE_PRESSURE, maxSourcePressure, ct);
+                    }
                 }
 
                 // イテレーション毎の結果を記録（テスト段階でも記録）
@@ -528,11 +641,22 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
 
             // ソース圧力チェック（最終実行でも安定性をチェック）
             double currentSourcePressure = Math.abs(P_tubePressure[sourceNode]);
-            
-            // 圧力絶対値チェック
-            if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
+
+            // 圧力絶対値チェック（Trigger 3）
+            if (currentSourcePressure >= activePLimit) {
                 LogManager.getInstance().error("BisectionalPGEPS: CRITICAL ERROR - Final EPS pressure emergency detected at iteration " + (ct + 1) + " (pressure: " + currentSourcePressure + "). System termination required.");
                 throw new RuntimeException("System termination: Pressure emergency in final EPS run");
+            }
+
+            // 圧力増加率チェック（Trigger 1 / modeN_3のみ）
+            if (usesTrigger1() && currentFlowBaselineCaptured && currentFlowBaselinePressure > 0.0) {
+                double increaseThreshold = currentFlowBaselinePressure * (1.0 + SOURCE_PRESSURE_CHANGE_THRESHOLD);
+                if (currentSourcePressure >= increaseThreshold) {
+                    LogManager.getInstance().log("BisectionalPGEPS: [Trigger 1 - Final EPS] Pressure increase rate exceeded at iteration " + (ct + 1) +
+                                               " (baseline=" + String.format("%.4f", currentFlowBaselinePressure) +
+                                               ", current=" + String.format("%.4f", currentSourcePressure) + "). Stopping final EPS.");
+                    break;
+                }
             }
 
             // 負の圧力チェック - Phase 5: SolverFailedExceptionで再試行対象に
@@ -875,6 +999,7 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
         currentFlowBaselinePressure = 0.0;
         currentFlowBaselineCaptured = false;
         binarySearchIteration = 0; // Phase 5: 再試行時にリセット
+        shiftDirection = 0; // スタックシフト方向リセット
         int ct = 0;
 
         // 動的二分探索EPSループ
@@ -973,10 +1098,10 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             
             // 安定化フェーズ中の場合は異常検知をスキップ
             if (!inStabilizationPhase) {
-                // 【優先度1】圧力絶対値チェック（100以上でフロー減少）
-                if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
-                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 1] Pressure emergency detected at iteration " + (ct + 1) + 
-                                               " (pressure: " + String.format("%.2f", currentSourcePressure) + "). Applying binary search flow reduction.");
+                // 【優先度1】Trigger 3: 圧力絶対値チェック（activePLimit以上でフロー減少）
+                if (currentSourcePressure >= activePLimit) {
+                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 1 / Trigger 3] Pressure emergency detected at iteration " + (ct + 1) +
+                                               " (pressure: " + String.format("%.2f", currentSourcePressure) + " >= " + activePLimit + "). Applying binary search flow reduction.");
                     
                     // 上限を現在のフロー値に更新
                     upperBound = currentFlow;
@@ -987,10 +1112,11 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                                                    " (new bounds: " + lowerBound + " - " + upperBound + ")");
                         
                         currentFlow = newFlow;
+                        shiftDirection = 0; // 通常削減: シフトモードリセット
                         stableIterationCount = 0; // リセット
                         currentFlowBaselineCaptured = false; // 基準圧力をリセット
                         flowChanged = true;
-                        
+
                         // *** フロー減少後のEPS状態復元 ***
                         if (epsSavePoint.isAvailable()) {
                             epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
@@ -1000,38 +1126,119 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                             LogManager.getInstance().log("BisectionalPGEPS: No savepoint available, restoring EPS to initial state after flow reduction");
                             initializeEPS();
                         }
-                        
+
                         // フロー減少後に安定化フェーズを開始
                         inStabilizationPhase = true;
                         stabilizationIterationCount = 0;
                         LogManager.getInstance().log("BisectionalPGEPS: Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
                     } else {
-                        // フロー変更がない場合はEPS復元のみ実行
-                        if (epsSavePoint.isAvailable()) {
-                            epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
-                            LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint (no flow change required). " + epsSavePoint.getStatistics());
-                        } else {
-                            LogManager.getInstance().log("BisectionalPGEPS: No savepoint available, restoring EPS to initial state (no flow change required)");
-                            initializeEPS();
+                        // スタック検知: lowerBound == upperBound == currentFlow → 下方シフトで脱出
+                        boolean isStuckShifted = false;
+                        if (newFlow == currentFlow) {
+                            if (shiftDirection == 1) {
+                                // 上方シフト直後に削減スタック → 両方向失敗
+                                LogManager.getInstance().log("BisectionalPGEPS: [Stuck/P1] DOWN shift blocked (shiftDirection=UP). Both directions failed. Throwing SolverFailedException.");
+                                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-StuckBothDirections");
+                            } else if (currentFlow <= 1) {
+                                LogManager.getInstance().log("BisectionalPGEPS: [Stuck/P1] Cannot reduce flow below 1 (currentFlow=" + currentFlow + "). Throwing SolverFailedException.");
+                                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-StuckMinFlow");
+                            } else {
+                                double oldFlow = currentFlow;
+                                lowerBound -= 1;
+                                upperBound -= 1;
+                                currentFlow -= 1;
+                                shiftDirection = -1;
+                                isStuckShifted = true;
+                                LogManager.getInstance().log("BisectionalPGEPS: [Stuck/P1 / DOWN Shift] Shifted all bounds -1: " + oldFlow + " → " + currentFlow +
+                                                           " (lower=" + lowerBound + ", upper=" + upperBound + ", shiftDirection=-1)");
+                            }
                         }
-                        
-                        // EPS復元後は安定化フェーズに入る
-                        LogManager.getInstance().log("BisectionalPGEPS: EPS state restored but no flow change required. Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
+                        // EPS処理: スタックシフト時はセーブポイントを破棄し初期状態にリセット、それ以外はセーブポイント復元
+                        if (isStuckShifted) {
+                            initializeEPS();
+                            epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                            LogManager.getInstance().log("BisectionalPGEPS: [Stuck/P1] EPS savepoint discarded and reset to initial state. " + epsSavePoint.getStatistics());
+                        } else {
+                            if (epsSavePoint.isAvailable()) {
+                                epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                                LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint (no flow change required). " + epsSavePoint.getStatistics());
+                            } else {
+                                LogManager.getInstance().log("BisectionalPGEPS: No savepoint available, restoring EPS to initial state (no flow change required)");
+                                initializeEPS();
+                            }
+                        }
+
+                        // EPS処理後は安定化フェーズに入る
+                        LogManager.getInstance().log("BisectionalPGEPS: EPS state updated. Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
                         inStabilizationPhase = true;
                         stabilizationIterationCount = 0;
                         stableIterationCount = 0; // リセット
                         currentFlowBaselineCaptured = false; // 基準圧力をリセット
-                        flowChanged = true; // 復元により状態が変化したことを示す
+                        flowChanged = true; // 状態が変化したことを示す
+                    }
+                }
+                // 【優先度2】Trigger 1: 圧力増加率チェック（modeN_3のみ）
+                if (!flowChanged
+                        && usesTrigger1()
+                        && currentFlowBaselineCaptured && currentFlowBaselinePressure > 0.0) {
+                    double increaseThreshold = currentFlowBaselinePressure * (1.0 + SOURCE_PRESSURE_CHANGE_THRESHOLD);
+                    if (currentSourcePressure >= increaseThreshold) {
+                        double increaseRate = (currentSourcePressure - currentFlowBaselinePressure) / currentFlowBaselinePressure;
+                        LogManager.getInstance().log("BisectionalPGEPS: [Priority 2 / Trigger 1] Pressure increase rate exceeded at iteration " + (ct + 1) +
+                                                   " (baseline=" + String.format("%.4f", currentFlowBaselinePressure) +
+                                                   ", current=" + String.format("%.4f", currentSourcePressure) +
+                                                   ", rate=" + String.format("%.2f%%", increaseRate * 100) + "). Applying binary search flow reduction.");
+
+                        upperBound = currentFlow;
+                        double newFlow = Math.ceil((lowerBound + upperBound) / 2.0);
+
+                        if (newFlow != currentFlow && newFlow > lowerBound) {
+                            LogManager.getInstance().log("BisectionalPGEPS: [Trigger 1] Binary search flow reduction: " + currentFlow + " → " + newFlow +
+                                                       " (new bounds: " + lowerBound + " - " + upperBound + ")");
+                            currentFlow = newFlow;
+                            shiftDirection = 0; // 通常削減: シフトモードリセット
+                            stableIterationCount = 0;
+                            currentFlowBaselineCaptured = false;
+                            flowChanged = true;
+                            inStabilizationPhase = true;
+                            stabilizationIterationCount = 0;
+                            LogManager.getInstance().log("BisectionalPGEPS: Entering stabilization phase after Trigger 1 flow reduction.");
+                        } else if (newFlow == currentFlow) {
+                            // スタック検知: lowerBound == upperBound == currentFlow → 下方シフトで脱出
+                            if (shiftDirection == 1) {
+                                LogManager.getInstance().log("BisectionalPGEPS: [Stuck/Trigger1] DOWN shift blocked (shiftDirection=UP). Both directions failed. Throwing SolverFailedException.");
+                                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-StuckBothDirections");
+                            } else if (currentFlow <= 1) {
+                                LogManager.getInstance().log("BisectionalPGEPS: [Stuck/Trigger1] Cannot reduce flow below 1 (currentFlow=" + currentFlow + "). Throwing SolverFailedException.");
+                                throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-StuckMinFlow");
+                            } else {
+                                double oldFlow = currentFlow;
+                                lowerBound -= 1;
+                                upperBound -= 1;
+                                currentFlow -= 1;
+                                shiftDirection = -1;
+                                stableIterationCount = 0;
+                                currentFlowBaselineCaptured = false;
+                                flowChanged = true;
+                                inStabilizationPhase = true;
+                                stabilizationIterationCount = 0;
+                                // スタック時: セーブポイント破棄 → 初期状態にリセット
+                                initializeEPS();
+                                epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                                LogManager.getInstance().log("BisectionalPGEPS: [Stuck/Trigger1 / DOWN Shift] Shifted all bounds -1: " + oldFlow + " → " + currentFlow +
+                                                           " (lower=" + lowerBound + ", upper=" + upperBound + ", shiftDirection=-1). EPS reset to initial state. " + epsSavePoint.getStatistics());
+                            }
+                        }
                     }
                 }
             } else {
                 // 安定化フェーズ中の処理
                 stabilizationIterationCount++;
                 LogManager.getInstance().log("BisectionalPGEPS: Stabilization phase iteration " + stabilizationIterationCount + "/" + STABILIZATION_PHASE_ITERATIONS + " (pressure emergency detection only)");
-                
-                // 安定化フェーズ中でも圧力絶対値100の異常検知のみ作動
-                if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
-                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 1 - Stabilization Phase] Pressure emergency detected during stabilization at iteration " + (ct + 1) + 
+
+                // 安定化フェーズ中でも圧力絶対値（Trigger 3）の異常検知のみ作動
+                if (currentSourcePressure >= activePLimit) {
+                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 1 - Stabilization Phase] Pressure emergency detected during stabilization at iteration " + (ct + 1) +
                                                " (pressure: " + String.format("%.2f", currentSourcePressure) + "). Applying binary search flow reduction.");
                     
                     // 上限を現在のフロー値に更新
@@ -1044,11 +1251,12 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                         
                         double oldFlow = currentFlow;
                         currentFlow = newFlow;
+                        shiftDirection = 0; // 通常削減: シフトモードリセット
                         stableIterationCount = 0; // リセット
                         currentFlowBaselineCaptured = false; // 基準圧力をリセット
                         flowChanged = true;
-                        
-                        // *** フロー減少後のEPS状態復元（安定化フェーズ中も同様） ***
+
+                        // *** フロー減少後のEPS状態復元 ***
                         if (epsSavePoint.isAvailable()) {
                             epsSavePoint.restoreEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
                             LogManager.getInstance().log("BisectionalPGEPS: EPS state restored from savepoint after flow reduction during stabilization. " + epsSavePoint.getStatistics());
@@ -1056,21 +1264,46 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                             LogManager.getInstance().log("BisectionalPGEPS: No savepoint available, restoring EPS to initial state after flow reduction during stabilization");
                             initializeEPS();
                         }
-                        
+
                         // 安定化フェーズをリセット（新しいフロー値で再開始）
                         stabilizationIterationCount = 0;
-                        LogManager.getInstance().log("BisectionalPGEPS: Flow reduced from " + oldFlow + " to " + currentFlow + " during stabilization. Restarting stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state restored)");
+                        LogManager.getInstance().log("BisectionalPGEPS: Flow reduced from " + oldFlow + " to " + currentFlow + " during stabilization. Restarting stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations");
+                    } else if (newFlow == currentFlow) {
+                        // スタック検知: 安定化フェーズ中でも下方シフトで脱出
+                        if (shiftDirection == 1) {
+                            LogManager.getInstance().log("BisectionalPGEPS: [Stuck/Stab] DOWN shift blocked (shiftDirection=UP). Both directions failed. Throwing SolverFailedException.");
+                            throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-StuckBothDirections");
+                        } else if (currentFlow <= 1) {
+                            LogManager.getInstance().log("BisectionalPGEPS: [Stuck/Stab] Cannot reduce flow below 1 (currentFlow=" + currentFlow + "). Throwing SolverFailedException.");
+                            throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-StuckMinFlow");
+                        } else {
+                            double oldFlow = currentFlow;
+                            lowerBound -= 1;
+                            upperBound -= 1;
+                            currentFlow -= 1;
+                            shiftDirection = -1;
+                            stableIterationCount = 0;
+                            currentFlowBaselineCaptured = false;
+                            flowChanged = true;
+                            // スタック時: セーブポイント破棄 → 初期状態にリセット
+                            initializeEPS();
+                            epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                            stabilizationIterationCount = 0;
+                            LogManager.getInstance().log("BisectionalPGEPS: [Stuck/Stab / DOWN Shift] Shifted all bounds -1: " + oldFlow + " → " + currentFlow +
+                                                       " (lower=" + lowerBound + ", upper=" + upperBound + ", shiftDirection=-1). EPS reset to initial state. " + epsSavePoint.getStatistics());
+                        }
                     }
                 } else {
                     // 安定化フェーズ完了チェック
                     if (stabilizationIterationCount >= STABILIZATION_PHASE_ITERATIONS) {
                         inStabilizationPhase = false;
                         stabilizationIterationCount = 0;
+                        shiftDirection = 0; // 安定化完了: シフトモードリセット
                         LogManager.getInstance().log("BisectionalPGEPS: Stabilization phase completed. Resuming full anomaly detection.");
                         
                         // 安定化フェーズ後の安全性チェック
-                        if (currentSourcePressure >= SOURCE_PRESSURE_EMERGENCY) {
-                            LogManager.getInstance().error("BisectionalPGEPS: CRITICAL ERROR - Pressure still >= 100 after stabilization phase (pressure: " + String.format("%.2f", currentSourcePressure) + "). System termination required.");
+                        if (currentSourcePressure >= activePLimit) {
+                            LogManager.getInstance().error("BisectionalPGEPS: CRITICAL ERROR - Pressure still >= " + activePLimit + " after stabilization phase (pressure: " + String.format("%.2f", currentSourcePressure) + "). System termination required.");
                             throw new RuntimeException("System termination: Pressure emergency persists after stabilization phase");
                         }
                         
@@ -1083,10 +1316,29 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                 }
             }
             
-            // 【優先度3】圧力減少率チェック（現在フロー基準圧力から30%減少でフロー増加）- 安定化フェーズ中はスキップ
-            if (!inStabilizationPhase && !flowChanged && shouldIncrease && currentFlow < requestedFlow) {
+            // 【優先度3】フロー増加チェック - 安定化フェーズ中はスキップ
+            // lowerBoundFired : Mode 3_x → 圧力が p_limit_low 以下（EPS初期化直後の誤発火を baselineCaptured でガード）
+            // trigger2Fired   : modeN_2 / modeN_3 → 圧力が baseline から -θ 以上低下
+            // Mode 1_1 / 2_1  : どちらも false → フロー増加トリガーなし（Trigger 3 によるフロー削減のみ）
+            boolean lowerBoundFired = usesLowerBound()
+                    && currentFlowBaselineCaptured
+                    && (currentSourcePressure <= activePLimitLow);
+            boolean trigger2Fired = usesTrigger2() && shouldIncrease;
+            boolean shouldTriggerIncrease = lowerBoundFired || trigger2Fired;
+
+            if (usesLowerBound() && ((ct + 1) % 100 == 0 || ct < 10)) {
+                LogManager.getInstance().log("BisectionalPGEPS: [" + EXPERIMENT_MODE + " Lower Bound] pressure=" + String.format("%.4f", currentSourcePressure) +
+                                           ", activePLimitLow=" + String.format("%.4f", activePLimitLow) +
+                                           ", baselineCaptured=" + currentFlowBaselineCaptured +
+                                           ", lowerBoundFired=" + lowerBoundFired +
+                                           ", trigger2Fired=" + trigger2Fired +
+                                           ", shouldTriggerIncrease=" + shouldTriggerIncrease);
+            }
+
+            if (!inStabilizationPhase && !flowChanged && shouldTriggerIncrease && currentFlow < requestedFlow) {
                 // デバッグログ
-                LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase conditions - shouldIncrease=" + shouldIncrease + 
+                LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase conditions - mode=" + EXPERIMENT_MODE +
+                                           ", shouldTriggerIncrease=" + shouldTriggerIncrease +
                                            ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
                                            ", lowerBound=" + lowerBound + ", upperBound=" + upperBound);
                 
@@ -1104,7 +1356,8 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                                            ", newFlow <= requestedFlow: " + (newFlow <= requestedFlow) + ")");
                 
                 if (newFlow != currentFlow && newFlow <= requestedFlow) {
-                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 3] Source pressure 30% reduction detected at iteration " + (ct + 1) + 
+                    String increaseReason = lowerBoundFired ? "lower bound p_limit_low" : "Trigger2(-θ)";
+                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 3] Flow increase triggered (" + increaseReason + ") at iteration " + (ct + 1) +
                                                " (baselinePressure=" + String.format("%.4f", currentFlowBaselinePressure) +
                                                ", currentPressure=" + String.format("%.4f", currentSourcePressure) +
                                                "). Binary search flow increase: " + currentFlow + " → " + newFlow +
@@ -1115,24 +1368,49 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
                     LogManager.getInstance().log("BisectionalPGEPS: EPS savepoint created before flow increase from " + currentFlow + " to " + newFlow + ". " + epsSavePoint.getStatistics());
                     
                     currentFlow = newFlow;
+                    shiftDirection = 0; // 通常増加: シフトモードリセット
                     stableIterationCount = 0; // リセット
                     currentFlowBaselineCaptured = false; // 基準圧力をリセット
                     flowChanged = true;
-                    
+
                     // フロー増加後に安定化フェーズを開始（EPSは初期化しない）
                     inStabilizationPhase = true;
                     stabilizationIterationCount = 0;
                     LogManager.getInstance().log("BisectionalPGEPS: Flow increased to " + currentFlow + ". Entering stabilization phase for " + STABILIZATION_PHASE_ITERATIONS + " iterations (EPS state preserved)");
+                } else if (newFlow == currentFlow) {
+                    // スタック検知: lowerBound == upperBound == currentFlow → 上方シフトで脱出
+                    if (shiftDirection == -1) {
+                        // 下方シフト直後に増加スタック → 両方向失敗
+                        LogManager.getInstance().log("BisectionalPGEPS: [Stuck/P3] UP shift blocked (shiftDirection=DOWN). Both directions failed. Throwing SolverFailedException.");
+                        throw new SolverFailedException(currentClientId, ct + 1, "BisectionalPGEPS-StuckBothDirections");
+                    } else {
+                        double oldFlow = currentFlow;
+                        lowerBound += 1;
+                        upperBound += 1;
+                        currentFlow += 1;
+                        shiftDirection = 1;
+                        stableIterationCount = 0;
+                        currentFlowBaselineCaptured = false;
+                        flowChanged = true;
+                        // スタック時: セーブポイント破棄 → 初期状態にリセット
+                        initializeEPS();
+                        epsSavePoint.saveEPSState(link, pressureCoefficient, P_tubePressure, Q_Kirchhoff, D_tubeThickness_deltaT, Q_tubeFlow_sigmoidOutput);
+                        inStabilizationPhase = true;
+                        stabilizationIterationCount = 0;
+                        LogManager.getInstance().log("BisectionalPGEPS: [Stuck/P3 / UP Shift] Shifted all bounds +1: " + oldFlow + " → " + currentFlow +
+                                                   " (lower=" + lowerBound + ", upper=" + upperBound + ", shiftDirection=+1). EPS reset to initial state. " + epsSavePoint.getStatistics());
+                    }
                 } else {
-                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase skipped - newFlow=" + newFlow + 
+                    LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase skipped - newFlow=" + newFlow +
                                                ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow +
                                                ", condition check: newFlow != currentFlow=" + (newFlow != currentFlow) +
                                                ", newFlow <= requestedFlow=" + (newFlow <= requestedFlow));
                 }
             } else if (!flowChanged && (ct + 1) % 100 == 0) {
                 // 100回に1回だけログ出力（フロー増加しない理由）
-                LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase not triggered - inStabilizationPhase=" + inStabilizationPhase + 
-                                           ", shouldIncrease=" + shouldIncrease + ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ", flowChanged=" + flowChanged);
+                LogManager.getInstance().log("BisectionalPGEPS: [Priority 3 DEBUG] Flow increase not triggered - mode=" + EXPERIMENT_MODE +
+                                           ", inStabilizationPhase=" + inStabilizationPhase +
+                                           ", shouldTriggerIncrease=" + shouldTriggerIncrease + ", currentFlow=" + currentFlow + ", requestedFlow=" + requestedFlow + ", flowChanged=" + flowChanged);
             }
 
             // 安定カウンター増加（フロー変更されなかった場合のみ）
