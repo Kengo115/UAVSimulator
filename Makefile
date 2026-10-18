@@ -5,7 +5,8 @@
        plot-preflight-wait-cdf-comparison plot-inflight-wait-cdf-comparison \
        plot-distance-cdf-comparison plot-exceeded-rate-comparison \
        plot-exceeded-rate-comparison-jp \
-       plot-iteration
+       plot-iteration plot-waiting plot-waiting-comparison \
+       plot-load-ranking-comparison
 
 # =============================================================================
 # 並列シミュレーション設定
@@ -664,10 +665,12 @@ plot-top-load: venv-setup
 	@echo "✓ グラフを生成しました: $(OUTPUT_DIR)/graphs/top$(TOP_N)_max_load_links.png"
 
 # 全リンクの最大負荷率ランキンググラフ生成
-# Usage: make plot-load-ranking SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N]
+# Usage: make plot-load-ranking SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N] [LOG_SCALE=true]
+LOG_SCALE :=
 plot-load-ranking: venv-setup
 	@echo "全リンクの最大負荷率ランキンググラフを生成します..."
 	@echo "  入力: $(RESULT_DIR)/link_status/links/_summary.csv"
+	@if [ -n "$(LOG_SCALE)" ]; then echo "  スケール: 対数"; else echo "  スケール: 線形"; fi
 	@if [ ! -f "$(RESULT_DIR)/link_status/links/_summary.csv" ]; then \
 		echo ""; \
 		echo "Error: _summary.csv が見つかりません"; \
@@ -679,8 +682,12 @@ plot-load-ranking: venv-setup
 		exit 1; \
 	fi
 	@mkdir -p $(OUTPUT_DIR)/graphs
-	$(PYTHON) scripts/plot_load_ranking.py $(RESULT_DIR)/link_status/links/_summary.csv $(OUTPUT_DIR)/graphs $(Y_MAX) $(Y_INTERVAL)
-	@echo "✓ グラフを生成しました: $(OUTPUT_DIR)/graphs/load_ranking.png"
+	$(PYTHON) scripts/plot_load_ranking.py $(RESULT_DIR)/link_status/links/_summary.csv $(OUTPUT_DIR)/graphs $(Y_MAX) $(Y_INTERVAL) $(if $(LOG_SCALE),--log,)
+	@if [ -n "$(LOG_SCALE)" ]; then \
+		echo "✓ グラフを生成しました: $(OUTPUT_DIR)/graphs/load_ranking_log.png"; \
+	else \
+		echo "✓ グラフを生成しました: $(OUTPUT_DIR)/graphs/load_ranking.png"; \
+	fi
 
 # 全UAVのflightTime累積分布グラフ生成
 # Usage: make plot-flight-cdf SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N]
@@ -856,6 +863,26 @@ plot-exceeded-rate-comparison-jp: venv-setup
 	$(PYTHON) scripts/plot_exceeded_rate_comparison_jp.py
 	@echo "✓ グラフ生成完了"
 
+# 最大負荷率ランキング比較グラフ生成（複数手法）
+# Usage: make plot-load-ranking-comparison
+#
+# 対話的に以下を入力:
+#   - グループ数 (例: 3)
+#   - 各グループの表示名 (例: PG-EPS)
+#   - 各グループのディレクトリ名 (例: Bisectional)
+#   - 各グループのsim番号 (例: 1)
+#   - Y軸スケール: 1=線形 / 2=対数
+#   - X軸最大値・Y軸最大値・Y軸間隔 (空欄で自動)
+#   - 出力ファイル名 (デフォルト: output/load_ranking_comparison.png)
+#
+# データソース: src/result/sim_X/large_scale/{手法名}/link_status/links/_summary.csv
+# ※ 先に make extract-links SIM_ID=N METHOD=X を実行してください
+plot-load-ranking-comparison: venv-setup
+	@echo "最大負荷率ランキング比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_load_ranking_comparison.py
+	@echo "✓ グラフ生成完了"
+
 # =============================================================================
 # イテレーション遷移グラフ生成
 # =============================================================================
@@ -877,3 +904,47 @@ plot-exceeded-rate-comparison-jp: venv-setup
 plot-iteration: venv-setup
 	$(PYTHON) scripts/plot_iteration_transition.py
 	@echo "✓ イテレーション遷移グラフを生成しました"
+
+# =============================================================================
+# 待機UAV台数グラフ生成
+# =============================================================================
+
+# 空域全体の待機UAV台数時系列グラフ生成
+# Usage: make plot-waiting SIM_ID=N [METHOD=X] [Y_MAX=N] [Y_INTERVAL=N] [LOG_SCALE=true]
+plot-waiting: venv-setup
+	@echo "待機UAV台数グラフを生成します..."
+	@echo "  入力: $(RESULT_DIR)/link_status/link_status.csv"
+	@if [ -n "$(LOG_SCALE)" ]; then echo "  スケール: 対数"; else echo "  スケール: 線形"; fi
+	@if [ ! -f "$(RESULT_DIR)/link_status/link_status.csv" ]; then \
+		echo ""; \
+		echo "Error: link_status.csv が見つかりません"; \
+		echo "       $(RESULT_DIR)/link_status/link_status.csv"; \
+		echo ""; \
+		echo "確認事項:"; \
+		echo "  1. SIM_ID=$(SIM_ID) でシミュレーションを実行しましたか？"; \
+		echo "  2. シミュレーション時に選択した手法は $(METHOD) ですか？"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@mkdir -p $(OUTPUT_DIR)/graphs
+	$(PYTHON) scripts/plot_total_waiting.py $(RESULT_DIR) $(OUTPUT_DIR)/graphs $(Y_MAX) $(Y_INTERVAL) $(if $(LOG_SCALE),--log,)
+	@echo "✓ 待機UAV台数グラフを生成しました: $(OUTPUT_DIR)/graphs/"
+
+# 待機UAV台数 時系列比較グラフ生成（複数手法）
+# Usage: make plot-waiting-comparison
+#
+# 対話的に以下を入力:
+#   - グループ数 (例: 3)
+#   - 各グループの表示名 (例: PG-EPS)
+#   - 各グループのディレクトリ名 (例: Bisectional)
+#   - 各グループのsim番号 (例: 1)
+#   - Y軸スケール: 1=線形 / 2=対数
+#   - X軸最大値・間隔、Y軸最大値・間隔 (空欄で自動)
+#   - 出力ファイル名 (デフォルト: output/total_waiting_comparison.png)
+#
+# データソース: src/result/sim_X/large_scale/{手法名}/link_status/link_status.csv
+plot-waiting-comparison: venv-setup
+	@echo "待機UAV台数 時系列比較グラフを生成します..."
+	@mkdir -p output
+	$(PYTHON) scripts/plot_total_waiting_comparison.py
+	@echo "✓ グラフ生成完了"
