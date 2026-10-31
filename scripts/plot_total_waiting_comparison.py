@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-複数手法の空域全体待機UAV台数 時系列比較グラフ生成
+複数手法の空域全体待機UAV数 時系列比較グラフ生成
 
 複数の経路探索手法を同一グラフ上で重ね描きする。
-横軸: 時間(s)、縦軸: 待機UAV台数
+横軸: 時間(s)、縦軸: 待機UAV数
 
 Usage:
     python scripts/plot_total_waiting_comparison.py
@@ -14,6 +14,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 
@@ -54,7 +55,18 @@ COLORS = ['#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#f39c12', '#1abc9c', '#e9
 
 # --- データ読み込み ---
 def load_total_waiting(result_dir: str, bin_s: float = 300.0):
-    """link_status.csv を読み込み、時間ビンで集約した待機台数時系列を返す"""
+    """link_status.csv を読み込み、各ビン境界時刻の合計待機台数を返す。
+
+    【算出方法: LOCF (Last Observation Carried Forward)】
+    link_status.csv はイベント駆動記録のため、同一タイムスタンプに
+    イベントが発生したリンクしか集計されない。
+    そのため単純な groupby-sum は「イベントの疎な終盤」で
+    実際より大幅に少ない値になるアーティファクトが生じる。
+
+    LOCF では各リンクの waiting_count を「最後に記録された値」として
+    保持し、ビン境界時刻 t ごとに全リンクの最終既知値を合算する。
+    これにより記録タイミングのズレによる過小評価を排除できる。
+    """
     csv_path = os.path.join(result_dir, "link_status", "link_status.csv")
     if not os.path.exists(csv_path):
         return None, csv_path
@@ -63,17 +75,34 @@ def load_total_waiting(result_dir: str, bin_s: float = 300.0):
     if 'waiting_count' not in df.columns:
         return None, csv_path
 
-    # イベントごとの全リンク合計
-    total = df.groupby('timestamp')['waiting_count'].sum().reset_index()
-    total.columns = ['timestamp', 'total_waiting']
-    total = total.sort_values('timestamp')
+    # リンク・タイムスタンプ順にソート
+    df = df.sort_values(['link_from', 'link_to', 'timestamp']).reset_index(drop=True)
+    t_max = float(df['timestamp'].max())
 
-    # 時間ビン集約 → 点プロット用に間引く（各ビン内の最大値を使用）
-    total['bin'] = (total['timestamp'] // bin_s * bin_s)
-    total = total.groupby('bin')['total_waiting'].max().reset_index()
-    total.columns = ['timestamp', 'total_waiting']
+    # ビン境界タイムスタンプ列を生成（0, bin_s, 2*bin_s, ..., t_max）
+    bin_ts = np.arange(0.0, t_max, bin_s)
+    # シミュレーション終了時刻 t_max を末尾に必ず含める
+    if len(bin_ts) == 0 or bin_ts[-1] < t_max:
+        bin_ts = np.append(bin_ts, t_max)
 
-    return total, csv_path
+    total_per_bin = np.zeros(len(bin_ts), dtype=float)
+
+    # 各リンクごとに LOCF でビン時刻の waiting_count を取得して合算
+    for _, link_df in df.groupby(['link_from', 'link_to'], sort=False):
+        ts = link_df['timestamp'].values
+        wc = link_df['waiting_count'].values
+
+        # searchsorted で「t 以前の最後のインデックス」を一括取得
+        idxs = np.searchsorted(ts, bin_ts, side='right') - 1
+        # イベントが一件もない区間は 0（初期状態）
+        link_wc = np.where(idxs >= 0, wc[idxs], 0.0)
+        total_per_bin += link_wc
+
+    result = pd.DataFrame({
+        'timestamp':     bin_ts,
+        'total_waiting': total_per_bin.astype(int),
+    })
+    return result, csv_path
 
 
 # --- 対話入力 ---
@@ -98,7 +127,7 @@ def ask_optional_float(prompt: str):
 
 def interactive_input():
     print("=" * 80)
-    print("  待機UAV台数 時系列比較グラフ生成")
+    print("  待機UAV数 時系列比較グラフ生成")
     print("=" * 80)
     print()
 
@@ -142,10 +171,15 @@ def interactive_input():
     x_interval = float(x_interval_input) if x_interval_input else 6000.0
     print()
     if log_scale:
+        while True:
+            y_min = ask_optional_float("Y軸 下限値 (例: 1) : ")
+            if y_min is None or y_min > 0:
+                break
+            print("  対数スケールの下限値は正の値を入力してください（例: 1）")
         y_max      = ask_optional_float("Y軸 最大値       : ")
         y_interval = None
-        print("  ※ 対数スケールのため Y軸間隔は自動設定されます")
     else:
+        y_min      = None
         y_max      = ask_optional_float("Y軸 最大値       : ")
         y_interval = ask_optional_float("Y軸 間隔         : ")
     print()
@@ -156,11 +190,11 @@ def interactive_input():
     out = input(f"出力ファイル名 (デフォルト: {default_output}): ").strip()
     output_file = out if out else default_output
 
-    return groups, bin_s, log_scale, x_max, x_interval, y_max, y_interval, output_file
+    return groups, bin_s, log_scale, x_max, x_interval, y_min, y_max, y_interval, output_file
 
 
 # --- グラフ描画 ---
-def plot_comparison(all_data, log_scale, x_max, x_interval, y_max, y_interval, output_file, bin_s):
+def plot_comparison(all_data, log_scale, x_max, x_interval, y_min, y_max, y_interval, output_file, bin_s):
     fig, ax = plt.subplots(figsize=(14, 8))
 
     for spine in ax.spines.values():
@@ -182,7 +216,7 @@ def plot_comparison(all_data, log_scale, x_max, x_interval, y_max, y_interval, o
             x_data_max = ts_max
 
     # X軸
-    ax.set_xlabel('Time (s)', fontsize=FONT_SIZE_LABEL, fontweight='bold', color='black')
+    ax.set_xlabel('シミュレーション時間 (s)', fontsize=FONT_SIZE_LABEL, fontweight='bold', color='black')
     ax.tick_params(axis='x', labelsize=FONT_SIZE_TICK, direction='in', colors='black')
     x_limit = x_max if x_max is not None else x_data_max
     ax.set_xlim(0, x_limit)
@@ -192,17 +226,24 @@ def plot_comparison(all_data, log_scale, x_max, x_interval, y_max, y_interval, o
     ax.tick_params(axis='y', labelsize=FONT_SIZE_TICK, direction='in', colors='black')
     if log_scale:
         ax.set_yscale('log')
-        all_vals = [v for _, df in all_data if df is not None
-                    for v in df['total_waiting'] if v > 0]
-        y_bottom = 10 ** np.floor(np.log10(min(all_vals))) if all_vals else 1.0
+        if y_min is not None:
+            y_bottom = y_min
+        else:
+            all_vals = [v for _, df in all_data if df is not None
+                        for v in df['total_waiting'] if v > 0]
+            y_bottom = 10 ** np.floor(np.log10(min(all_vals))) if all_vals else 1.0
         if y_max is not None:
             ax.set_ylim(y_bottom, y_max)
         else:
             ax.set_ylim(bottom=y_bottom)
-        ax.set_ylabel('待機UAV台数 [log scale]',
+        # 目盛を 10^0, 10^1, 10^2, ... に固定
+        ax.yaxis.set_major_locator(ticker.LogLocator(base=10.0, subs=(1.0,), numticks=20))
+        ax.yaxis.set_minor_locator(ticker.LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1, numticks=100))
+        ax.yaxis.set_minor_formatter(ticker.NullFormatter())
+        ax.set_ylabel('待機UAV数 (対数スケール)',
                       fontsize=FONT_SIZE_LABEL, fontweight='bold', color='black')
     else:
-        ax.set_ylabel('待機UAV台数',
+        ax.set_ylabel('待機UAV数',
                       fontsize=FONT_SIZE_LABEL, fontweight='bold', color='black')
         if y_max is not None:
             ax.set_ylim(0, y_max)
@@ -223,7 +264,7 @@ def plot_comparison(all_data, log_scale, x_max, x_interval, y_max, y_interval, o
     ax.set_axisbelow(True)
 
     # 凡例
-    legend = ax.legend(loc='upper right', framealpha=1.0,
+    legend = ax.legend(loc='lower right', framealpha=1.0,
                        fontsize=FONT_SIZE_LEGEND, edgecolor='black')
     for text in legend.get_texts():
         text.set_color('black')
@@ -243,7 +284,7 @@ def plot_comparison(all_data, log_scale, x_max, x_interval, y_max, y_interval, o
 
 # --- メイン ---
 def main():
-    groups, bin_s, log_scale, x_max, x_interval, y_max, y_interval, output_file = interactive_input()
+    groups, bin_s, log_scale, x_max, x_interval, y_min, y_max, y_interval, output_file = interactive_input()
 
     print()
     print("=" * 80)
@@ -268,7 +309,7 @@ def main():
     print("=" * 80)
     print("グラフ生成中...")
     print("=" * 80)
-    plot_comparison(all_data, log_scale, x_max, x_interval, y_max, y_interval, output_file, bin_s)
+    plot_comparison(all_data, log_scale, x_max, x_interval, y_min, y_max, y_interval, output_file, bin_s)
 
     print()
     print("=" * 80)

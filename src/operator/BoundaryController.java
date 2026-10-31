@@ -27,6 +27,9 @@ import shared.util.MaxFlowSolver;
 import shared.util.ResultOutputManager;
 import network_manager.worker.AsyncUAVWorker;
 
+import legacy.eventdriven.EventDrivenMemorySimulator;
+import legacy.polling.PollingMemorySimulator;
+
 import java.io.*;
 import java.util.ArrayList;
 import java.util.LinkedList;
@@ -191,14 +194,45 @@ public class BoundaryController {
         }
     }
 
+    // ワーカーモードの列挙型
+    public enum WorkerMode {
+        REDIS(1, "Redis（現行）"),
+        MEMORY_POLLING(2, "MemoryPolling（ポーリング）"),
+        MEMORY_EVENT(3, "MemoryEvent（イベント駆動）");
+
+        private final int id;
+        private final String name;
+
+        WorkerMode(int id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        public int getId() { return id; }
+        public String getName() { return name; }
+
+        public static WorkerMode fromId(int id) {
+            for (WorkerMode mode : values()) {
+                if (mode.getId() == id) return mode;
+            }
+            return REDIS;
+        }
+    }
+
     // 現在選択されている経路探索手法
     private static RouteSearchMethod currentMethod = RouteSearchMethod.EPS;
 
     // 現在選択されているログモード
     private static LoggingMode currentLoggingMode = LoggingMode.DISABLED;
 
+    // 現在選択されているワーカーモード
+    private static WorkerMode currentWorkerMode = WorkerMode.REDIS;
+
     // Phase 7-1: 大規模シミュレーションモード
     private static boolean isLargeScaleMode = false;
+
+    // MemoryMode: カスタムスケールディレクトリ（非null の場合 large_scale/small_scale を上書き）
+    private static String customScaleDir = null;
 
     // Phase 8: 統計的シミュレーションモード（UAVFlySchedulerの自動停止を無効化）
     private static boolean isStatisticalSimulationMode = false;
@@ -274,6 +308,22 @@ public class BoundaryController {
     }
 
     /**
+     * ワーカーモードを設定する
+     * @param mode ワーカーモード
+     */
+    public static void setWorkerMode(WorkerMode mode) {
+        currentWorkerMode = mode;
+    }
+
+    /**
+     * 現在のワーカーモードを取得する
+     * @return ワーカーモード
+     */
+    public static WorkerMode getCurrentWorkerMode() {
+        return currentWorkerMode;
+    }
+
+    /**
      * Phase 7-1: 大規模シミュレーションモードを設定する
      * @param isLargeScale 大規模モードかどうか
      */
@@ -288,6 +338,20 @@ public class BoundaryController {
      */
     public static boolean isLargeScaleMode() {
         return isLargeScaleMode;
+    }
+
+    /**
+     * MemoryMode: カスタムスケールディレクトリを設定する。
+     * null を設定すると isLargeScaleMode に基づくデフォルト動作に戻る。
+     * 例: "memory_polling" / "memory_eventdriven"
+     */
+    public static void setCustomScaleDir(String dir) {
+        customScaleDir = dir;
+    }
+
+    /** MemoryMode: カスタムスケールディレクトリを取得する */
+    public static String getCustomScaleDir() {
+        return customScaleDir;
     }
 
     /**
@@ -382,14 +446,15 @@ public class BoundaryController {
      * @return 結果出力ディレクトリのパス
      */
     public static String getResultDir() {
+        // MemoryMode: customScaleDir が設定されている場合は優先使用
+        String scaleDir = (customScaleDir != null) ? customScaleDir
+                          : (isLargeScaleMode ? "large_scale" : "small_scale");
         // Phase 9: 環境変数RESULT_DIRが設定されている場合は、method名のサブディレクトリを使用
         String envResultDir = System.getenv("RESULT_DIR");
         if (envResultDir != null && !envResultDir.isEmpty()) {
-            String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
             return envResultDir + "/" + scaleDir + "/" + currentMethod.getName();
         }
         // デフォルト動作
-        String scaleDir = isLargeScaleMode ? "large_scale" : "small_scale";
         return "src/result/" + scaleDir + "/" + currentMethod.getName();
     }
 
@@ -635,33 +700,42 @@ public class BoundaryController {
             server.nodeConfigureToPajek(filePath, client, beaconCluster);
 
             routeOp = "run_" + currentMethod.getName();
-            // 選択された経路探索手法に基づいて実行
-            switch (currentMethod) {
-                case DIJKSTRA:
-                    server.run_Dijkstra(client, clientController);
-                    break;
-                case PS:
-                    server.run_PS(client, clientController, num_loop);
-                    break;
-                case HYBRID:
-                    server.run_Hybrid(client, clientController, num_loop);
-                    break;
-                case BINARY:
-                    server.run_Binary(client, clientController, num_loop);
-                    break;
-                case BISECTIONAL_PGEPS:
-                    server.run_BisectionalPGEPS(client, clientController, num_loop);
-                    break;
-                case STEP_CONTROLLED_PGEPS:
-                    server.run_StepControlledPGEPS(client, clientController, num_loop);
-                    break;
-                case SIGMOID_BISECTIONAL_PGEPS:
-                    server.run_SigmoidBisectionalPGEPS(client, clientController, num_loop);
-                    break;
-                case EPS:
-                default:
-                    server.run_EPS(client, clientController, num_loop);
-                    break;
+            // MemoryMode: メモリシミュレーターに委譲
+            if (currentWorkerMode == WorkerMode.MEMORY_POLLING) {
+                PollingMemorySimulator.getInstance().routeRequest(
+                    client, clientController, server, currentMethod.getName(), num_loop);
+            } else if (currentWorkerMode == WorkerMode.MEMORY_EVENT) {
+                EventDrivenMemorySimulator.getInstance().routeRequest(
+                    client, server, currentMethod.getName(), num_loop);
+            } else {
+                // Redis モード: 従来の switch
+                switch (currentMethod) {
+                    case DIJKSTRA:
+                        server.run_Dijkstra(client, clientController);
+                        break;
+                    case PS:
+                        server.run_PS(client, clientController, num_loop);
+                        break;
+                    case HYBRID:
+                        server.run_Hybrid(client, clientController, num_loop);
+                        break;
+                    case BINARY:
+                        server.run_Binary(client, clientController, num_loop);
+                        break;
+                    case BISECTIONAL_PGEPS:
+                        server.run_BisectionalPGEPS(client, clientController, num_loop);
+                        break;
+                    case STEP_CONTROLLED_PGEPS:
+                        server.run_StepControlledPGEPS(client, clientController, num_loop);
+                        break;
+                    case SIGMOID_BISECTIONAL_PGEPS:
+                        server.run_SigmoidBisectionalPGEPS(client, clientController, num_loop);
+                        break;
+                    case EPS:
+                    default:
+                        server.run_EPS(client, clientController, num_loop);
+                        break;
+                }
             }
         } catch (IOException e) {
             // Phase 8-Debug: routeRequest内のIOException詳細ログ
@@ -1020,12 +1094,42 @@ public class BoundaryController {
                 System.out.println("別のターミナルで 'tail -f log/simulator.log' を実行すると、リアルタイムでログを確認できます。");
             }
 
-            // Redisワーカーを初期化
-            if (!RedisConnectionManager.getInstance().isConnected()) {
-                System.err.println("✗ Redis未接続のため終了します。");
-                System.exit(1);
+            // ワーカーモードを選択
+            System.out.println("ワーカーモードを選択してください:");
+            System.out.println("1: Redis（現行基準）");
+            System.out.println("2: MemoryPolling（2秒ポーリング方式）");
+            System.out.println("3: MemoryEvent（イベント駆動インメモリ方式）");
+
+            int workerModeChoice = 1;
+            try {
+                String input = reader.readLine();
+                if (!input.trim().isEmpty()) {
+                    workerModeChoice = Integer.parseInt(input);
+                    if (workerModeChoice < 1 || workerModeChoice > 3) {
+                        System.out.println("無効な選択です。Redis モードを使用します。");
+                        workerModeChoice = 1;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                System.out.println("無効な入力です。Redis モードを使用します。");
             }
-            initializeRedisWorker();
+
+            WorkerMode selectedWorkerMode = WorkerMode.fromId(workerModeChoice);
+            setWorkerMode(selectedWorkerMode);
+            System.out.println("ワーカーモード: " + selectedWorkerMode.getName());
+
+            // ワーカーモードに応じて初期化
+            if (currentWorkerMode == WorkerMode.REDIS) {
+                if (!RedisConnectionManager.getInstance().isConnected()) {
+                    System.err.println("✗ Redis未接続のため終了します。");
+                    System.exit(1);
+                }
+                initializeRedisWorker();
+            } else if (currentWorkerMode == WorkerMode.MEMORY_POLLING) {
+                PollingMemorySimulator.getInstance().initialize(server, clientController, beaconCluster);
+            } else { // MEMORY_EVENT
+                EventDrivenMemorySimulator.getInstance().initialize(server, clientController, beaconCluster);
+            }
 
             // Phase 7-7: シミュレーション設定ファイルの読み込み
             System.out.println("\nシミュレーション設定ファイルを読み込みますか？");
@@ -1091,10 +1195,13 @@ public class BoundaryController {
                 System.out.println("無効な入力です。スケジュールファイルを使用します。");
             }
 
-            // 可視化オプション
-            System.out.print("\nシミュレーションの可視化を行いますか? (yes/no) [no]: ");
-            String vizInput = reader.readLine().trim().toLowerCase();
-            boolean enableViz = vizInput.equals("yes") || vizInput.equals("y");
+            // 可視化オプション（Redis モードのみ）
+            boolean enableViz = false;
+            if (currentWorkerMode == WorkerMode.REDIS) {
+                System.out.print("\nシミュレーションの可視化を行いますか? (yes/no) [no]: ");
+                String vizInput = reader.readLine().trim().toLowerCase();
+                enableViz = vizInput.equals("yes") || vizInput.equals("y");
+            }
 
             boolean enableRecording = false;
             if (enableViz) {
@@ -1367,16 +1474,24 @@ public class BoundaryController {
                 System.out.println("  最終平均リンク負荷率: " + String.format("%.2f%%",
                         LinkStatusRecorder.getInstance().getAverageLoadRate()));
 
-                // 可視化: シミュレーション終了通知
-                VizStateManager.getInstance().signalSimulationEnded();
+                // 可視化: シミュレーション終了通知（Redis モードのみ）
+                if (currentWorkerMode == WorkerMode.REDIS) {
+                    VizStateManager.getInstance().signalSimulationEnded();
+                }
 
                 // ワーカー・スケジューラを停止してJVMが正常終了できるようにする
-                // （非デーモンスレッドを明示的に停止しないとJVMが終了しない）
-                shutdownRedisWorker();
-                try {
-                    RedisConnectionManager.getInstance().disconnect();
-                } catch (Exception e) {
-                    System.err.println("Redis切断中にエラーが発生しました: " + e.getMessage());
+                if (currentWorkerMode == WorkerMode.MEMORY_POLLING) {
+                    PollingMemorySimulator.getInstance().shutdown();
+                } else if (currentWorkerMode == WorkerMode.MEMORY_EVENT) {
+                    EventDrivenMemorySimulator.getInstance().shutdown();
+                } else {
+                    // Redis モード
+                    shutdownRedisWorker();
+                    try {
+                        RedisConnectionManager.getInstance().disconnect();
+                    } catch (Exception e) {
+                        System.err.println("Redis切断中にエラーが発生しました: " + e.getMessage());
+                    }
                 }
                 LogManager.getInstance().log("ログを閉じます。");
                 LogManager.getInstance().close();
@@ -1510,8 +1625,10 @@ public class BoundaryController {
                 LogManager.getInstance().log("Phase 7-9: 4フェーズ制御完了 (生成クライアント数=" + generatedCount + ")");
                 System.out.println("\n✓ シミュレーション完了 (生成クライアント数: " + generatedCount + ")");
 
-                // 可視化: シミュレーション終了通知
-                VizStateManager.getInstance().signalSimulationEnded();
+                // 可視化: シミュレーション終了通知（Redis モードのみ）
+                if (currentWorkerMode == WorkerMode.REDIS) {
+                    VizStateManager.getInstance().signalSimulationEnded();
+                }
 
                 // フェーズ制御モードでは以降のスケジュール処理をスキップ
                 schedule = new ArrayList<>();
@@ -1646,17 +1763,21 @@ public class BoundaryController {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 LogManager.getInstance().log("プログラムを終了します。");
 
-                // 可視化: シミュレーション終了通知
-                VizStateManager.getInstance().signalSimulationEnded();
-
-                // Redisワーカーを停止
-                shutdownRedisWorker();
-
-                // Redis接続を切断
-                try {
-                    RedisConnectionManager.getInstance().disconnect();
-                } catch (Exception e) {
-                    System.err.println("Redis切断中にエラーが発生しました: " + e.getMessage());
+                if (currentWorkerMode == WorkerMode.REDIS) {
+                    // 可視化: シミュレーション終了通知
+                    VizStateManager.getInstance().signalSimulationEnded();
+                    // Redisワーカーを停止
+                    shutdownRedisWorker();
+                    // Redis接続を切断
+                    try {
+                        RedisConnectionManager.getInstance().disconnect();
+                    } catch (Exception e) {
+                        System.err.println("Redis切断中にエラーが発生しました: " + e.getMessage());
+                    }
+                } else if (currentWorkerMode == WorkerMode.MEMORY_POLLING) {
+                    PollingMemorySimulator.getInstance().shutdown();
+                } else if (currentWorkerMode == WorkerMode.MEMORY_EVENT) {
+                    EventDrivenMemorySimulator.getInstance().shutdown();
                 }
 
                 LogManager.getInstance().log("ログを閉じます。");

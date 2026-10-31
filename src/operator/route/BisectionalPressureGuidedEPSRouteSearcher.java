@@ -270,33 +270,7 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             if (remainingUAVs > 0) {
                 LogManager.getInstance().log("BisectionalPGEPS Phase 4: EPS割当=" + (int)epsAssignedFlow +
                     ", 経路待ち登録=" + remainingUAVs + " (要求UAV数=" + requiredUAVs + ")");
-
-                // PathWaitingManagerを直接インスタンス化
-                PathWaitingManager pathWaitingManager = new PathWaitingManager();
-
-                // 経路待ちUAVをキューに登録（EPS割り当て分の次のIDから開始）
-                int epsAssigned = (int) epsAssignedFlow;
-                for (int i = 0; i < remainingUAVs; i++) {
-                    int uavIndex = epsAssigned + i;
-                    // UAVオブジェクトから速度を取得（各UAVは8~16m/sのランダム速度を持つ）
-                    double uavSpeed = client.getFlow().getUav(uavIndex).getSpeed();
-                    int uavId = client.getFlow().getUav(uavIndex).getId();
-                    UAVJob waitingJob = new UAVJob(
-                        uavId,
-                        client.getId(),
-                        null,  // path = null（経路待ち状態）
-                        uavSpeed,
-                        System.currentTimeMillis(),
-                        sourceNode,
-                        destNode
-                    );
-                    waitingJob.setSessionId(BoundaryController.getCurrentSessionId());
-                    // Phase 4: 経路待ち開始時刻を記録
-                    waitingJob.startPathWaiting();
-                    pathWaitingManager.enqueue(client.getId(), waitingJob);
-                }
-
-                LogManager.getInstance().log("BisectionalPGEPS Phase 4: " + remainingUAVs + "機の経路待ち登録完了");
+                registerRemainingUAVsToPathWaiting(client, (int)epsAssignedFlow, remainingUAVs, sourceNode, destNode);
             } else {
                 LogManager.getInstance().log("BisectionalPGEPS Phase 4: 全UAV(" + requiredUAVs + "機)をEPS割当完了、経路待ちなし");
             }
@@ -313,6 +287,42 @@ public class BisectionalPressureGuidedEPSRouteSearcher extends ExtendedPhysarumS
             // 切断したリンクを復元（例外発生時も確実に復元）
             restoreDisconnectedLinks();
         }
+    }
+
+    /**
+     * Phase 4: 残りUAVを経路待ちキューに登録する（サブクラスでオーバーライド可能）
+     *
+     * デフォルト実装は Redis の PathWaitingManager を使用する。
+     * メモリモードではサブクラスで MemoryPathWaitingManager に差し替える。
+     *
+     * @param client        クライアント
+     * @param epsAssigned   EPS で割り当てた UAV 数（次の UAV のインデックス起点）
+     * @param remainingCount 経路待ち登録する UAV 数
+     * @param srcNode       出発ノード
+     * @param dstNode       目的ノード
+     */
+    protected void registerRemainingUAVsToPathWaiting(
+            Client client, int epsAssigned, int remainingCount, int srcNode, int dstNode) {
+        PathWaitingManager pm = new PathWaitingManager();
+        for (int i = 0; i < remainingCount; i++) {
+            int uavIndex = epsAssigned + i;
+            double uavSpeed = client.getFlow().getUav(uavIndex).getSpeed();
+            int uavId = client.getFlow().getUav(uavIndex).getId();
+            UAVJob waitingJob = new UAVJob(
+                uavId,
+                client.getId(),
+                null,  // path = null（経路待ち状態）
+                uavSpeed,
+                System.currentTimeMillis(),
+                srcNode,
+                dstNode
+            );
+            waitingJob.setSessionId(BoundaryController.getCurrentSessionId());
+            waitingJob.startPathWaiting();
+            pm.enqueue(client.getId(), waitingJob);
+        }
+        LogManager.getInstance().log(
+            "BisectionalPGEPS Phase 4: " + remainingCount + "機の経路待ち登録完了");
     }
 
     /**

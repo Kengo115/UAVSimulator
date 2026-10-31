@@ -179,6 +179,14 @@ public class ServerController {
     }
 
     /**
+     * 隣接行列を取得する（メモリモード用）
+     * @return 隣接行列
+     */
+    public int[][] getAdjMatrix() {
+        return adjMatrix;
+    }
+
+    /**
      * フィールドをすべてリセットする
      */
     public void reset() {

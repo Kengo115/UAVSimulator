@@ -24,11 +24,11 @@ import java.util.concurrent.TimeUnit;
  * Dijkstra法による経路探索を行うクラス
  */
 public class DijkstraRouteSearcher implements RouteSearcher {
-    private final ServerController serverController;
-    private final int[][] adjMatrix;
-    private final Link[][] link;
-    private final BeaconCluster beaconCluster;
-    private final int node;
+    protected final ServerController serverController;
+    protected final int[][] adjMatrix;
+    protected final Link[][] link;
+    protected final BeaconCluster beaconCluster;
+    protected final int node;
 
     /**
      * コンストラクタ
@@ -150,7 +150,7 @@ public class DijkstraRouteSearcher implements RouteSearcher {
      * @param path 経路
      * @param requiredUAVs 必要なUAV数
      */
-    private void runUAVFlow(Client client, int[] path, int requiredUAVs) {
+    protected void runUAVFlow(Client client, int[] path, int requiredUAVs) {
         // Phase 4: 時間計測開始（全経路探索手法共通）
         ClientTimeManager.getInstance().startClientTime(client.getId(), requiredUAVs);
         runUAVFlowRedis(client, path, requiredUAVs);

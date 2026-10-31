@@ -2,14 +2,21 @@
 """
 空域全体の待機UAV台数の時系列グラフを生成するスクリプト
 
+【集計方式: LOCF (Last Observation Carried Forward)】
+link_status.csv はイベント駆動記録のため、groupby-sum では
+イベントが疎な終盤で実際より大幅に少ない値になるアーティファクトが生じる。
+LOCF では各リンクの waiting_count を「最後に記録された値」として保持し、
+ビン境界時刻ごとに全リンクの最終既知値を合算する。
+
 Usage:
-    python plot_total_waiting.py <result_dir> <output_dir> [y_max] [y_interval] [--log]
+    python plot_total_waiting.py <result_dir> <output_dir> [y_max] [y_interval] [--log] [--bin N]
 
 Example:
     python plot_total_waiting.py src/result/sim_1/large_scale/Bisectional output/graphs
     python plot_total_waiting.py src/result/sim_1/large_scale/Bisectional output/graphs 50
     python plot_total_waiting.py src/result/sim_1/large_scale/Bisectional output/graphs 50 10
     python plot_total_waiting.py src/result/sim_1/large_scale/Bisectional output/graphs --log
+    python plot_total_waiting.py src/result/sim_1/large_scale/Bisectional output/graphs --bin 60
 """
 
 import argparse
@@ -21,8 +28,73 @@ import matplotlib.font_manager as fm
 import numpy as np
 import pandas as pd
 
-# 日本語フォント設定（Noto Sans CJK JP）
-plt.rcParams['font.family'] = 'Noto Sans CJK JP'
+
+# --- スタイル設定 ---
+def setup_style():
+    plt.rcParams['text.color'] = 'black'
+    plt.rcParams['axes.labelcolor'] = 'black'
+    plt.rcParams['xtick.color'] = 'black'
+    plt.rcParams['ytick.color'] = 'black'
+    plt.rcParams['axes.edgecolor'] = 'black'
+    plt.rcParams['xtick.direction'] = 'in'
+    plt.rcParams['ytick.direction'] = 'in'
+
+    target_fonts = [
+        'IPAexGothic', 'IPAGothic', 'Noto Sans CJK JP', 'Noto Sans JP',
+        'Hiragino Maru Gothic Pro', 'Hiragino Kaku Gothic ProN',
+        'Yu Gothic', 'MS Gothic', 'Meiryo', 'DejaVu Sans'
+    ]
+    available_fonts = set(f.name for f in fm.fontManager.ttflist)
+    for font_name in target_fonts:
+        if font_name in available_fonts:
+            plt.rcParams['font.family'] = 'sans-serif'
+            plt.rcParams['font.sans-serif'] = [font_name] + plt.rcParams['font.sans-serif']
+            break
+    plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['agg.path.chunksize'] = 10000
+
+
+setup_style()
+
+
+# --- LOCF 集計 ---
+def load_total_waiting(csv_path: str, bin_s: float = 60.0):
+    """link_status.csv を読み込み、各ビン境界時刻の合計待機台数を返す。
+
+    【算出方法: LOCF (Last Observation Carried Forward)】
+    各リンクの waiting_count を「最後に記録された値」として保持し、
+    ビン境界時刻 t ごとに全リンクの最終既知値を合算する。
+    """
+    df = pd.read_csv(csv_path)
+    if 'waiting_count' not in df.columns:
+        print(f"Error: 'waiting_count' column not found in {csv_path}")
+        print(f"  Available columns: {list(df.columns)}")
+        sys.exit(1)
+
+    # リンク・タイムスタンプ順にソート
+    df = df.sort_values(['link_from', 'link_to', 'timestamp']).reset_index(drop=True)
+    t_max = float(df['timestamp'].max())
+
+    # ビン境界タイムスタンプ列を生成（0, bin_s, 2*bin_s, ..., t_max）
+    bin_ts = np.arange(0.0, t_max, bin_s)
+    if len(bin_ts) == 0 or bin_ts[-1] < t_max:
+        bin_ts = np.append(bin_ts, t_max)
+
+    total_per_bin = np.zeros(len(bin_ts), dtype=float)
+
+    # 各リンクごとに LOCF でビン時刻の waiting_count を取得して合算
+    for _, link_df in df.groupby(['link_from', 'link_to'], sort=False):
+        ts = link_df['timestamp'].values
+        wc = link_df['waiting_count'].values
+
+        idxs = np.searchsorted(ts, bin_ts, side='right') - 1
+        link_wc = np.where(idxs >= 0, wc[idxs], 0.0)
+        total_per_bin += link_wc
+
+    return pd.DataFrame({
+        'timestamp':     bin_ts,
+        'total_waiting': total_per_bin.astype(int),
+    })
 
 
 def main():
@@ -33,40 +105,31 @@ def main():
     parser.add_argument('output_dir', help='出力ディレクトリ')
     parser.add_argument('y_max',      nargs='?', default=None, help='Y軸最大値（省略時は自動）')
     parser.add_argument('y_interval', nargs='?', default=None, help='Y軸間隔（省略時は自動）')
-    parser.add_argument('--log', action='store_true', help='Y軸を対数スケールで表示')
+    parser.add_argument('--log',      action='store_true', help='Y軸を対数スケールで表示')
+    parser.add_argument('--bin',      type=float, default=60.0,
+                        metavar='N', help='集計間隔（秒）[デフォルト: 60]')
 
     args = parser.parse_args()
 
-    result_dir  = args.result_dir
-    output_dir  = args.output_dir
-    y_max       = float(args.y_max)      if args.y_max      else None
-    y_interval  = float(args.y_interval) if args.y_interval else None
-    log_scale   = args.log
+    result_dir = args.result_dir
+    output_dir = args.output_dir
+    y_max      = float(args.y_max)      if args.y_max      else None
+    y_interval = float(args.y_interval) if args.y_interval else None
+    log_scale  = args.log
+    bin_s      = args.bin
 
-    # CSVファイルのパス
     csv_path = os.path.join(result_dir, "link_status", "link_status.csv")
-
     if not os.path.exists(csv_path):
         print(f"Error: CSV file not found: {csv_path}")
         sys.exit(1)
 
-    # サーチャー名を取得（ディレクトリ名から）
     searcher_name = os.path.basename(result_dir)
 
-    # データ読み込み
-    df = pd.read_csv(csv_path)
+    print(f"集計間隔: {bin_s:.0f}s  (LOCF方式)")
+    total_waiting = load_total_waiting(csv_path, bin_s)
+    print(f"集計点数: {len(total_waiting)}")
 
-    if 'waiting_count' not in df.columns:
-        print(f"Error: 'waiting_count' column not found in {csv_path}")
-        print(f"  Available columns: {list(df.columns)}")
-        sys.exit(1)
-
-    # タイムスタンプごとに全リンクの waiting_count を合計
-    total_waiting = df.groupby('timestamp')['waiting_count'].sum().reset_index()
-    total_waiting.columns = ['timestamp', 'total_waiting']
-    total_waiting = total_waiting.sort_values('timestamp')
-
-    # グラフ作成
+    # --- グラフ作成 ---
     fig, ax = plt.subplots(figsize=(14, 8))
 
     for spine in ax.spines.values():
@@ -111,6 +174,7 @@ def main():
 
     # グリッド
     ax.grid(True, alpha=0.3, linestyle='--', color='black')
+    ax.set_axisbelow(True)
 
     plt.tight_layout()
 

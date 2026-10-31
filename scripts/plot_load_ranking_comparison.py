@@ -167,7 +167,7 @@ def plot_comparison(all_data, log_scale, x_max, y_max, y_interval, output_file):
             total_links_max = len(loads)
 
     # X軸
-    ax.set_xlabel('Rank', fontsize=FONT_SIZE_LABEL, fontweight='bold', color='black')
+    ax.set_xlabel('リンク順位', fontsize=FONT_SIZE_LABEL, fontweight='bold', color='black')
     ax.tick_params(axis='x', labelsize=FONT_SIZE_TICK, direction='in', colors='black')
     x_limit = x_max if x_max is not None else total_links_max
     ax.set_xlim(1, x_limit)
@@ -194,10 +194,10 @@ def plot_comparison(all_data, log_scale, x_max, y_max, y_interval, output_file):
             ax.set_ylim(y_bottom, y_max)
         else:
             ax.set_ylim(bottom=y_bottom)
-        ax.set_ylabel('Max Load Rate (%) [log scale]',
+        ax.set_ylabel('最大負荷率 (%) (対数スケール)',
                       fontsize=FONT_SIZE_LABEL, fontweight='bold', color='black')
     else:
-        ax.set_ylabel('Max Load Rate (%)',
+        ax.set_ylabel('最大負荷率 (%)',
                       fontsize=FONT_SIZE_LABEL, fontweight='bold', color='black')
         if y_max is not None:
             ax.set_ylim(0, y_max)

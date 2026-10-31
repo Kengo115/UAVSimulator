@@ -81,12 +81,15 @@ def extract_links(input_csv: str, output_dir: str = None, link_stats: dict = Non
 
         summary.append((link_from, link_to, len(rows), avg_flying, max_load, max_waiting))
 
-    # サマリー情報を出力（AvgFlying, MaxLoad, MaxWaiting追加）
+    # サマリー情報を出力（AvgFlying, MaxLoad, MaxWaiting, SelectionRate追加）
+    total_records_all = sum(row[2] for row in summary)
     summary_path = os.path.join(output_dir, "_summary.csv")
     with open(summary_path, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['link_from', 'link_to', 'record_count', 'avg_flying', 'max_load_rate', 'max_waiting'])
-        writer.writerows(sorted(summary, key=lambda x: -x[2]))  # レコード数降順
+        writer.writerow(['link_from', 'link_to', 'record_count', 'avg_flying', 'max_load_rate', 'max_waiting', 'selection_rate'])
+        for row in sorted(summary, key=lambda x: -x[2]):
+            rate = row[2] / total_records_all if total_records_all > 0 else 0.0
+            writer.writerow(list(row) + [round(rate, 6)])  # レコード数降順
 
     print(f"\n{len(link_data)} 個のリンクファイルを出力しました")
     print(f"サマリーファイル: {summary_path}")
@@ -125,13 +128,15 @@ def print_link_stats(input_csv: str):
 
     # 最も記録が多いリンク Top10
     sorted_links = sorted(link_stats.items(), key=lambda x: -x[1]['count'])
+    total_count = sum(s['count'] for s in link_stats.values())
 
     print("\n=== 最も記録が多いリンク Top10 ===")
-    print(f"{'From':>6} {'To':>6} {'Count':>8} {'AvgFlying':>10} {'MaxLoad':>10}")
-    print("-" * 50)
+    print(f"{'From':>6} {'To':>6} {'Count':>8} {'AvgFlying':>10} {'MaxLoad':>10} {'SelectionRate':>14}")
+    print("-" * 66)
     for (link_from, link_to), stats in sorted_links[:10]:
         avg_flying = stats['flying_sum'] / stats['count'] if stats['count'] > 0 else 0
-        print(f"{link_from:>6} {link_to:>6} {stats['count']:>8} {avg_flying:>10.2f} {stats['load_rate_max']:>10.2f}")
+        sel_rate = stats['count'] / total_count if total_count > 0 else 0
+        print(f"{link_from:>6} {link_to:>6} {stats['count']:>8} {avg_flying:>10.2f} {stats['load_rate_max']:>10.2f} {sel_rate:>13.4%}")
 
     return link_stats
 

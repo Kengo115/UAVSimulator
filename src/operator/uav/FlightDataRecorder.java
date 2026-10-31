@@ -132,10 +132,10 @@ public class FlightDataRecorder {
         long UAV_waitingTime = uav.getWaitingTime();
         long UAV_totalTime = UAV_flightTime + UAV_waitingTime;
 
-        // Phase 5/11: 時間を秒に変換
-        double realFlightTimeSeconds = UAV_flightTime / 1000.0;
-        double waitingTimeSeconds = UAV_waitingTime / 1000.0;
-        double totalTimeSeconds = UAV_totalTime / 1000.0;
+        // UAVFlightTimer.getFlightTime() / getWaitingTime() はすでに秒単位を返す
+        double realFlightTimeSeconds = (double) UAV_flightTime;
+        double waitingTimeSeconds = (double) UAV_waitingTime;
+        double totalTimeSeconds = (double) UAV_totalTime;
         double pathWaitTime = 0.0;
         double flightStayingTime = 0.0;
 
