@@ -52,19 +52,14 @@ def main():
         spine.set_color('black')
         spine.set_linewidth(1.0)
 
-    # 時間を分単位に変換（データが秒単位の場合は60で割る）
-    time_raw = df['time']
-    # 最大値が1000を超える場合は秒単位とみなして分に変換
-    if time_raw.max() > 1000:
-        time_min = time_raw / 60
-    else:
-        time_min = time_raw
+    # 時間データ（秒単位）
+    time_s = df['time']
 
-    ax.plot(time_min, df['AverageLoadRate'], label='Average Load Rate', linewidth=2.5, color='blue')
-    ax.plot(time_min, df['CongestedLinkRate'], label='Congested Link Rate', linewidth=2.5, color='red')
+    ax.plot(time_s, df['AverageLoadRate'], label='Average Load Rate', linewidth=2.5, color='blue')
+    ax.plot(time_s, df['CongestedLinkRate'], label='Congested Link Rate', linewidth=2.5, color='red')
 
     # 軸ラベル（CDF比較スクリプトと同等のサイズ、太字）
-    ax.set_xlabel('Time (minutes)', fontsize=34, fontweight='bold', color='black')
+    ax.set_xlabel('Time (s)', fontsize=34, fontweight='bold', color='black')
     ax.set_ylabel('Rate (%)', fontsize=34, fontweight='bold', color='black')
 
     # タイトルなし
@@ -78,10 +73,10 @@ def main():
     # 軸の目盛りフォントサイズ（CDF比較スクリプトと同等）
     ax.tick_params(axis='both', labelsize=29, direction='in', colors='black')
 
-    # X軸: 0からスタート、100分間隔
-    x_max = time_min.max()
+    # X軸: 0からスタート、6000秒間隔
+    x_max = time_s.max()
     ax.set_xlim(0, x_max)
-    ax.set_xticks(np.arange(0, x_max + 1, 100))
+    ax.set_xticks(np.arange(0, x_max + 1, 6000))
 
     # Y軸: 0からスタート
     if y_max is not None:

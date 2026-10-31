@@ -12,6 +12,7 @@ Example:
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 import sys
 
@@ -43,24 +44,26 @@ def main():
     # データ読み込み
     df = pd.read_csv(csv_path)
 
-    # 時間を秒から分に変換
-    df['time_min'] = df['timestamp'] / 60
-
     # グラフ作成
     fig, ax = plt.subplots(figsize=(14, 6))
 
     # load_rateをステップグラフで描画（イベント駆動のデータなので）
-    ax.step(df['time_min'], df['load_rate'], where='post', linewidth=1.5, color='blue', label='Load Rate')
+    ax.step(df['timestamp'], df['load_rate'], where='post', linewidth=1.5, color='blue', label='Load Rate')
 
     # 100%ラインを追加
     ax.axhline(y=100, color='red', linestyle='--', alpha=0.5, label='Capacity (100%)')
 
-    ax.set_xlabel('Time (minutes)', fontsize=12)
+    ax.set_xlabel('Time (s)', fontsize=12)
     ax.set_ylabel('Load Rate (%)', fontsize=12)
     ax.set_title(f'Link Load Rate Over Time (Link {from_node} → {to_node})', fontsize=14)
     ax.legend(loc='best', fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.set_ylim(bottom=0)
+
+    # X軸: 6000秒間隔
+    x_max = df['timestamp'].max()
+    ax.set_xlim(0, x_max)
+    ax.set_xticks(np.arange(0, x_max + 1, 6000))
 
     plt.tight_layout()
 
@@ -75,7 +78,7 @@ def main():
     # 統計情報を表示
     print(f"\n--- Statistics for Link {from_node} → {to_node} ---")
     print(f"  Records: {len(df)}")
-    print(f"  Time range: {df['timestamp'].min():.1f}s - {df['timestamp'].max():.1f}s ({df['time_min'].max():.1f} min)")
+    print(f"  Time range: {df['timestamp'].min():.1f}s - {df['timestamp'].max():.1f}s")
     print(f"  Load rate: min={df['load_rate'].min():.1f}%, max={df['load_rate'].max():.1f}%, avg={df['load_rate'].mean():.1f}%")
     # init_capacity列があれば表示（古いデータはcapacity列の場合もある）
     if 'init_capacity' in df.columns:

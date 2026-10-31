@@ -59,16 +59,21 @@ public class Link {
     public Beacon getBeacon2() {
         return beacon2;
     }
-    public void setCapacity(double capacity) {
+    public synchronized void setCapacity(double capacity) {
         this.capacity = capacity;
     }
 
     //容量を返す
-    public double getCapacity() {
+    public synchronized double getCapacity() {
         return capacity;
     }
-    public void decrementCapacity() {
+
+    public synchronized void decrementCapacity() {
         capacity--;
+    }
+
+    public synchronized void incrementCapacity() {
+        capacity++;
     }
     //飛行中のUAV数を返す
     public double getFlyingUAV() {

@@ -3,17 +3,20 @@
 全リンクの最大混雑率ランキンググラフを生成
 
 Usage:
-    python scripts/plot_load_ranking.py <summary_csv> <output_dir> [y_max] [y_interval]
+    python scripts/plot_load_ranking.py <summary_csv> <output_dir> [y_max] [y_interval] [--log]
 
 Example:
     python scripts/plot_load_ranking.py src/result/sim_1/large_scale/PS/link_status/links/_summary.csv output/sim_1/graphs
     python scripts/plot_load_ranking.py src/result/sim_1/large_scale/PS/link_status/links/_summary.csv output/sim_1/graphs 700
     python scripts/plot_load_ranking.py src/result/sim_1/large_scale/PS/link_status/links/_summary.csv output/sim_1/graphs 700 100
+    python scripts/plot_load_ranking.py src/result/sim_1/large_scale/PS/link_status/links/_summary.csv output/sim_1/graphs --log
+    python scripts/plot_load_ranking.py src/result/sim_1/large_scale/PS/link_status/links/_summary.csv output/sim_1/graphs 700 "" --log
 """
 
 import sys
 import os
 import csv
+import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -47,7 +50,7 @@ def load_summary(csv_path: str) -> list:
 
     return list(normalized_data.values())
 
-def plot_load_ranking(data: list, output_path: str, y_max=None, y_interval=None):
+def plot_load_ranking(data: list, output_path: str, y_max=None, y_interval=None, log_scale=False):
     """全リンクの最大混雑率ランキンググラフを生成"""
 
     # max_load_rate で降順ソート
@@ -84,17 +87,28 @@ def plot_load_ranking(data: list, output_path: str, y_max=None, y_interval=None)
     ax.set_xticks(np.arange(0, total_links + 1, x_interval))
 
     # Y軸
-    if y_max is not None:
-        ax.set_ylim(0, y_max)
-        if y_interval is not None:
-            ax.set_yticks(np.arange(0, y_max + 1, y_interval))
+    if log_scale:
+        ax.set_yscale('log')
+        # 対数スケール: 0を含む値を除外して下限を設定
+        min_nonzero = min((v for v in max_loads if v > 0), default=1.0)
+        y_bottom = 10 ** np.floor(np.log10(min_nonzero))
+        if y_max is not None:
+            ax.set_ylim(y_bottom, y_max)
+        else:
+            ax.set_ylim(bottom=y_bottom)
+        ax.set_ylabel('Max Load Rate (%) [log scale]', fontsize=24)
     else:
-        ax.set_ylim(bottom=0)
-        if y_interval is not None:
-            data_max = max_loads[0]
-            y_max_auto = np.ceil(data_max / y_interval) * y_interval
-            ax.set_ylim(0, y_max_auto)
-            ax.set_yticks(np.arange(0, y_max_auto + 1, y_interval))
+        if y_max is not None:
+            ax.set_ylim(0, y_max)
+            if y_interval is not None:
+                ax.set_yticks(np.arange(0, y_max + 1, y_interval))
+        else:
+            ax.set_ylim(bottom=0)
+            if y_interval is not None:
+                data_max = max_loads[0]
+                y_max_auto = np.ceil(data_max / y_interval) * y_interval
+                ax.set_ylim(0, y_max_auto)
+                ax.set_yticks(np.arange(0, y_max_auto + 1, y_interval))
 
     # グリッド
     ax.grid(True, alpha=0.3, axis='y')
@@ -112,14 +126,23 @@ def plot_load_ranking(data: list, output_path: str, y_max=None, y_interval=None)
     print(f"Min load rate: {max_loads[-1]:.1f}% (Rank {total_links})")
 
 def main():
-    if len(sys.argv) < 3:
-        print(__doc__)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description='全リンクの最大混雑率ランキンググラフを生成',
+        add_help=True
+    )
+    parser.add_argument('summary_csv', help='_summary.csv のパス')
+    parser.add_argument('output_dir', help='出力ディレクトリ')
+    parser.add_argument('y_max', nargs='?', default=None, help='Y軸最大値（省略時は自動）')
+    parser.add_argument('y_interval', nargs='?', default=None, help='Y軸間隔（省略時は自動）')
+    parser.add_argument('--log', action='store_true', help='Y軸を対数スケールで表示')
 
-    summary_csv = sys.argv[1]
-    output_dir = sys.argv[2]
-    y_max = float(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
-    y_interval = float(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
+    args = parser.parse_args()
+
+    summary_csv = args.summary_csv
+    output_dir = args.output_dir
+    y_max = float(args.y_max) if args.y_max else None
+    y_interval = float(args.y_interval) if args.y_interval else None
+    log_scale = args.log
 
     # 入力ファイル確認
     if not os.path.exists(summary_csv):
@@ -134,11 +157,12 @@ def main():
     # データ読み込み
     data = load_summary(summary_csv)
 
-    # 出力ファイル名
-    output_path = os.path.join(output_dir, 'load_ranking.png')
+    # 出力ファイル名（対数スケール時はサフィックスを付加）
+    filename = 'load_ranking_log.png' if log_scale else 'load_ranking.png'
+    output_path = os.path.join(output_dir, filename)
 
     # グラフ生成
-    plot_load_ranking(data, output_path, y_max, y_interval)
+    plot_load_ranking(data, output_path, y_max, y_interval, log_scale)
 
 if __name__ == "__main__":
     main()
